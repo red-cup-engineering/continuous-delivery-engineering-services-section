@@ -1,0 +1,47 @@
+name: node-package
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: 'JSON array of package directories; empty = every package.json in the repo'
+        type: string
+        default: ''
+      concurrency:
+        type: number
+        default: 4
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      dirs: ${{ steps.d.outputs.dirs }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - id: d
+        env:
+          PATHS: ${{ inputs.paths }}
+        run: |
+          if [ -n "$PATHS" ]; then dirs="$PATHS"; else
+            dirs=$(find . -name package.json -not -path '*/node_modules/*' -not -path './.git/*' -print0 \
+              | xargs -0 -r -n1 dirname | sort | jq -R . | jq -sc .)
+          fi
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+  package:
+    needs: discover
+    if: needs.discover.outputs.dirs != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.concurrency }}
+      matrix:
+        dir: ${{ fromJSON(needs.discover.outputs.dirs) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - run: if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+      - run: npm run --if-present check
+      - run: npm run --if-present test

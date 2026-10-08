@@ -1,0 +1,55 @@
+name: submodule-advance
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: 'PR branch name'
+        type: string
+        default: ci/submodule-advance
+    secrets:
+      token:
+        description: 'PAT able to read submodule remotes and push/open PRs in the caller (falls back to GITHUB_TOKEN)'
+        required: false
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  advance:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.token || github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          token: ${{ secrets.token || github.token }}
+          submodules: false
+      - name: bump gitlinks to branch heads
+        run: |
+          set -eu
+          [ -f .gitmodules ] || { echo "no submodules"; exit 0; }
+          git config user.name "continuous-delivery-services-section"
+          git config user.email "ci@users.noreply.github.com"
+          git checkout -B "${{ inputs.branch }}"
+          body=""
+          git config -f .gitmodules --get-regexp '\.path$' | while read -r key path; do
+            name=${key%.path}; name=${name#submodule.}
+            url=$(git config -f .gitmodules "submodule.$name.url")
+            br=$(git config -f .gitmodules "submodule.$name.branch" || true)
+            case "$url" in https://github.com/*) url="https://x-access-token:$GH_TOKEN@${url#https://}";; esac
+            ref=${br:-HEAD}
+            new=$(git ls-remote "$url" "$ref" | head -1 | cut -f1)
+            old=$(git ls-tree HEAD "$path" | awk '{print $3}')
+            if [ -n "$new" ] && [ "$new" != "$old" ]; then
+              git update-index --cacheinfo "160000,$new,$path"
+              echo "- $path: ${old:0:9} -> ${new:0:9}" >> /tmp/body
+            fi
+          done
+          [ -s /tmp/body ] || { echo "all submodules current"; exit 0; }
+          git commit -qm "Advance submodules"
+          git push -f origin "${{ inputs.branch }}"
+          base=${{ github.event.repository.default_branch }}
+          if n=$(gh pr list --head "${{ inputs.branch }}" --json number --jq '.[0].number') && [ -n "$n" ]; then
+            gh pr edit "$n" --body-file /tmp/body
+          else
+            gh pr create --base "$base" --head "${{ inputs.branch }}" --title "Advance submodules" --body-file /tmp/body
+          fi
