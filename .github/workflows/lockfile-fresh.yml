@@ -1,0 +1,51 @@
+name: lockfile-fresh
+# Is the pnpm lock fresh? Every workspace package must have an importer whose specifiers are exactly its declared
+# dependencies (overrides applied), and every workspace:* dependency must name a workspace package. Run as a
+# ratchet: the pull request's base is read too, and only mismatches the pull request adds fail.
+on:
+  workflow_call:
+    inputs:
+      directory:
+        description: 'Workspace root inside the repository'
+        type: string
+        default: '.'
+jobs:
+  lockfile-fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: head
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        if: github.event_name == 'pull_request'
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          path: section
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Lockfile freshness
+        env:
+          DIRECTORY: ${{ inputs.directory }}
+        run: |
+          (cd section && npm install --no-audit --no-fund --silent)
+          base_args=()
+          if [ -d base ]; then base_args=(--base "base/$DIRECTORY"); fi
+          status=0
+          node section/scripts/lockfile-fresh.mjs "head/$DIRECTORY" "${base_args[@]}" > freshness.json || status=$?
+          node -e '
+            const r=require("./freshness.json");
+            const lines=[`### Lockfile freshness: ${r.added.length?"`stale`":"`fresh`"} (${r.mismatches} known mismatches)`,""];
+            for(const m of r.added)lines.push(`- added: \`${m.key}\``+(m.declared!==undefined?` (declared ${m.declared}, locked ${m.locked})`:""));
+            if(r.removed.length)lines.push(`- removed: ${r.removed.length}`);
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join("\n")+"\n");'
+          cat freshness.json
+          exit $status
