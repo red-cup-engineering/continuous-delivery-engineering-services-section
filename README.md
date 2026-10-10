@@ -30,7 +30,7 @@ Workflows (swap the file name):
   exactly its declared dependencies (overrides applied), and every `workspace:*` dependency names a workspace
   package. A ratchet: the pull request's base is read too, and only mismatches the change adds fail
   (`scripts/lockfile-fresh.mjs`, which lists every stale importer where pnpm's frozen install stops at the first).
-  Input: `directory`.
+  Inputs: `directory`, `runs-on` (JSON runner labels, for a repository without GitHub-hosted runners).
 - `content.yml` - JSON files with a relative `$schema` are validated; relative markdown links are checked. Input: `links`.
 
 Lean with a directory:
