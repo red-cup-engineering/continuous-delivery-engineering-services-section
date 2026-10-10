@@ -46,3 +46,14 @@ test('every kind of staleness is named, and the ratchet fails only what the head
   const clean = workspace(t, {...files, 'pnpm-lock.yaml': lock("  .: {}\n", "  '@h/b': '1.0.0'\n")});
   assert.ok(lockMismatches(clean).some((m) => m.key === 'override:@h/b'));
 });
+
+test('an importer inside a mounted submodule is not stale where the submodule is not checked out', (t) => {
+  const root = workspace(t, {
+    'package.json': {name: 'root', private: true}, 'pnpm-workspace.yaml': yamlWorkspace,
+    'lib/b/package.json': {name: '@h/b', version: '0.3.0'},
+    'pnpm-lock.yaml': lock("  .: {}\n  lib/b: {}\n  lib/mounted: {}\n  lib/mounted/services/leaf: {}\n  lib/gone: {}\n"),
+  });
+  // A gitlink, as a checkout without submodules holds a mounted section: the index names it, its files are absent.
+  spawnSync('git', ['update-index', '--add', '--cacheinfo', '160000,1111111111111111111111111111111111111111,lib/mounted'], {cwd: root});
+  assert.deepEqual(lockMismatches(root).map((m) => m.key), ['stale-importer:lib/gone']);
+});

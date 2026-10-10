@@ -30,6 +30,13 @@ export function workspacePackages(root) {
   return [...dirs].sort();
 }
 
+/** The repository's mounted submodules, by path: a lock importer under one is judged only where it is checked out. */
+export function submodulePaths(root) {
+  const listed = spawnSync('git', ['ls-files', '--stage', '-z'], {cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024});
+  if (listed.status !== 0) throw new Error(`cannot list the index of ${root}: ${listed.stderr}`);
+  return listed.stdout.split('\0').filter((entry) => entry.startsWith('160000 ')).map((entry) => entry.split('\t')[1]);
+}
+
 /** Mismatches between the declared dependencies and the committed lock, each with a stable key. */
 export function lockMismatches(root) {
   const lock = parse(readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8')) ?? {};
@@ -55,7 +62,11 @@ export function lockMismatches(root) {
       for (const name of Object.keys(locked)) if (!(name in declared)) found.push({key: `stale-in-lock:${dir}:${field}:${name}`});
     }
   }
-  for (const dir of Object.keys(importers)) if (!dirs.includes(dir)) found.push({key: `stale-importer:${dir}`});
+  // An importer inside a mounted submodule has its package.json in the submodule, which a checkout without
+  // submodules does not hold: it is not stale, only unread here.
+  const mounts = submodulePaths(root);
+  const mounted = (dir) => mounts.some((mount) => dir === mount || dir.startsWith(`${mount}/`));
+  for (const dir of Object.keys(importers)) if (!dirs.includes(dir) && !mounted(dir)) found.push({key: `stale-importer:${dir}`});
   return found.sort((a, b) => a.key.localeCompare(b.key));
 }
 
