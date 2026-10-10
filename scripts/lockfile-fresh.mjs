@@ -51,49 +51,72 @@ export function submodules(root) {
 }
 export const submodulePaths = (root) => submodules(root).map((mount) => mount.path);
 
-/** Where a submodule's commit can be read: its checkout when it holds the commit, else a blobless fetch of the
- *  URL .gitmodules names (relative URLs resolve against the superproject's origin). Null when neither reaches it. */
-function submoduleRepository(root, mount, cache) {
-  const checkout = join(root, mount.path);
-  if (existsSync(join(checkout, '.git')) && git(checkout, ['cat-file', '-e', `${mount.commit}^{commit}`]).status === 0) return checkout;
-  if (!existsSync(join(root, '.gitmodules'))) return null;
-  const names = git(root, ['config', '-f', '.gitmodules', '--get-regexp', '^submodule\\..*\\.path$']).stdout.split('\n').filter(Boolean);
-  const entry = names.map((line) => line.split(' ')).find(([, path]) => path === mount.path);
-  if (!entry) return null;
-  let url = git(root, ['config', '-f', '.gitmodules', '--get', entry[0].replace(/\.path$/u, '.url')]).stdout.trim();
-  if (url.startsWith('../') || url.startsWith('./')) {
-    const origin = git(root, ['remote', 'get-url', 'origin']).stdout.trim();
-    if (!origin) return null;
-    url = /^[a-z]+:\/\//u.test(origin) ? new URL(url, origin.endsWith('/') ? origin : `${origin}/`).href : resolve(origin, url);
-  }
+/** A submodule URL as git resolves it: relative to the URL of the repository whose .gitmodules names it. */
+function resolveUrl(url, parent) {
+  if (!(url.startsWith('../') || url.startsWith('./'))) return url;
+  if (!parent) return null;
+  return /^[a-z]+:\/\//u.test(parent) ? new URL(url, parent.endsWith('/') ? parent : `${parent}/`).href : resolve(parent, url);
+}
+
+/** The URL a .gitmodules (from a file, or from a blob `COMMIT:.gitmodules`) names for a mount path. */
+function moduleUrl(cwd, source, path) {
+  const read = (args) => git(cwd, ['config', ...source, ...args]);
+  const names = read(['--get-regexp', '^submodule\\..*\\.path$']).stdout.split('\n').filter(Boolean);
+  const entry = names.map((line) => line.split(' ')).find(([, value]) => value === path);
+  return entry ? read(['--get', entry[0].replace(/\.path$/u, '.url')]).stdout.trim() || null : null;
+}
+
+/** A local repository holding `commit` of `url`: a blobless fetch into the cache, keyed by URL. Null when the
+ *  remote cannot be reached. */
+function fetchedRepository(url, commit, cache) {
   const directory = join(cache, createHash('sha256').update(url).digest('hex').slice(0, 16));
   if (!existsSync(join(directory, '.git'))) {
     mkdirSync(directory, {recursive: true});
     if (git(directory, ['init', '-q']).status !== 0 || git(directory, ['remote', 'add', 'origin', url]).status !== 0) return null;
   }
-  if (git(directory, ['cat-file', '-e', `${mount.commit}^{commit}`]).status === 0) return directory;
-  const fetched = git(directory, ['-c', 'protocol.file.allow=always', 'fetch', '-q', '--depth=1', '--filter=blob:none', 'origin', mount.commit]);
+  if (git(directory, ['cat-file', '-e', `${commit}^{commit}`]).status === 0) return directory;
+  const fetched = git(directory, ['-c', 'protocol.file.allow=always', 'fetch', '-q', '--depth=1', '--filter=blob:none', 'origin', commit]);
   return fetched.status === 0 ? directory : null;
 }
 
-/** Every workspace manifest by directory, including those inside mounted submodules read at their recorded
- *  commits, and the mounts that could not be read. */
+/** Every workspace manifest by directory, including those inside mounted submodules (and submodules nested in
+ *  them) read at the commits their superprojects record, and the mounts that could not be read. */
 export function workspaceManifests(root, {readSubmodules = true, cache = join(tmpdir(), 'lockfile-fresh-submodules')} = {}) {
   const manifests = new Map(), unread = [], inWorkspace = workspaceGlobs(root);
   for (const dir of workspacePackages(root)) manifests.set(dir, JSON.parse(readFileSync(join(root, dir, 'package.json'), 'utf8')));
-  for (const mount of submodules(root)) {
-    let repository = null;
-    try { if (readSubmodules) repository = submoduleRepository(root, mount, cache); } catch { repository = null; }
-    if (!repository) { unread.push(mount.path); continue; }
-    const files = git(repository, ['ls-tree', '-r', '-z', '--name-only', mount.commit]);
-    if (files.status !== 0) { unread.push(mount.path); continue; }
-    for (const file of files.stdout.split('\0').filter(isManifest)) {
-      const dir = posix.join(mount.path, posix.dirname(file));
+  const origin = git(root, ['remote', 'get-url', 'origin']).stdout.trim() || null;
+  // A mount: its path in the workspace, the commit recorded for it, and where it can be read.
+  const readMount = (path, commit, repository, url) => {
+    const entries = git(repository, ['ls-tree', '-r', '-z', commit]);
+    if (entries.status !== 0) { unread.push(path); return; }
+    for (const entry of entries.stdout.split('\0').filter(Boolean)) {
+      const [meta, file] = entry.split('\t'), [mode, , hash] = meta.split(' ');
+      if (mode === '160000') {
+        const nested = posix.join(path, file);
+        const nestedUrl = resolveUrl(moduleUrl(repository, ['--blob', `${commit}:.gitmodules`], file) ?? '', url);
+        let nestedRepository = null;
+        try { nestedRepository = nestedUrl && fetchedRepository(nestedUrl, hash, cache); } catch { nestedRepository = null; }
+        if (nestedRepository) readMount(nested, hash, nestedRepository, nestedUrl); else unread.push(nested);
+        continue;
+      }
+      if (!isManifest(file)) continue;
+      const dir = posix.join(path, posix.dirname(file));
       if (!inWorkspace(dir)) continue;
-      const shown = git(repository, ['show', `${mount.commit}:${file}`]);
-      if (shown.status !== 0) { unread.push(mount.path); break; }
+      const shown = git(repository, ['show', `${commit}:${file}`]);
+      if (shown.status !== 0) { unread.push(path); return; }
       manifests.set(dir, JSON.parse(shown.stdout));
     }
+  };
+  for (const mount of submodules(root)) {
+    if (!readSubmodules) { unread.push(mount.path); continue; }
+    const checkout = join(root, mount.path);
+    let repository = null, url = null;
+    try {
+      url = existsSync(join(root, '.gitmodules')) ? resolveUrl(moduleUrl(root, ['-f', '.gitmodules'], mount.path) ?? '', origin) : null;
+      if (existsSync(join(checkout, '.git')) && git(checkout, ['cat-file', '-e', `${mount.commit}^{commit}`]).status === 0) repository = checkout;
+      else if (url) repository = fetchedRepository(url, mount.commit, cache);
+    } catch { repository = null; }
+    if (repository) readMount(mount.path, mount.commit, repository, url); else unread.push(mount.path);
   }
   return {manifests, unread};
 }
@@ -109,7 +132,9 @@ export function lockReading(root, options = {}) {
   const {manifests, unread} = workspaceManifests(root, options);
   const importers = lock.importers ?? {}, dirs = [...manifests.keys()].sort(), names = new Map(), found = [];
   // An override replaces the specifier pnpm records; the overrides themselves must match the lock's.
-  const overrides = (parse(readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8')) ?? {}).overrides ?? {};
+  const workspace = parse(readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8')) ?? {}, overrides = workspace.overrides ?? {};
+  // pnpm installs declared peers itself unless autoInstallPeers is off (its default is on).
+  const autoInstallPeers = workspace.autoInstallPeers !== false;
   for (const name of new Set([...Object.keys(overrides), ...Object.keys(lock.overrides ?? {})]))
     if (String(overrides[name]) !== String((lock.overrides ?? {})[name])) found.push({key: `override:${name}`, declared: overrides[name], locked: (lock.overrides ?? {})[name]});
   for (const dir of dirs) {
@@ -122,11 +147,16 @@ export function lockReading(root, options = {}) {
     for (const field of FIELDS) {
       const declared = manifest[field] ?? {}, locked = importer[field] ?? {};
       for (const [name, specifier] of Object.entries(declared)) {
+        // A name declared in dependencies and again in devDependencies or optionalDependencies is recorded
+        // once, under dependencies.
+        if (field !== 'dependencies' && name in (manifest.dependencies ?? {})) continue;
         if (String(specifier).startsWith('workspace:') && !names.has(name)) found.push({key: `unprovided-workspace-dependency:${dir}:${name}`});
         if (!(name in locked)) found.push({key: `undeclared-in-lock:${dir}:${field}:${name}`});
         else if (String(locked[name].specifier) !== String(overrides[name] ?? specifier)) found.push({key: `specifier:${dir}:${field}:${name}`, declared: specifier, locked: locked[name].specifier});
       }
-      for (const name of Object.keys(locked)) if (!(name in declared)) found.push({key: `stale-in-lock:${dir}:${field}:${name}`});
+      // An auto-installed peer is recorded among the importer's dependencies without being declared there.
+      const peer = (name) => autoInstallPeers && field === 'dependencies' && name in (manifest.peerDependencies ?? {});
+      for (const name of Object.keys(locked)) if (!(name in declared) && !peer(name)) found.push({key: `stale-in-lock:${dir}:${field}:${name}`});
     }
   }
   // A submodule that could not be read (no checkout of its commit, no reachable remote) leaves its importers

@@ -92,3 +92,46 @@ test('a mount whose remote cannot be reached is reported unread, not stale', (t)
   spawnSync('git', ['update-index', '--add', '--cacheinfo', '160000,1111111111111111111111111111111111111111,lib/mounted'], {cwd: root});
   assert.deepEqual(lockReading(root, {cache: join(root, '.cache')}), {mismatches: [], unread: ['lib/mounted']});
 });
+
+test('a submodule nested in a mount is read at the commit the mount records', (t) => {
+  const commitAll = (dir, message) => {
+    spawnSync('git', ['add', '-A'], {cwd: dir});
+    spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', message], {cwd: dir});
+    return spawnSync('git', ['rev-parse', 'HEAD'], {cwd: dir, encoding: 'utf8'}).stdout.trim();
+  };
+  const site = workspace(t, {'package.json': {name: '@h/site', dependencies: {left: '1.0.0'}}});
+  const siteCommit = commitAll(site, 'site');
+  const section = workspace(t, {'package.json': {name: '@h/mounted', private: true}, '.gitmodules': `[submodule "site"]\n\tpath = sites/site\n\turl = ${site}\n`});
+  // The gitlink goes into the index after the files: `add -A` would drop it, its path being absent on disk.
+  spawnSync('git', ['update-index', '--add', '--cacheinfo', `160000,${siteCommit},sites/site`], {cwd: section});
+  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'section'], {cwd: section});
+  const sectionCommit = spawnSync('git', ['rev-parse', 'HEAD'], {cwd: section, encoding: 'utf8'}).stdout.trim();
+  const root = workspace(t, {
+    'package.json': {name: 'root', private: true}, 'pnpm-workspace.yaml': yamlWorkspace,
+    'lib/b/package.json': {name: '@h/b', version: '0.3.0'},
+    '.gitmodules': `[submodule "mounted"]\n\tpath = lib/mounted\n\turl = ${section}\n`,
+    'pnpm-lock.yaml': lock("  .: {}\n  lib/b: {}\n  lib/mounted: {}\n  lib/mounted/sites/site: {}\n"),
+  });
+  spawnSync('git', ['update-index', '--add', '--cacheinfo', `160000,${sectionCommit},lib/mounted`], {cwd: root});
+  const reading = lockReading(root, {cache: join(root, '.cache')});
+  assert.deepEqual(reading.unread, []);
+  // The nested site is judged (its undeclared dependency is caught), not reported as a stale importer.
+  assert.deepEqual(reading.mismatches.map((m) => m.key), ['undeclared-in-lock:lib/mounted/sites/site:dependencies:left']);
+});
+
+test('a dependency declared twice is recorded once, and an auto-installed peer is not stale', (t) => {
+  const root = workspace(t, {
+    'package.json': {name: 'root', private: true}, 'pnpm-workspace.yaml': yamlWorkspace + 'autoInstallPeers: true\n',
+    'lib/b/package.json': {name: '@h/b', version: '0.3.0'},
+    'lib/a/package.json': {name: '@h/a', dependencies: {twice: '1.0.0'}, devDependencies: {twice: '1.0.0'}, peerDependencies: {peer: '>=1'}},
+    'pnpm-lock.yaml': lock("  .: {}\n  lib/b: {}\n  lib/a:\n    dependencies:\n      twice:\n        specifier: 1.0.0\n        version: 1.0.0\n      peer:\n        specifier: '>=1'\n        version: 1.2.0\n"),
+  });
+  assert.deepEqual(lockMismatches(root), []);
+  const strict = workspace(t, {
+    'package.json': {name: 'root', private: true}, 'pnpm-workspace.yaml': yamlWorkspace + 'autoInstallPeers: false\n',
+    'lib/b/package.json': {name: '@h/b', version: '0.3.0'},
+    'lib/a/package.json': {name: '@h/a', peerDependencies: {peer: '>=1'}},
+    'pnpm-lock.yaml': lock("  .: {}\n  lib/b: {}\n  lib/a:\n    dependencies:\n      peer:\n        specifier: '>=1'\n        version: 1.2.0\n"),
+  });
+  assert.deepEqual(lockMismatches(strict).map((m) => m.key), ['stale-in-lock:lib/a:dependencies:peer']);
+});
