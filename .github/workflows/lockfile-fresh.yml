@@ -52,6 +52,9 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
+          # No package-manager cache: the reading needs only the section's own npm install, and setup-node's
+          # automatic pnpm detection fails on runners without pnpm (the bare-cedar-fog runner has none).
+          package-manager-cache: false
       - name: Lockfile freshness
         env:
           DIRECTORY: ${{ inputs.directory }}
