@@ -1,7 +1,9 @@
 name: lockfile-fresh
 # Is the pnpm lock fresh? Every workspace package must have an importer whose specifiers are exactly its declared
 # dependencies (overrides applied), and every workspace:* dependency must name a workspace package. Run as a
-# ratchet: the pull request's base is read too, and only mismatches the pull request adds fail.
+# ratchet: the pull request's base is read too, and only mismatches the pull request adds fail. A mounted
+# submodule is read at the commit the superproject records (its .gitmodules URL, fetched blobless with the
+# runner's own git access); a mount the runner cannot reach is listed as unread, never judged.
 on:
   workflow_call:
     inputs:
@@ -29,6 +31,7 @@ jobs:
           sparse-checkout: |
             /pnpm-lock.yaml
             /pnpm-workspace.yaml
+            /.gitmodules
             **/package.json
             **/pnpm-lock.yaml
             **/pnpm-workspace.yaml
@@ -42,6 +45,7 @@ jobs:
           sparse-checkout: |
             /pnpm-lock.yaml
             /pnpm-workspace.yaml
+            /.gitmodules
             **/package.json
             **/pnpm-lock.yaml
             **/pnpm-workspace.yaml
@@ -69,6 +73,7 @@ jobs:
             const lines=[`### Lockfile freshness: ${r.added.length?"`stale`":"`fresh`"} (${r.mismatches} known mismatches)`,""];
             for(const m of r.added)lines.push(`- added: \`${m.key}\``+(m.declared!==undefined?` (declared ${m.declared}, locked ${m.locked})`:""));
             if(r.removed.length)lines.push(`- removed: ${r.removed.length}`);
+            if(r.unreadSubmodules?.length)lines.push(`- unread (mount not reachable from this runner): ${r.unreadSubmodules.map(p=>`\`${p}\``).join(", ")}`);
             require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join("\n")+"\n");'
           cat freshness.json
           exit $status

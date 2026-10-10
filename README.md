@@ -30,6 +30,8 @@ Workflows (swap the file name):
   exactly its declared dependencies (overrides applied), and every `workspace:*` dependency names a workspace
   package. A ratchet: the pull request's base is read too, and only mismatches the change adds fail
   (`scripts/lockfile-fresh.mjs`, which lists every stale importer where pnpm's frozen install stops at the first).
+  Mounted submodules are read at the commits the superproject records; a mount the runner cannot reach is
+  reported as unread rather than judged.
   Inputs: `directory`, `runs-on` (JSON runner labels, for a repository without GitHub-hosted runners).
 - `machine-lock-fresh.yml` - a machine snapshot's `dependencies.lock.yaml` still satisfies the workspace its pinned
   controller composes, resolved the way a release resolves: every source at its pin, the pinned controller's
