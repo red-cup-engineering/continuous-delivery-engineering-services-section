@@ -20,12 +20,32 @@ Workflows (swap the file name):
 - `submodule-advance.yml` - one PR bumping moved submodule heads (`scripts/advance.mjs`). Secret: `token` (needs `secrets: inherit` or `secrets: {token: ...}`). Schedule it with `on: schedule`. It advances a pin only where the remote head descends from the pin, lists diverged pins in the PR body instead of advancing them, writes its body to `.git/advance-body.md` (nothing outside the workspace), and never force-pushes a branch that carries a commit by anyone but the bot: it adds a commit on top instead. Inputs: `branch`, `note`.
 - `notify-parent.yml` - section side of the upward chain: on push to `main`, sends `repository_dispatch` (`section-advanced`) to the parent. Input: `parent` (owner/repo). Secret: `token`, a PAT that may dispatch on the parent.
 - `superrepo-advance.yml` - parent side: `submodule-advance` with the dispatching section named in the PR. Call it on `repository_dispatch` and a daily `schedule`. Input: `source`.
-- `change-test.yml` - the pre-merge change test: the release controller
-  (`red-cup-engineering/guix-machine-release-service`, `scripts/test-change.mjs`) composes the machine's admitted
-  workspace with the pull request's commit, installs from `https://registry.561.group/`, builds as a release is
-  assembled and fails only on regressions the change introduces. Inputs: `machine` (default `emsenn/cold-red-gate`),
-  `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN` with contents:read on every
-  repository the machine pins.
+- `change-test.yml` - the pre-merge change test (STD-CI), run against **every machine that pins this repository**:
+  - `machines` reads each candidate machine's `sources.json` (input `machines`, JSON array of `owner/repo` or
+    `owner/repo:path` for a snapshot below the root; default Cold Red Gate and Bare Cedar Fog's MetroPlat) and keeps
+    those that pin the calling repository (`scripts/pinning-machines.mjs`). Input `machine` names one instead.
+  - `change-test`, one leg per machine: the release controller (`red-cup-engineering/guix-machine-release-service`,
+    `scripts/test-change.mjs`) composes the machine's admitted workspace with the pull request's commit, installs from
+    `https://registry.561.group/`, builds as a release is assembled and fails only on regressions the change
+    introduces. Each leg's conclusion is that machine's check.
+  - Credentials never reach the change's code. The checkout keeps none (`persist-credentials: false`). The house read
+    token is given to git only through one step's environment, as a header, to form every source
+    (`test-change.mjs --materialize-only`). The builds and tests then run in a step that holds no token and in which
+    git may not reach the network (`GIT_ALLOW_PROTOCOL=file`).
+  - `report`: one pull-request comment, found by its marker and updated in place on every run, with each machine's
+    verdict, regressions, and design rules added and removed (`scripts/change-test-comment.mjs`).
+  Inputs: `machine`, `machines`, `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN`
+  with contents:read on every repository the machines pin. The caller is five lines (written by the generator,
+  `node generator/generate-ci.mjs --only change-test --pr OWNER/REPO`):
+
+  ```yaml
+  name: change-test
+  on: pull_request
+  jobs:
+    change-test:
+      uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
+      secrets: inherit
+  ```
 - `lockfile-fresh.yml` - the pnpm lock is fresh: every workspace package has an importer whose specifiers are
   exactly its declared dependencies (overrides applied), and every `workspace:*` dependency names a workspace
   package. A ratchet: the pull request's base is read too, and only mismatches the change adds fail

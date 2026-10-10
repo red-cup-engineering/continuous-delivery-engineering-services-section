@@ -1,0 +1,75 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { machinesPinning } from '../scripts/pinning-machines.mjs';
+import { MARKER, overallVerdict, readResults, renderComment, upsertComment } from '../scripts/change-test-comment.mjs';
+
+const sources = (...repositories) => ({ repositories: repositories.map((repository) => ({ repository, commit: 'a'.repeat(40) })) });
+
+test('a change is tested against every machine that pins its repository, and only those', () => {
+  const readings = {
+    'emsenn/cold-red-gate': sources('red-cup-engineering/computer-data-services-section', 'red-cup-engineering/feltos'),
+    'emsenn/bare-cedar-fog': sources('red-cup-engineering/feltos'),
+  };
+  assert.deepEqual(machinesPinning('red-cup-engineering/feltos', readings), ['emsenn/cold-red-gate', 'emsenn/bare-cedar-fog']);
+  assert.deepEqual(machinesPinning('Red-Cup-Engineering/Computer-Data-Services-Section', readings), ['emsenn/cold-red-gate']);
+  assert.deepEqual(machinesPinning('red-cup-engineering/unpinned', readings), []);
+  // A machine whose sources.json is unreadable is not guessed to pin anything.
+  assert.deepEqual(machinesPinning('red-cup-engineering/feltos', { broken: null, odd: { repositories: 'x' } }), []);
+});
+
+const leg = (machine, verdict) => ({ machine, machineCommit: 'b'.repeat(40), commit: 'c'.repeat(40), verdict, logTail: 'tail' });
+
+test('the one comment reports every machine, its worst verdict first, and the design rules added and removed', () => {
+  const regression = { verdict: 'regression', regressions: 1, lock: 'frozen',
+    packages: [{ name: '@x/a', tests: 3, passed: 2, regressions: ['test/a.test.mjs'], preexisting: [] }],
+    designRules: { added: [{ key: 'drc-3:@x/a:src/s.mjs:node:sqlite' }], removed: ['drc-2:@x/b'] } };
+  const clean = { verdict: 'no-regression', regressions: 0, lock: 'frozen', packages: [], designRules: { added: [], removed: [] } };
+  assert.equal(overallVerdict([leg('m/one', clean), leg('m/two', regression)]), 'regression');
+  assert.equal(overallVerdict([leg('m/one', clean), leg('m/two', null)]), 'not-run');
+  assert.equal(overallVerdict([leg('m/one', clean)]), 'no-regression');
+  const body = renderComment([leg('m/one', clean), leg('m/two', regression)]);
+  assert.ok(body.startsWith(MARKER), 'the comment is found again by its marker');
+  assert.match(body, /## Change test: `regression`/);
+  assert.match(body, /### m\/one @ `bbbbbbbbb`: `no-regression`/);
+  assert.match(body, /\| `@x\/a` \| 2\/3 passed \| `test\/a\.test\.mjs` \| 0 \|/);
+  assert.match(body, /Design rules \*\*added\*\* \(1\): `drc-3:@x\/a:src\/s\.mjs:node:sqlite`/);
+  assert.match(body, /Design rules removed \(1\): `drc-2:@x\/b`/);
+  // A leg with no verdict shows its log instead of passing silently.
+  assert.match(renderComment([leg('m/one', null)]), /produced no verdict[\s\S]*tail/);
+  assert.match(renderComment([], { none: 'o/r' }), /No machine pins `o\/r`/);
+});
+
+test('the results directory is read leg by leg; a leg with an empty verdict reads as none', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'change-test-results-'));
+  try {
+    for (const [name, verdict] of [['one', '{"verdict":"no-regression"}'], ['two', '']]) {
+      fs.mkdirSync(path.join(root, name));
+      fs.writeFileSync(path.join(root, name, 'meta.json'), JSON.stringify({ machine: `m/${name}`, machineCommit: 'b', commit: 'c' }));
+      fs.writeFileSync(path.join(root, name, 'verdict.json'), verdict);
+      fs.writeFileSync(path.join(root, name, 'log-tail.txt'), `log of ${name}`);
+    }
+    const results = readResults(root);
+    assert.deepEqual(results.map((r) => [r.machine, r.verdict?.verdict ?? null, r.logTail]), [['m/one', 'no-regression', 'log of one'], ['m/two', null, 'log of two']]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the comment is updated in place when it exists and created once when it does not', async () => {
+  const calls = [];
+  const requestWith = (pages) => async (method, url, body) => {
+    calls.push([method, url, body?.body]);
+    if (method === 'GET') return pages[Number(new URL(url, 'https://x').searchParams.get('page')) - 1] ?? [];
+    return { html_url: `${method} ${url}` };
+  };
+  const others = Array.from({ length: 100 }, (_, i) => ({ id: i, body: 'someone else' }));
+  // The marked comment on the second page is found and patched; nothing new is posted.
+  assert.equal(await upsertComment({ repo: 'o/r', pr: 7, body: `${MARKER}\nnew`, request: requestWith([others, [{ id: 555, body: `${MARKER}\nold` }]]) }),
+    'PATCH /repos/o/r/issues/comments/555');
+  assert.ok(!calls.some(([method]) => method === 'POST'));
+  calls.length = 0;
+  assert.equal(await upsertComment({ repo: 'o/r', pr: 7, body: `${MARKER}\nnew`, request: requestWith([[{ id: 1, body: 'unrelated' }]]) }),
+    'POST /repos/o/r/issues/7/comments');
+  assert.deepEqual(calls.filter(([method]) => method !== 'GET'), [['POST', '/repos/o/r/issues/7/comments', `${MARKER}\nnew`]]);
+});

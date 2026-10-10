@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { detect, generate, renderCi, renderSync, REUSABLE } from '../generator/generate-ci.mjs';
+import { detect, generate, renderChangeTest, renderCi, renderSync, REUSABLE } from '../generator/generate-ci.mjs';
 import { openPullRequest } from '../generator/open-pr.mjs';
 
 // Fixture repositories are built from a map of path -> content.
@@ -92,4 +92,18 @@ test('pull request by git-data API extends an existing branch without force', as
   assert.equal(patch[2].force, false);
   assert.deepEqual(calls.find(c => c[1].endsWith('/git/commits') && c[0] === 'POST')[2].parents, ['b1']);
   assert.ok(!calls.some(c => c[1].endsWith('/git/refs') && c[0] === 'POST'));
+});
+
+test('a package repository gets the change-test caller: five lines, every machine that pins it, the house token inherited', () => {
+  const r = generate(fixture({ 'package.json': '{}' }));
+  const y = r.files['.github/workflows/change-test.yml'];
+  assert.equal(y, renderChangeTest({ node: true }));
+  assert.match(y, /^name: change-test$/m);
+  assert.match(y, /^on: pull_request$/m);
+  assert.ok(y.includes(`uses: ${REUSABLE}/change-test.yml@main`));
+  assert.match(y, /^    secrets: inherit$/m);
+  assert.equal(y.split('\n').filter((l) => l && !l.startsWith('#')).length, 6);
+  // Not a package repository: no change-test caller. An existing one is not reported as handwritten.
+  assert.equal(generate(fixture({ 'lakefile.lean': '' })).files['.github/workflows/change-test.yml'], undefined);
+  assert.deepEqual(generate(fixture({ 'package.json': '{}', '.github/workflows/change-test.yml': y })).handwritten, []);
 });
