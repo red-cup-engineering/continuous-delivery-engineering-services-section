@@ -6,7 +6,7 @@
 // at the snapshot root cannot answer this: the lock belongs to the composed workspace, not to the repository.
 //
 // With `--base DIR` it is a ratchet: a stale head fails only when the base was fresh, so a pull request is not
-// blocked by a main that is already stale (the summary still says so).
+// blocked by a main that is already stale (the summary still says so). An unreadable head always fails.
 //
 //   node scripts/machine-lock-fresh.mjs SNAPSHOT_DIR WORK_DIR [--base BASE_SNAPSHOT_DIR]
 import {spawnSync} from 'node:child_process';
@@ -15,7 +15,9 @@ import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const CONTROLLER='@red-cup-engineering/guix-machine-release-service';
-const PNPM=['--registry=https://registry.npmjs.org/','exec','--yes','--package=pnpm@11.9.0','--','pnpm'];
+// The release's own invocation (github-machine-release.scm): pnpm itself is pointed at the public registry too, so
+// a runner's npm configuration (a house registry for every scope) never decides how the lock resolves.
+const PNPM=['--registry=https://registry.npmjs.org/','exec','--yes','--package=pnpm@11.9.0','--','pnpm','--registry=https://registry.npmjs.org/'];
 
 function run(program,args,options={}){
   const result=spawnSync(program,args,{encoding:'utf8',maxBuffer:256*1024*1024,...options});
@@ -66,9 +68,11 @@ export function readLock(snapshot,work,label='head'){
   return {state:/ERR_PNPM_OUTDATED_LOCKFILE|ERR_PNPM_LOCKFILE_CONFIG_MISMATCH/.test(output)?'stale':'unreadable',controller:controller.commit,reason};
 }
 
-/** The ratchet: stale or unreadable fails unless the base was already the same. */
+/** The ratchet: a stale head fails unless the base was already stale. An unreadable head is no reading, so it
+ *  always fails: passing it would report a lock nobody checked. */
 export function verdict(head,base){
   if(head.state==='fresh')return {fails:false,summary:'fresh'};
+  if(head.state==='unreadable')return {fails:true,summary:'unreadable'};
   if(base&&base.state===head.state)return {fails:false,summary:`${head.state}, as the base already was`};
   return {fails:true,summary:head.state};
 }
