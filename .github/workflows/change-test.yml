@@ -1,0 +1,88 @@
+name: change-test
+# Test a pull request the way a machine will receive it: the release controller's change test
+# (red-cup-engineering/guix-machine-release-service scripts/test-change.mjs) composes the machine's admitted
+# workspace with this commit in place of the pinned one, installs from the house registry, builds as a
+# release is assembled, and fails only on regressions this change introduces. The verdict is posted to the
+# job summary and, on a pull request, as a comment. Merged commits are then received by the machine itself.
+on:
+  workflow_call:
+    inputs:
+      machine:
+        description: 'Machine snapshot repository whose sources.json pins this repository'
+        type: string
+        default: emsenn/cold-red-gate
+      controller-ref:
+        description: 'Ref of red-cup-engineering/guix-machine-release-service to test with'
+        type: string
+        default: main
+    secrets:
+      house-read-token:
+        description: 'HOUSE_READ_TOKEN: a token with contents:read on every repository the machine pins'
+        required: false
+jobs:
+  change-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      HOUSE: ${{ github.workspace }}/.house
+      HOUSE_READ_TOKEN: ${{ secrets.house-read-token }}
+    steps:
+      - name: Require the house read token
+        run: |
+          if [ -z "$HOUSE_READ_TOKEN" ]; then
+            echo "::error title=Missing secret HOUSE_READ_TOKEN::The change test clones every repository ${{ inputs.machine }} pins, most of them private. Add a repository or organization secret named HOUSE_READ_TOKEN (contents:read on those repositories) and pass it as house-read-token (or use secrets: inherit)."
+            exit 1
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: change
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: House access
+        run: |
+          git config --global url."https://x-access-token:${HOUSE_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
+          for scope in 561-group causeway-services coesite-operations emsenn emsweb harmonious-union koios-news \
+                       lenticule-science red-cup-engineering red-cup-science rsc-quiescent turntide-islands union-officer-academy; do
+            echo "@$scope:registry=https://registry.561.group/" >> "$HOME/.npmrc"
+          done
+          git clone -q --depth=50 --branch '${{ inputs.controller-ref }}' https://github.com/red-cup-engineering/guix-machine-release-service.git "$HOUSE/controller"
+          git clone -q --depth=1 https://github.com/${{ inputs.machine }}.git "$HOUSE/machine"
+          echo "MACHINE_COMMIT=$(git -C "$HOUSE/machine" rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Reuse the pinned workspace
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ${{ env.HOUSE }}/work/registry-cache
+            ${{ env.HOUSE }}/work/sources
+          key: change-test-${{ inputs.machine }}-${{ env.MACHINE_COMMIT }}
+          restore-keys: change-test-${{ inputs.machine }}-
+      - name: Change test
+        id: test
+        run: |
+          set +e
+          node "$HOUSE/controller/scripts/test-change.mjs" "$HOUSE/machine" "$HOUSE/work" "${{ github.repository }}=$GITHUB_WORKSPACE/change" > verdict.json 2> test-change.log
+          status=$?
+          tail -c 4000 test-change.log
+          verdict=$(node -e 'try{console.log(JSON.parse(require("fs").readFileSync("verdict.json","utf8")).verdict)}catch{console.log("not-run")}')
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Change test: \`$verdict\`"
+            echo "Commit \`$(git -C change rev-parse HEAD)\` against \`${{ inputs.machine }}@$MACHINE_COMMIT\`."
+            echo
+            echo '```json'
+            if [ -s verdict.json ]; then cat verdict.json; else tail -c 3000 test-change.log; fi
+            echo '```'
+          } > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - name: Record the verdict on the pull request
+        if: always() && github.event_name == 'pull_request' && steps.test.outputs.verdict != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body-file summary.md || true

@@ -20,6 +20,12 @@ Workflows (swap the file name):
 - `submodule-advance.yml` - one PR bumping moved submodule heads (`scripts/advance.mjs`). Secret: `token` (needs `secrets: inherit` or `secrets: {token: ...}`). Schedule it with `on: schedule`. It advances a pin only where the remote head descends from the pin, lists diverged pins in the PR body instead of advancing them, writes its body to `.git/advance-body.md` (nothing outside the workspace), and never force-pushes a branch that carries a commit by anyone but the bot: it adds a commit on top instead. Inputs: `branch`, `note`.
 - `notify-parent.yml` - section side of the upward chain: on push to `main`, sends `repository_dispatch` (`section-advanced`) to the parent. Input: `parent` (owner/repo). Secret: `token`, a PAT that may dispatch on the parent.
 - `superrepo-advance.yml` - parent side: `submodule-advance` with the dispatching section named in the PR. Call it on `repository_dispatch` and a daily `schedule`. Input: `source`.
+- `change-test.yml` - the pre-merge change test: the release controller
+  (`red-cup-engineering/guix-machine-release-service`, `scripts/test-change.mjs`) composes the machine's admitted
+  workspace with the pull request's commit, installs from `https://registry.561.group/`, builds as a release is
+  assembled and fails only on regressions the change introduces. Inputs: `machine` (default `emsenn/cold-red-gate`),
+  `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN` with contents:read on every
+  repository the machine pins.
 - `content.yml` - JSON files with a relative `$schema` are validated; relative markdown links are checked. Input: `links`.
 
 Lean with a directory:
@@ -49,3 +55,29 @@ parent repo -> sync.yml -> superrepo-advance.yml -> submodule-advance.yml -> one
 The PR token must be allowed to open pull requests (a PAT, or the repository setting "Allow GitHub Actions to create pull requests"). Pin records only: diverged pins wait for reconciliation (requirement 16).
 
 Tests: `npm test`.
+
+## One path from change to machine
+
+A house package is made, tested, received and released along one path:
+
+1. **Pull request:** the release controller receives it before merge. Cold Red Gate's runner, which already
+   holds the credential it releases with, runs `receive-pull-requests.mjs` every 30 minutes: each open pull
+   request into a ref the machine tracks is composed into the machine's snapshot by the change test
+   (`scripts/test-change.mjs`) and its verdict, with the class of any assembly break, is recorded on the pull
+   request. A Claude Code session runs the same change test itself before merging (the controller's house
+   session start). Package-local checks may add `node-package.yml` here.
+2. **Merge:** with a merge commit, by whoever made the change, once the change test reports `no-regression`.
+3. **Receive:** the machine's own release workflow advances to the merged commit with the controller's
+   `advance-reviewed-sources.mjs`, then builds, seals, probes and receives it.
+
+`change-test.yml` is the same change test for a GitHub-hosted runner. It needs a `HOUSE_READ_TOKEN` secret
+with contents:read on every pinned repository, so the machine's runner is the default path:
+
+```yaml
+name: change-test
+on: pull_request
+jobs:
+  change-test:
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
+    secrets: { house-read-token: "${{ secrets.HOUSE_READ_TOKEN }}" }
+```
