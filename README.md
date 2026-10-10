@@ -33,6 +33,10 @@ Workflows (swap the file name):
   Mounted submodules are read at the commits the superproject records; a mount the runner cannot reach is
   reported as unread rather than judged.
   Inputs: `directory`, `runs-on` (JSON runner labels, for a repository without GitHub-hosted runners).
+- `absolute-symlinks.yml` - no committed symbolic link has an absolute target: it resolves only on the machine
+  that wrote it, and where the path exists a workspace tool follows it into the live tree
+  (`scripts/absolute-symlinks.mjs`, reading links from the index). Inputs: `exclude` (globs reported, not failed;
+  default `**/legacy/**`), `runs-on`.
 - `machine-lock-fresh.yml` - a machine snapshot's `dependencies.lock.yaml` still satisfies the workspace its pinned
   controller composes, resolved the way a release resolves: every source at its pin, the pinned controller's
   `prepare-sources.mjs --manifests-only`, then pnpm 11.9.0 frozen and lockfile-only, so nothing is downloaded
