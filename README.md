@@ -31,6 +31,12 @@ Workflows (swap the file name):
   package. A ratchet: the pull request's base is read too, and only mismatches the change adds fail
   (`scripts/lockfile-fresh.mjs`, which lists every stale importer where pnpm's frozen install stops at the first).
   Inputs: `directory`, `runs-on` (JSON runner labels, for a repository without GitHub-hosted runners).
+- `machine-lock-fresh.yml` - a machine snapshot's `dependencies.lock.yaml` still satisfies the workspace its pinned
+  controller composes, resolved the way a release resolves: every source at its pin, the pinned controller's
+  `prepare-sources.mjs --manifests-only`, then pnpm 11.9.0 frozen and lockfile-only, so nothing is downloaded
+  (`scripts/machine-lock-fresh.mjs`). A plain pnpm run at the snapshot root cannot answer this, because the lock
+  belongs to the composed workspace. A ratchet against the pull request's base. Input: `runs-on` (the machine's
+  build runner, which can read every pinned source).
 - `content.yml` - JSON files with a relative `$schema` are validated; relative markdown links are checked. Input: `links`.
 
 Lean with a directory:
