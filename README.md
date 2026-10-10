@@ -26,6 +26,11 @@ Workflows (swap the file name):
   assembled and fails only on regressions the change introduces. Inputs: `machine` (default `emsenn/cold-red-gate`),
   `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN` with contents:read on every
   repository the machine pins.
+- `lockfile-fresh.yml` - the pnpm lock is fresh: every workspace package has an importer whose specifiers are
+  exactly its declared dependencies (overrides applied), and every `workspace:*` dependency names a workspace
+  package. A ratchet: the pull request's base is read too, and only mismatches the change adds fail
+  (`scripts/lockfile-fresh.mjs`, which lists every stale importer where pnpm's frozen install stops at the first).
+  Input: `directory`.
 - `content.yml` - JSON files with a relative `$schema` are validated; relative markdown links are checked. Input: `links`.
 
 Lean with a directory:
