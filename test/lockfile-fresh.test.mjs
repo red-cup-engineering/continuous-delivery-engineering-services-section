@@ -135,3 +135,18 @@ test('a dependency declared twice is recorded once, and an auto-installed peer i
   });
   assert.deepEqual(lockMismatches(strict).map((m) => m.key), ['stale-in-lock:lib/a:dependencies:peer']);
 });
+
+test('a negated subtree also leaves out the package at its own root, as pnpm reads it', (t) => {
+  const root = workspace(t, {
+    'package.json': {name: 'root', private: true},
+    'pnpm-workspace.yaml': "packages:\n  - 'lib/**'\n  - '!**/legacy/**'\n  - '!lib/mount/**'\n  - '!lib/named'\n",
+    'lib/a/package.json': {name: '@h/a', version: '1.0.0'},
+    'lib/mount/package.json': {name: '@h/mount', version: '1.0.0'},
+    'lib/mount/inner/package.json': {name: '@h/inner', version: '1.0.0'},
+    'lib/named/package.json': {name: '@h/named', version: '1.0.0'},
+    'lib/named/kept/package.json': {name: '@h/kept', version: '1.0.0'},
+    'lib/legacy/package.json': {name: '@h/legacy', version: '1.0.0'},
+    'pnpm-lock.yaml': lock("  .: {}\n  lib/a: {}\n  lib/named/kept: {}\n", ''),
+  });
+  assert.deepEqual(lockMismatches(root), []);
+});

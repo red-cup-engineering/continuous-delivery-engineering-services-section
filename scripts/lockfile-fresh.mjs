@@ -25,7 +25,10 @@ function workspaceGlobs(root) {
   const workspace = parse(readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8')) ?? {};
   const include = [], exclude = [];
   for (const pattern of workspace.packages ?? []) (pattern.startsWith('!') ? exclude : include).push(pattern.slice(pattern.startsWith('!') ? 1 : 0));
-  return (dir) => dir === '.' || (include.some((pattern) => posix.matchesGlob(dir, pattern)) && !exclude.some((pattern) => posix.matchesGlob(dir, pattern)));
+  // pnpm finds workspace packages by globbing `<pattern>/package.json`, where `**` also matches no directory at all:
+  // `dir/**` takes in (or, negated, leaves out) the package at `dir` itself. Read each pattern the same way.
+  const matches = (dir, pattern) => posix.matchesGlob(`${dir}/package.json`, `${pattern}/package.json`);
+  return (dir) => dir === '.' || (include.some((pattern) => matches(dir, pattern)) && !exclude.some((pattern) => matches(dir, pattern)));
 }
 
 /** The workspace's package directories: tracked package.json files matching pnpm-workspace.yaml's `packages` globs. */
