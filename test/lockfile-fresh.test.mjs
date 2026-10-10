@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
-import {freshness, lockMismatches} from '../scripts/lockfile-fresh.mjs';
+import {freshness, lockMismatches, lockReading} from '../scripts/lockfile-fresh.mjs';
 
 function workspace(t, files) {
   const root = mkdtempSync(join(tmpdir(), 'lockfile-fresh-'));
@@ -56,4 +56,39 @@ test('an importer inside a mounted submodule is not stale where the submodule is
   // A gitlink, as a checkout without submodules holds a mounted section: the index names it, its files are absent.
   spawnSync('git', ['update-index', '--add', '--cacheinfo', '160000,1111111111111111111111111111111111111111,lib/mounted'], {cwd: root});
   assert.deepEqual(lockMismatches(root).map((m) => m.key), ['stale-importer:lib/gone']);
+});
+
+test('a mounted submodule is read at the commit the superproject records, so its stale importers are caught', (t) => {
+  // The mounted section is its own repository; the superproject records one commit of it and has no checkout.
+  const section = workspace(t, {
+    'package.json': {name: '@h/mounted', private: true},
+    'services/leaf/package.json': {name: '@h/leaf', dependencies: {'@h/b': 'workspace:*', left: '1.0.0'}},
+  });
+  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'section'], {cwd: section});
+  const commit = spawnSync('git', ['rev-parse', 'HEAD'], {cwd: section, encoding: 'utf8'}).stdout.trim();
+  const root = workspace(t, {
+    'package.json': {name: 'root', private: true}, 'pnpm-workspace.yaml': yamlWorkspace,
+    'lib/b/package.json': {name: '@h/b', version: '0.3.0'},
+    '.gitmodules': `[submodule "mounted"]\n\tpath = lib/mounted\n\turl = ${section}\n`,
+    'pnpm-lock.yaml': lock("  .: {}\n  lib/b: {}\n  lib/mounted: {}\n  lib/mounted/services/leaf:\n    dependencies:\n      '@h/b':\n        specifier: workspace:*\n        version: link:../../../b\n"),
+  });
+  spawnSync('git', ['update-index', '--add', '--cacheinfo', `160000,${commit},lib/mounted`], {cwd: root});
+  const cache = join(root, '.cache');
+  const reading = lockReading(root, {cache});
+  assert.deepEqual(reading.unread, []);
+  assert.deepEqual(reading.mismatches.map((m) => m.key), ['undeclared-in-lock:lib/mounted/services/leaf:dependencies:left']);
+  // Without reading submodules (or where the mount cannot be reached) its importers are left unread, as before.
+  const skipped = lockReading(root, {readSubmodules: false});
+  assert.deepEqual(skipped, {mismatches: [], unread: ['lib/mounted']});
+});
+
+test('a mount whose remote cannot be reached is reported unread, not stale', (t) => {
+  const root = workspace(t, {
+    'package.json': {name: 'root', private: true}, 'pnpm-workspace.yaml': yamlWorkspace,
+    'lib/b/package.json': {name: '@h/b', version: '0.3.0'},
+    '.gitmodules': `[submodule "mounted"]\n\tpath = lib/mounted\n\turl = ${join(tmpdir(), 'no-such-lockfile-fresh-remote')}\n`,
+    'pnpm-lock.yaml': lock("  .: {}\n  lib/b: {}\n  lib/mounted/services/leaf: {}\n"),
+  });
+  spawnSync('git', ['update-index', '--add', '--cacheinfo', '160000,1111111111111111111111111111111111111111,lib/mounted'], {cwd: root});
+  assert.deepEqual(lockReading(root, {cache: join(root, '.cache')}), {mismatches: [], unread: ['lib/mounted']});
 });
