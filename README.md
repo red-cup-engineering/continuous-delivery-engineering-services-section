@@ -39,12 +39,18 @@ jobs:
 
 A house package is made, tested, received and released along one path:
 
-1. **Pull request:** `change-test.yml` runs the controller's change test (the same command a Claude Code session
-   runs before merging; see the controller's "House session start"). Package-local checks may add `node-package.yml`.
+1. **Pull request:** the release controller receives it before merge. Cold Red Gate's runner, which already
+   holds the credential it releases with, runs `receive-pull-requests.mjs` every 30 minutes: each open pull
+   request into a ref the machine tracks is composed into the machine's snapshot by the change test
+   (`scripts/test-change.mjs`) and its verdict, with the class of any assembly break, is recorded on the pull
+   request. A Claude Code session runs the same change test itself before merging (the controller's house
+   session start). Package-local checks may add `node-package.yml` here.
 2. **Merge:** with a merge commit, by whoever made the change, once the change test reports `no-regression`.
-3. **Receive:** the machine's own release workflow (Cold Red Gate every fifteen minutes) advances to the merged
-   commit with the controller's `advance-reviewed-sources.mjs`, then builds, seals, probes and receives it.
-   That workflow is the machine's, not this section's: it runs on the machine's own runner.
+3. **Receive:** the machine's own release workflow advances to the merged commit with the controller's
+   `advance-reviewed-sources.mjs`, then builds, seals, probes and receives it.
+
+`change-test.yml` is the same change test for a GitHub-hosted runner. It needs a `HOUSE_READ_TOKEN` secret
+with contents:read on every pinned repository, so the machine's runner is the default path:
 
 ```yaml
 name: change-test
