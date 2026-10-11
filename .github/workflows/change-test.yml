@@ -19,11 +19,11 @@ on:
       machines:
         description: 'JSON array of machines (owner/repo, or owner/repo:path) whose sources.json is read for pins of this repository'
         type: string
-        default: '["emsenn/cold-red-gate","emsenn/bare-cedar-fog:lib/emsenn/services/561-group/services/561-group-services-section/services/561-group-operations-services-section/services/bare-cedar-fog-services-section/data/records/machine-deployment-service-records/metroplat"]'
+        default: '["emsenn/cold-red-gate","561-group/bare-cedar-fog:lib/emsenn/services/561-group/services/561-group-services-section/services/561-group-operations-services-section/services/bare-cedar-fog-services-section/data/records/machine-deployment-service-records/metroplat"]'
       controller-ref:
-        description: 'Ref of red-cup-engineering/guix-machine-release-service to test with'
+        description: 'Reviewed immutable 40-character commit of red-cup-engineering/guix-machine-release-service; must provide source-only preparation and the admitted runtime'
         type: string
-        default: main
+        default: 3f91fb79ad03da7deca85cd766109caf0d94ce4e
     secrets:
       house-read-token:
         description: 'HOUSE_READ_TOKEN: a token with contents:read on every repository the machines pin'
@@ -48,6 +48,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
+          ref: 2a6d7aa3ec70902923fb337018a8118e596f337c
           path: section
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
@@ -118,7 +119,16 @@ jobs:
           # Credentials reach git only through this step's environment, never its configuration files.
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOUSE_READ_TOKEN" | base64 -w0)"
-          git clone -q --depth=50 --branch "$CONTROLLER_REF" https://github.com/red-cup-engineering/guix-machine-release-service.git "$HOUSE/controller"
+          if [[ ! "$CONTROLLER_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::controller-ref must name one reviewed immutable 40-character commit"
+            exit 1
+          fi
+          # Fetch only the admitted commit; a branch name cannot silently advance it.
+          git init -q "$HOUSE/controller"
+          git -C "$HOUSE/controller" remote add origin https://github.com/red-cup-engineering/guix-machine-release-service.git
+          git -C "$HOUSE/controller" fetch -q --depth=1 origin "$CONTROLLER_REF"
+          git -C "$HOUSE/controller" checkout -q --detach "$CONTROLLER_REF"
+          test "$(git -C "$HOUSE/controller" rev-parse HEAD)" = "$CONTROLLER_REF"
           # A machine may be a snapshot below its repository's root (owner/repo:path): only that path is checked out.
           repo="${MACHINE%%:*}"; snapshot=""; [ "$MACHINE" != "$repo" ] && snapshot="${MACHINE#*:}"
           if [ -n "$snapshot" ]; then
@@ -138,14 +148,9 @@ jobs:
                        lenticule-science red-cup-engineering red-cup-science rsc-quiescent turntide-islands union-officer-academy; do
             echo "@$scope:registry=https://registry.561.group/" >> "$HOME/.npmrc"
           done
-      - name: Reuse the pinned workspace
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ${{ env.HOUSE }}/work/registry-cache
-            ${{ env.HOUSE }}/work/sources
-          key: change-test-${{ matrix.machine }}-${{ env.MACHINE_COMMIT }}
-          restore-keys: change-test-${{ matrix.machine }}-
+      # Each job prepares fresh sources. Candidate code can write the comparison
+      # directories; those bytes must not return through a cache when credentials
+      # become available in another preparation run.
       - name: Form the sources (holds the read token; runs none of the change's code)
         env:
           HOUSE_READ_TOKEN: ${{ secrets.house-read-token }}
@@ -201,6 +206,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
+          ref: 2a6d7aa3ec70902923fb337018a8118e596f337c
           path: section
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
