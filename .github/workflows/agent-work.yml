@@ -1,0 +1,28 @@
+name: Agent work intake
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  receive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Receive the maintained intake implementation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          ref: eeed441ba1e6b7fb8e5b1783b6d5972ea41cd508
+          sparse-checkout: src/agent-work.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Receive branch and pull metadata
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const {receiveAgentWork}=await import(`${process.env.GITHUB_WORKSPACE}/src/agent-work.mjs`);
+            await receiveAgentWork({github,context,core});

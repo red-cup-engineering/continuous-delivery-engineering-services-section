@@ -98,3 +98,28 @@ jobs:
     uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
     secrets: { house-read-token: "${{ secrets.HOUSE_READ_TOKEN }}" }
 ```
+
+## Agent branch intake
+
+`agent-work.yml` receives same-repository branch pushes into draft pull requests and adds `agent:work`, `agent:blocked` and `agent:received` metadata. Its implementation is pinned to an immutable source commit and both external actions are pinned. It checks out only that maintained implementation; branch code, issue bodies and artifacts are never executed with its write token. The ordinary build/release workflows keep responsibility for source and operating qualification.
+
+Install the caller below on the repository default branch. Existing branch work is reconciled separately because a push workflow is read from the pushed branch. Enable Issues and automatic merged-branch deletion in repository settings. To let `GITHUB_TOKEN` create draft pulls, the repository/org Actions policy must permit Actions to create pulls; without that permission the intake records a blocked issue and fails visibly. Keep default token permission read-only; the metadata job declares only its required issue and pull permissions. An Actions-created pull can require workflow approval; observe the actual checks rather than assuming a draft created by a workflow triggers every build.
+
+```yaml
+name: Agent work
+on:
+  push:
+    branches: ['**']
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+jobs:
+  receive:
+    if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@RECEIVED_COMMIT
+```
+
+Replace `RECEIVED_COMMIT` with the independently read workflow commit. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
