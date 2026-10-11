@@ -24,6 +24,9 @@ Workflows (swap the file name):
   - `machines` reads each candidate machine's `sources.json` (input `machines`, JSON array of `owner/repo` or
     `owner/repo:path` for a snapshot below the root; default Cold Red Gate and Bare Cedar Fog's MetroPlat) and keeps
     those that pin the calling repository (`scripts/pinning-machines.mjs`). Input `machine` names one instead.
+    Discovery fails on unreadable or invalid declarations; it never treats an unknown machine as unpinned.
+    Each selected snapshot is bound to the repository commit read during discovery, and the test checks out that
+    exact commit. Snapshot paths and commits are part of the artifact identity.
   - `change-test`, one leg per machine: the release controller (`red-cup-engineering/guix-machine-release-service`,
     `scripts/test-change.mjs`) composes the machine's admitted workspace with the pull request's commit, installs from
     `https://registry.561.group/`, builds as a release is assembled and fails only on regressions the change
@@ -33,7 +36,12 @@ Workflows (swap the file name):
     (`test-change.mjs --materialize-only`). The builds and tests then run in a step that holds no token and in which
     git may not reach the network (`GIT_ALLOW_PROTOCOL=file`).
   - `report`: one pull-request comment, found by its marker and updated in place on every run, with each machine's
-    verdict, regressions, and design rules added and removed (`scripts/change-test-comment.mjs`).
+    verdict, regressions, and design rules added and removed (`scripts/change-test-comment.mjs`). The report
+    reconciles every expected machine against the tested pull-request head and the controller receipt. Missing,
+    duplicate, malformed, unexpected or wrong-head artifacts cannot produce `no-regression`. Failed discovery
+    produces an unknown-coverage comment, including when no test leg could start. Before writing, the report
+    rechecks the pull request head so an older run cannot replace a newer head's comment. A successful empty discovery
+    says only that none of the configured candidate machines pins the repository.
   Inputs: `machine`, `machines`, `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN`
   with contents:read on every repository the machines pin. The caller is five lines (written by the generator,
   `node generator/generate-ci.mjs --only change-test --pr OWNER/REPO`):

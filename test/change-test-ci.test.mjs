@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { machinesPinning } from '../scripts/pinning-machines.mjs';
+import { machineEntry, machinesPinning } from '../scripts/pinning-machines.mjs';
 import { MARKER, overallVerdict, readResults, renderComment, upsertComment } from '../scripts/change-test-comment.mjs';
 
 const sources = (...repositories) => ({ repositories: repositories.map((repository) => ({ repository, commit: 'a'.repeat(40) })) });
@@ -16,8 +16,8 @@ test('a change is tested against every machine that pins its repository, and onl
   assert.deepEqual(machinesPinning('red-cup-engineering/feltos', readings), ['emsenn/cold-red-gate', 'emsenn/bare-cedar-fog']);
   assert.deepEqual(machinesPinning('Red-Cup-Engineering/Computer-Data-Services-Section', readings), ['emsenn/cold-red-gate']);
   assert.deepEqual(machinesPinning('red-cup-engineering/unpinned', readings), []);
-  // A machine whose sources.json is unreadable is not guessed to pin anything.
-  assert.deepEqual(machinesPinning('red-cup-engineering/feltos', { broken: null, odd: { repositories: 'x' } }), []);
+  // Unreadable machines make discovery unknown, rather than silently shrinking its coverage.
+  assert.throws(() => machinesPinning('red-cup-engineering/feltos', { 'm/broken': null }), /unread/);
 });
 
 const leg = (machine, verdict) => ({ machine, machineCommit: 'b'.repeat(40), commit: 'c'.repeat(40), verdict, logTail: 'tail' });
@@ -39,19 +39,23 @@ test('the one comment reports every machine, its worst verdict first, and the de
   assert.match(body, /Design rules removed \(1\): `drc-2:@x\/b`/);
   // A leg with no verdict shows its log instead of passing silently.
   assert.match(renderComment([leg('m/one', null)]), /produced no verdict[\s\S]*tail/);
-  assert.match(renderComment([], { none: 'o/r' }), /No machine pins `o\/r`/);
+  assert.match(renderComment([], { none: 'o/r', expected: [], discovery: 'success' }), /No candidate machine pins `o\/r`/);
 });
 
 test('the results directory is read leg by leg; a leg with an empty verdict reads as none', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'change-test-results-'));
   try {
-    for (const [name, verdict] of [['one', '{"verdict":"no-regression"}'], ['two', '']]) {
+    const expected = ['one', 'two'].map((name) => machineEntry(`m/${name}`, 'b'.repeat(40)));
+    const commit = 'c'.repeat(40);
+    const clean = JSON.stringify({ kind: 'change-test', snapshot: 'b'.repeat(40), changes: [{ repository: 'o/r', commit }],
+      verdict: 'no-regression', regressions: 0, lock: 'frozen', packages: [], designRules: { added: [], removed: [] } });
+    for (const [name, verdict] of [['one', clean], ['two', '']]) {
       fs.mkdirSync(path.join(root, name));
-      fs.writeFileSync(path.join(root, name, 'meta.json'), JSON.stringify({ machine: `m/${name}`, machineCommit: 'b', commit: 'c' }));
+      fs.writeFileSync(path.join(root, name, 'meta.json'), JSON.stringify({ ...expected.find((entry) => entry.machine === `m/${name}`), commit, status: 0 }));
       fs.writeFileSync(path.join(root, name, 'verdict.json'), verdict);
       fs.writeFileSync(path.join(root, name, 'log-tail.txt'), `log of ${name}`);
     }
-    const results = readResults(root);
+    const results = readResults(root, { expected, commit, repository: 'o/r', discovery: 'success' });
     assert.deepEqual(results.map((r) => [r.machine, r.verdict?.verdict ?? null, r.logTail]), [['m/one', 'no-regression', 'log of one'], ['m/two', null, 'log of two']]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

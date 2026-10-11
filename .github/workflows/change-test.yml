@@ -61,26 +61,31 @@ jobs:
           MACHINE: ${{ inputs.machine }}
           MACHINES: ${{ inputs.machines }}
         run: |
-          if [ -n "$MACHINE" ]; then
-            echo "machines=$(node -e 'console.log(JSON.stringify([process.argv[1]]))' "$MACHINE")" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # Validate the entire candidate list before any read. An unread source aborts discovery.
+          node section/scripts/pinning-machines.mjs --candidates "$MACHINE" "$MACHINES" > "$RUNNER_TEMP/candidates.txt"
           pairs=()
-          for machine in $(node -e 'for (const m of JSON.parse(process.argv[1])) console.log(m)' "$MACHINES"); do
+          while IFS= read -r machine; do
             repo="${machine%%:*}"; snapshot=""; [ "$machine" != "$repo" ] && snapshot="${machine#*:}/"
-            file="$RUNNER_TEMP/$(echo "$machine" | tr '/:' '__').sources.json"
-            # The token goes to this one request as a header; nothing writes it to configuration.
-            curl -fsS -H "Authorization: Bearer $HOUSE_READ_TOKEN" -H 'Accept: application/vnd.github.raw' \
-              "https://api.github.com/repos/$repo/contents/${snapshot}sources.json" -o "$file" || : > "$file"
-            pairs+=("$machine=$file")
-          done
-          machines=$(node section/scripts/pinning-machines.mjs "${{ github.repository }}" "${pairs[@]}")
+            file="$RUNNER_TEMP/machine-${#pairs[@]}.sources.json"
+            # Resolve once, then read and test that exact snapshot even if its default branch moves.
+            # The token goes only to these request headers; nothing writes it to configuration.
+            curl -fsS -H "Authorization: Bearer $HOUSE_READ_TOKEN" -H 'Accept: application/vnd.github+json' \
+              "https://api.github.com/repos/$repo/commits/HEAD" -o "$file.commit"
+            commit=$(node section/scripts/pinning-machines.mjs --commit "$file.commit")
+            if [ -z "$MACHINE" ]; then
+              curl -fsS -H "Authorization: Bearer $HOUSE_READ_TOKEN" -H 'Accept: application/vnd.github.raw' \
+                "https://api.github.com/repos/$repo/contents/${snapshot}sources.json?ref=$commit" -o "$file"
+            fi
+            pairs+=("$machine@$commit=$file")
+          done < "$RUNNER_TEMP/candidates.txt"
+          mode=--plan; [ -z "$MACHINE" ] || mode=--forced-plan
+          machines=$(node section/scripts/pinning-machines.mjs "$mode" "${{ github.repository }}" "${pairs[@]}")
           echo "Machines pinning ${{ github.repository }}: $machines"
           echo "machines=$machines" >> "$GITHUB_OUTPUT"
 
   change-test:
     needs: machines
-    if: needs.machines.outputs.machines != '[]'
+    if: needs.machines.result == 'success' && needs.machines.outputs.machines != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -88,10 +93,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        machine: ${{ fromJSON(needs.machines.outputs.machines) }}
+        include: ${{ fromJSON(needs.machines.outputs.machines) }}
     env:
       HOUSE: ${{ github.workspace }}/.house
       MACHINE: ${{ matrix.machine }}
+      MACHINE_COMMIT: ${{ matrix.machineCommit }}
+      MACHINE_SLUG: ${{ matrix.id }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -116,14 +123,17 @@ jobs:
           repo="${MACHINE%%:*}"; snapshot=""; [ "$MACHINE" != "$repo" ] && snapshot="${MACHINE#*:}"
           if [ -n "$snapshot" ]; then
             git clone -q --depth=1 --filter=blob:none --sparse "https://github.com/$repo.git" "$HOUSE/machine-repository"
+            git -C "$HOUSE/machine-repository" fetch -q --depth=1 origin "$MACHINE_COMMIT"
+            git -C "$HOUSE/machine-repository" checkout -q --detach "$MACHINE_COMMIT"
             git -C "$HOUSE/machine-repository" sparse-checkout set "$snapshot"
             echo "SNAPSHOT=$HOUSE/machine-repository/$snapshot" >> "$GITHUB_ENV"
           else
             git clone -q --depth=1 "https://github.com/$repo.git" "$HOUSE/machine-repository"
+            git -C "$HOUSE/machine-repository" fetch -q --depth=1 origin "$MACHINE_COMMIT"
+            git -C "$HOUSE/machine-repository" checkout -q --detach "$MACHINE_COMMIT"
             echo "SNAPSHOT=$HOUSE/machine-repository" >> "$GITHUB_ENV"
           fi
-          echo "MACHINE_COMMIT=$(git -C "$HOUSE/machine-repository" rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "MACHINE_SLUG=$(echo "$repo" | tr '/' '_')" >> "$GITHUB_ENV"
+          test "$(git -C "$HOUSE/machine-repository" rev-parse HEAD)" = "$MACHINE_COMMIT"
           for scope in 561-group causeway-services coesite-operations emsenn emsweb harmonious-union koios-news \
                        lenticule-science red-cup-engineering red-cup-science rsc-quiescent turntide-islands union-officer-academy; do
             echo "@$scope:registry=https://registry.561.group/" >> "$HOME/.npmrc"
@@ -155,6 +165,7 @@ jobs:
           GIT_ALLOW_PROTOCOL=file node "$HOUSE/controller/scripts/test-change.mjs" "$SNAPSHOT" "$HOUSE/work" \
             "${{ github.repository }}=$GITHUB_WORKSPACE/change" > verdict.json 2> test-change.log
           status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
           tail -c 4000 test-change.log
           verdict=$(node -e 'try{console.log(JSON.parse(require("fs").readFileSync("verdict.json","utf8")).verdict)}catch{console.log("not-run")}')
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
@@ -167,20 +178,20 @@ jobs:
         if: always()
         run: |
           mkdir -p "result/$MACHINE_SLUG"
-          node -e 'require("fs").writeFileSync(process.argv[1],JSON.stringify({machine:process.env.MACHINE,machineCommit:process.env.MACHINE_COMMIT,commit:process.argv[2]}))' \
-            "result/$MACHINE_SLUG/meta.json" "$(git -C change rev-parse HEAD)"
+          node -e 'require("fs").writeFileSync(process.argv[1],JSON.stringify({machine:process.env.MACHINE,machineCommit:process.env.MACHINE_COMMIT,id:process.env.MACHINE_SLUG,commit:process.argv[2],status:process.argv[3]===""?null:Number(process.argv[3])}))' \
+            "result/$MACHINE_SLUG/meta.json" "$(git -C change rev-parse HEAD)" "${{ steps.test.outputs.status }}"
           cp verdict.json "result/$MACHINE_SLUG/verdict.json" 2>/dev/null || : > "result/$MACHINE_SLUG/verdict.json"
           cat materialize.log test-change.log 2>/dev/null | tail -c 3000 > "result/$MACHINE_SLUG/log-tail.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: change-test-${{ env.MACHINE_SLUG }}
-          path: result/
+          path: result/${{ env.MACHINE_SLUG }}/
           retention-days: 7
 
   report:
     needs: [machines, change-test]
-    if: always() && github.event_name == 'pull_request' && needs.machines.result == 'success'
+    if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -197,16 +208,22 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: needs.machines.outputs.machines != '[]'
+        if: needs.machines.result == 'success' && needs.machines.outputs.machines != '[]'
         with:
           pattern: change-test-*
           path: results
-          merge-multiple: true
+          merge-multiple: false
       - name: One comment, updated in place
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-          NONE: ${{ needs.machines.outputs.machines == '[]' && github.repository || '' }}
+          EXPECTED_MACHINES: ${{ needs.machines.outputs.machines }}
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          DISCOVERY: ${{ needs.machines.result }}
         run: |
-          node section/scripts/change-test-comment.mjs results --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}" \
-            ${NONE:+--none "$NONE"}
-          node section/scripts/change-test-comment.mjs results ${NONE:+--none "$NONE"} >> "$GITHUB_STEP_SUMMARY"
+          args=(results --expected "$EXPECTED_MACHINES" --commit "$EXPECTED_COMMIT" --discovery "$DISCOVERY"
+                --repository "${{ github.repository }}" --none "${{ github.repository }}")
+          status=0
+          node section/scripts/change-test-comment.mjs "${args[@]}" --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}" || status=$?
+          node section/scripts/change-test-comment.mjs "${args[@]}" >> "$GITHUB_STEP_SUMMARY" || status=$?
+          exit "$status"
