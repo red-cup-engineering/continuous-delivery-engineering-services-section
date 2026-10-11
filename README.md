@@ -119,7 +119,7 @@ permissions:
 jobs:
   receive:
     if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@RECEIVED_COMMIT
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@9941b91847d4c5e7947fb044faeb4e77476dc17d
 ```
 
-Replace `RECEIVED_COMMIT` with the independently read workflow commit. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
+The example binds the received workflow commit `9941b91847d4c5e7947fb044faeb4e77476dc17d`. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
