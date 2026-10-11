@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
+      contents: read
       issues: write
       pull-requests: write
     steps:
@@ -16,10 +16,8 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
-          ref: 86abda831179f001ce2e17a893375e7d1885a9ef
-          sparse-checkout: |
-            src/agent-work.mjs
-            src/preserve-merged-head.mjs
+          ref: eeed441ba1e6b7fb8e5b1783b6d5972ea41cd508
+          sparse-checkout: src/agent-work.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Receive branch and pull metadata
