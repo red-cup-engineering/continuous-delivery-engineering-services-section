@@ -1,0 +1,22 @@
+{
+  "kind": "github-merged-source-custody-contract",
+  "purpose": "Preserve exact merged source revisions while GitHub applies its configured head-branch deletion.",
+  "inputs": "Current same-repository merged PR, matching original merged-event head, actual merge identity and time, current stable repository id, repository-scoped Actions token.",
+  "effects": [
+    "Create refs/archive/<provider-merge-date>/<original-branch> only at the exact received PR head.",
+    "Read back the remote ref independently and retain the custody receipt on that merged PR.",
+    "Retain archive collisions and provider failures as visible blocked custody receiving."
+  ],
+  "prohibitions": [
+    "No candidate checkout, code, package script, issue prose or artifact execution.",
+    "No branch deletion, rewrite of existing archive identity, personal credential, cross-repository credential or secret inheritance.",
+    "No source merge, authority grant, deployment or customer-acceptance claim."
+  ],
+  "design": {
+    "source": "Native pull refs provide independently checked original source identity, including squashed or already deleted heads.",
+    "planning": "Existing metadata intake admits the merged event and checks repository identity before the archive effect.",
+    "execution": "Fixed native Git commands, argument arrays, fresh bare object store, per-process repository token, exact empty-archive lease and independent readback.",
+    "receiving": "Provider PR comment and workflow summary retain the exact archive, source and branch observations."
+  },
+  "validation": "Source and YAML parsing plus genuine hosted merged-PR archival required; no test suite as acceptance."
+}
