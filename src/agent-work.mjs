@@ -48,9 +48,15 @@ export async function receiveAgentWork({github, context, core}) {
   }catch(error){
     // Missing PR-creation permission is visible, and work remains in a durable issue.
     if(![403,422].includes(error.status))throw error;
-    const issues=await github.paginate(github.rest.issues.listForRepo,{owner,repo,state:'open',labels:'agent:work',per_page:100});
-    const prior=issues.find(i=>!i.pull_request&&i.body?.includes(marker));
-    if(!prior)await github.rest.issues.create({owner,repo,title,body:body+`\n\nDraft pull creation returned GitHub HTTP ${error.status}; the branch remains intact.`,labels:['agent:work','agent:blocked']});
-    core.setFailed(`GitHub refused draft pull creation (${error.status}); pending work was received into an issue.`);
+    if(error.status===422) {
+      // Another push receiver may already have opened the same draft pull.
+      const raced=await github.paginate(github.rest.pulls.list,{owner,repo,state:'open',head:`${owner}:${branch}`,per_page:100});
+      if(raced.length){await label(raced[0].number,'agent:work');core.info(`Branch ${branch} already has pull #${raced[0].number}; no duplicate created.`);return;}
+    }
+    // The original branch is itself durable. A blocked PR must not spawn a
+    // second, unowned issue that a scheduled agent cannot later clean up.
+    core.summary.addRaw(`Draft pull request unavailable (GitHub HTTP ${error.status}); branch \`${branch}\` remains preserved. No fallback issue created.\\n`);
+    await core.summary.write();
+    core.setFailed(`Draft pull request unavailable (${error.status}); retained branch ${branch}, no duplicate issue created.`);
   }
 }
