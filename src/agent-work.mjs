@@ -1,3 +1,4 @@
+import {preserveMergedHead} from './preserve-merged-head.mjs';
 // GitHub event receiving. No branch code, issue prose, or artifact is executed.
 const persistent = /^(?:release\/|claim\/|rescue\/|emergency-snapshot|gh-pages$|automation-state$)/;
 const sha = /^[a-f0-9]{40}$/;
@@ -19,6 +20,10 @@ export async function receiveAgentWork({github, context, core}) {
     if(pr.head.repo?.id!==repository.id)return;
     await label(pr.number,pr.merged?'agent:received':'agent:work');
     if(pr.merged) {try{await github.rest.issues.removeLabel({owner,repo,issue_number:pr.number,name:'agent:blocked'});}catch(e){if(e.status!==404)throw e;}}
+    if(pr.merged) {
+      try {await preserveMergedHead({github,context,core,repository,pr});}
+      catch(error) {await label(pr.number,'agent:blocked');core.setFailed(`Merged source archive receiving failed: ${error.message}`);}
+    }
     core.summary.addHeading('Agent source receiving').addTable([
       [{data:'Pull',header:true},{data:'Exact head',header:true},{data:'State',header:true}],
       [`#${pr.number}`,pr.head.sha,pr.merged?'merged':pr.state]

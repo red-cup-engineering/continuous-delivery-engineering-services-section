@@ -103,7 +103,7 @@ jobs:
 
 `agent-work.yml` receives same-repository branch pushes into draft pull requests and adds `agent:work`, `agent:blocked` and `agent:received` metadata. Its implementation is pinned to an immutable source commit and both external actions are pinned. It checks out only that maintained implementation; branch code, issue bodies and artifacts are never executed with its write token. The ordinary build/release workflows keep responsibility for source and operating qualification.
 
-Install the caller below on the repository default branch. Existing branch work is reconciled separately because a push workflow is read from the pushed branch. Enable Issues and automatic merged-branch deletion in repository settings. To let `GITHUB_TOKEN` create draft pulls, the repository/org Actions policy must permit Actions to create pulls; without that permission the intake records a blocked issue and fails visibly. Keep default token permission read-only; the metadata job declares only its required issue and pull permissions. An Actions-created pull can require workflow approval; observe the actual checks rather than assuming a draft created by a workflow triggers every build.
+Install the caller below on the repository default branch. Existing branch work is reconciled separately because a push workflow is read from the pushed branch. Enable Issues and automatic merged-branch deletion in repository settings. To let `GITHUB_TOKEN` create draft pulls, the repository/org Actions policy must permit Actions to create pulls; without that permission the intake records a blocked issue and fails visibly. Keep default token permission read-only. The caller’s receive job declares contents, issue and pull write permissions: contents write is required only to preserve merged source tips under exact archive refs. The receiver does not delete or rewrite branches. An Actions-created pull can require workflow approval; observe the actual checks rather than assuming a draft created by a workflow triggers every build.
 
 ```yaml
 name: Agent work
@@ -118,8 +118,14 @@ permissions:
   pull-requests: write
 jobs:
   receive:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@9941b91847d4c5e7947fb044faeb4e77476dc17d
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@38e1e6ac3d5094049dfc769d83f093f6f33b21a8
 ```
 
-The example binds the received workflow commit `9941b91847d4c5e7947fb044faeb4e77476dc17d`. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
+The example binds the received workflow commit `38e1e6ac3d5094049dfc769d83f093f6f33b21a8`. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
+
+Merged same-repository PR events also preserve the independently checked original pull head at `refs/archive/<merge-date>/<head-branch>`. The retained PR comment binds repository id, source and merge commits, archive readback and current branch observation. Existing archive collisions remain visible failures. GitHub owns the configured head-branch deletion; the archival receiver creates only the archive ref and executes no candidate code. Restore source with `git fetch origin refs/archive/<merge-date>/<head-branch>` and a new branch from `FETCH_HEAD`.
