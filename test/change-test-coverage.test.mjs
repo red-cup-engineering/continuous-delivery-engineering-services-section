@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { machinesPinning } from '../scripts/pinning-machines.mjs';
+import { isCommit, machineName, machinesPinning } from '../scripts/pinning-machines.mjs';
 import { overallVerdict, readResults, renderComment, upsertComment } from '../scripts/change-test-comment.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -253,5 +253,27 @@ test('an older run cannot overwrite a comment for a newer pull-request head', as
     if (current === commit) { assert.equal(await result, 'published'); assert.equal(writes.length, 1); }
     else { await assert.rejects(result, /head changed/); assert.equal(writes.length, 0); }
     assert.equal(reads.at(-1), `/repos/${repository}/pulls/1`);
+  }
+});
+
+
+test('immutable commits and machine identities require the entire input, without line terminators', (t) => {
+  assert.equal(isCommit(commit), true);
+  for (const invalid of [null, 40, '', 'a'.repeat(39), 'a'.repeat(41), 'g'.repeat(40)]) assert.equal(isCommit(invalid), false);
+  assert.equal(machineName('O/Machine:Snapshot-a/nested'), 'o/machine:Snapshot-a/nested');
+  const file = path.join(temp(t), 'commit.json');
+  for (const suffix of ['\n', '\r', '\r\n', '\u2028', '\u2029', ' ', '\t']) {
+    assert.equal(isCommit(commit + suffix), false, JSON.stringify(suffix));
+    fs.writeFileSync(file, JSON.stringify({ sha: commit + suffix }));
+    const resolved = cli('--commit', file);
+    assert.notEqual(resolved.status, 0); assert.equal(resolved.stdout, '');
+    for (const machine of [`o/machine${suffix}`, `o/machine:snapshot-a${suffix}`, `o/machine:path${suffix}/child`]) {
+      assert.throws(() => machineName(machine), /invalid machine/);
+      const candidates = cli('--candidates', '', JSON.stringify([machine]));
+      assert.notEqual(candidates.status, 0); assert.equal(candidates.stdout, '');
+      assert.throws(() => machinesPinning(repository, { [machine]: sources() }), /invalid machine/);
+    }
+    assert.throws(() => machinesPinning(repository + suffix, { 'o/machine': sources() }), /invalid repository/);
+    assert.throws(() => machinesPinning(repository, { 'o/machine': sources(repository + suffix) }), /invalid source/);
   }
 });
