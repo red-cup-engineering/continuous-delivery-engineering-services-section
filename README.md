@@ -17,45 +17,15 @@ Workflows (swap the file name):
 
 - `node-package.yml` - every package.json: `npm ci`, `check`, `test` on Node 24. Inputs: `paths` (JSON array), `concurrency`.
 - `lean.yml` - lake build. Input: `working-directory`.
-- `submodule-advance.yml` - one PR bumping moved submodule heads (`scripts/advance.mjs`). Secret: `token` (needs `secrets: inherit` or `secrets: {token: ...}`). Schedule it with `on: schedule`. It advances a pin only where the remote head descends from the pin, lists diverged pins in the PR body instead of advancing them, writes its body to `.git/advance-body.md` (nothing outside the workspace), receives the existing sync branch and default history before reading pins, and publishes only by fast-forward. Missing heads and unknown ancestry remain unresolved in the PR body and fail sync receiving visibly; any qualified partial pin proposal is still opened. Git authorization is URL-scoped and subprocess credentials travel in environment or stdin, never command arguments. Inputs: `branch`, `note`.
+- `submodule-advance.yml` - one PR bumping moved submodule heads (`scripts/advance.mjs`). Secret: `token` (needs `secrets: inherit` or `secrets: {token: ...}`). Schedule it with `on: schedule`. It advances a pin only where the remote head descends from the pin, lists diverged pins in the PR body instead of advancing them, writes its body to `.git/advance-body.md` (nothing outside the workspace), receives the existing sync branch and default history before reading pins, and publishes only by fast-forward. Missing heads and unknown ancestry are listed separately from proven divergent histories in the PR body and fail sync receiving visibly; any qualified partial pin proposal is still opened. Inherited checkout extraheaders are cleared before selecting one authority. Git authorization is URL-scoped and subprocess credentials travel in environment or stdin, never command arguments. Inputs: `branch`, `note`.
 - `notify-parent.yml` - section side of the upward chain: on push to `main`, sends `repository_dispatch` (`section-advanced`) to the parent. Input: `parent` (owner/repo). Secret: `token`, a PAT that may dispatch on the parent.
 - `superrepo-advance.yml` - parent side: `submodule-advance` with the dispatching section named in the PR. Call it on `repository_dispatch` and a daily `schedule`. Input: `source`.
-- `change-test.yml` - the pre-merge change test (STD-CI), run against **every machine that pins this repository**:
-  - `machines` reads each candidate machine's committed recursive Gitlink source graph (input `machines`, JSON array of `owner/repo` or
-    `owner/repo:path` for a snapshot below the root; default Cold Red Gate and Bare Cedar Fog's MetroPlat) and keeps
-    those that pin the calling repository (`scripts/pinning-machines.mjs`). Input `machine` names one instead.
-    Discovery fails on unreadable or invalid declarations; it never treats an unknown machine as unpinned.
-    Each selected snapshot is bound to the repository commit read during discovery, and the test checks out that
-    exact commit. Snapshot paths and commits are part of the artifact identity.
-  - `change-test`, one leg per machine: the release controller (`red-cup-engineering/guix-machine-release-service`,
-    `scripts/test-change.mjs`) is consumed through the bounded hosted helper described below. Actual execution
-    requires the owner's qualified image, installed Guix/toolchain and offline frozen dependency supply.
-    Missing runtime admission refuses; a source-only receipt does not qualify the machine.
-  - Credentialed preparation invokes only the pinned helper's reviewed source controller. Checkouts use
-    `persist-credentials: false`; Git receives a URL-scoped read header only in preparation's environment.
-    `materialize-sources.mjs --export-change` carries inert committed objects. Candidate execution, when a real
-    runtime is admitted, uses the restricted non-root container described below, with no preparation-host credentials.
-  - `report`: one pull-request comment, found by its marker and updated in place on every run, with each machine's
-    verdict, regressions, and design rules added and removed (`scripts/change-test-comment.mjs`). The report
-    reconciles every expected machine against the tested pull-request head and the controller receipt. Missing,
-    duplicate, malformed, unexpected or wrong-head artifacts cannot produce `no-regression`. Failed discovery
-    produces an unknown-coverage comment, including when no test leg could start. Before writing, the report
-    rechecks the pull request head so an older run cannot replace a newer head's comment. A successful empty discovery
-    says only that none of the configured candidate machines pins the repository.
-  Inputs: `machine`, `machines`, `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN`
-  with existing authorized contents:read on every repository the machines pin. The generator pins the source
-  supplier and maps only this named secret; `--house-read-token-secret` selects an existing binding. The example
-  below names this review's workflow revision and remains a proposal until receiving requirements are met:
-
-  ```yaml
-  name: change-test
-  on: pull_request
-  jobs:
-    change-test:
-      uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@a819b55e1d4024d177d16706f0ca0e6190354fbe
-      secrets:
-        house-read-token: ${{ secrets.HOUSE_READ_TOKEN }}
-  ```
+- `change-test.yml` - the pre-merge change test: the release controller
+  (`red-cup-engineering/guix-machine-release-service`, `scripts/test-change.mjs`) composes the machine's admitted
+  workspace with the pull request's commit, installs from `https://registry.561.group/`, builds as a release is
+  assembled and fails only on regressions the change introduces. Inputs: `machine` (required: the repository holding the
+  machine definition that mounts this repository by gitlink), `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN` with contents:read on every
+  repository the machine pins.
 - `lockfile-fresh.yml` - the pnpm lock is fresh: every workspace package has an importer whose specifiers are
   exactly its declared dependencies (overrides applied), and every `workspace:*` dependency names a workspace
   package. A ratchet: the pull request's base is read too, and only mismatches the change adds fail
@@ -121,66 +91,19 @@ A house package is made, tested, received and released along one path:
 3. **Receive:** the machine's own release workflow advances to the merged commit with the controller's
    `advance-reviewed-sources.mjs`, then builds, seals, probes and receives it.
 
-`change-test.yml` proposes a hosted adapter for the same controller. It still needs the actual runtime,
-machine formation and existing authorized source-reader binding described below; the machine's existing
-receiving path remains the default:
+`change-test.yml` is the same change test for a GitHub-hosted runner. It needs a `HOUSE_READ_TOKEN` secret
+with contents:read on every pinned repository, so the machine's runner is the default path:
 
 ```yaml
 name: change-test
 on: pull_request
 jobs:
   change-test:
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@a819b55e1d4024d177d16706f0ca0e6190354fbe
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
+    with: { machine: OWNER/MACHINE-REPOSITORY }
     secrets: { house-read-token: "${{ secrets.HOUSE_READ_TOKEN }}" }
 ```
 
-### Source-only hosted change receiving
-
-The change-test workflow reads the reviewed controller's recursive committed
-Gitlinks, rather than legacy `sources.json` pins. Its preparation step calls
-`materialize-sources.mjs --export-change`: a complete, independent Git source
-carrier and inventory, with the preparation digest retained outside the carrier.
-The controller refuses machine-definition or mounted-topology changes that need
-separate head/base graph receiving. Publication-purpose raw sources remain on
-their existing bounded publication route.
-
-`hosted-change.mjs` consumes that carrier through the controller's actual
-`prepareExportedComparison` and `test-change.mjs` interfaces. Only the trusted
-helper runs on the acquisition host. The candidate process is a non-root Docker
-container with read-only controller/helper/carrier inputs, fresh writable result
-state, no network, no capabilities, no Docker socket or credential-bearing host
-mounts, and explicit PID, memory, CPU and time bounds. Controller local Git config
-is allowlisted before mounting; host credential environment is never forwarded.
-A returned verdict must match the prepared machine and changed commit identities.
-Candidate processes can write their comparison results; this is not independent
-adversarial test-result integrity or a SLSA claim.
-
-No runtime image is admitted by this change. The existing delivery owner must
-review a `scripts/runtime-bindings/<controller-commit>.json` binding with kind
-`guix.hosted-runtime.v1`, matching `controllerCommit`, source contract
-`guix.change-source-carriers.v1`, an immutable owner image digest, a retained
-`qualificationSha256`, and positive `uid`/`gid` matching the runner. The image must
-already be present: the helper never pulls one. Qualification must establish the
-controller's actual pinned Guix/channel/toolchain, offline frozen dependency
-supply, and container execution with the real machine closure. Merely filling in
-these fields is not qualification. Without that reviewed provider, the workflow
-refuses before container execution. This source proposal does not add credentials,
-image grants, runner capacity, deployment targets or runtime acceptance.
-
-The controller's 512 MiB/100,000-file carrier limits bound accepted output after
-acquisition; they are not a peak-disk or network acquisition quota. Source bytes
-plus a separately retained digest are source custody evidence, not build
-provenance or installed receiving. The current machine repositories still require
-their owner-reviewed migration to the recursive formation contract before this
-new controller can receive them. Preparation and container execution currently
-share a hosted runner; splitting acquisition and test jobs requires authenticated
-artifact transport preserving file modes and independently bound digests.
-
-Source preparation is separately allowlisted by immutable controller revision in
-`scripts/reviewed-source-controllers.json` before any controller code receives the
-source-reader environment. Current source-only supplier is Guix PR107 at
-`1d6f1ae842424fec43be9a892c8d5fc4296174d7` (47 source-level checks independently replayed).
-This admission does not admit a runtime image or establish machine receiving.
 ## Agent branch intake
 
 `agent-work.yml` receives same-repository branch pushes into draft pull requests and adds `agent:work`, `agent:blocked` and `agent:received` metadata. Its implementation is pinned to an immutable source commit and both external actions are pinned. It checks out only that maintained implementation; branch code, issue bodies and artifacts are never executed with its write token. The ordinary build/release workflows keep responsibility for source and operating qualification.

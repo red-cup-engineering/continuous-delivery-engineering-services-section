@@ -19,11 +19,11 @@ on:
       machines:
         description: 'JSON array of machines (owner/repo, or owner/repo:path) whose committed recursive Gitlinks are read for pins of this repository'
         type: string
-        default: '["561-group/cold-red-gate","561-group/bare-cedar-fog:lib/emsenn/services/561-group/services/561-group-services-section/services/561-group-operations-services-section/services/bare-cedar-fog-services-section/data/records/machine-deployment-service-records/metroplat"]'
+        default: '[]'
       controller-ref:
-        description: 'Reviewed immutable 40-character commit of red-cup-engineering/guix-machine-release-service; must provide source-only preparation and the admitted runtime'
+        description: 'Reviewed immutable 40-character commit of red-cup-engineering/guix-machine-release-service; must provide complete v2 source preparation; execution remains held without a separately qualified runtime'
         type: string
-        default: 1d6f1ae842424fec43be9a892c8d5fc4296174d7
+        default: 1456c04103a8011f2d751e0a0a10c347a08c7829
     secrets:
       house-read-token:
         description: 'HOUSE_READ_TOKEN: a token with contents:read on every repository the machines pin'
@@ -64,12 +64,14 @@ jobs:
           CONTROLLER_REF: ${{ inputs.controller-ref }}
         run: |
           node section/scripts/hosted-change.mjs --admit-source-controller "$CONTROLLER_REF"
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOUSE_READ_TOKEN" | base64 -w0)"
           git init -q "$RUNNER_TEMP/discovery-controller"
           git -C "$RUNNER_TEMP/discovery-controller" remote add origin https://github.com/red-cup-engineering/guix-machine-release-service.git
           git -C "$RUNNER_TEMP/discovery-controller" fetch -q --depth=1 origin "$CONTROLLER_REF"
           git -C "$RUNNER_TEMP/discovery-controller" -c core.hooksPath=/dev/null checkout -q --detach "$CONTROLLER_REF"
+          node section/scripts/hosted-change.mjs --verify-controller "$RUNNER_TEMP/discovery-controller" "$CONTROLLER_REF"
           # Validate the entire candidate list before any read. An unread source aborts discovery.
           node section/scripts/pinning-machines.mjs --candidates "$MACHINE" "$MACHINES" > "$RUNNER_TEMP/candidates.txt"
           pairs=()
@@ -85,8 +87,7 @@ jobs:
               checkout="$RUNNER_TEMP/discovery-machine-${#pairs[@]}"
               git init -q "$checkout"
               git -C "$checkout" remote add origin "https://github.com/$repo.git"
-              git -C "$checkout" fetch -q --depth=1 --filter=blob:none origin "$commit"
-              [ -z "$snapshot" ] || git -C "$checkout" sparse-checkout set --cone "${snapshot%/}"
+              git -C "$checkout" fetch -q --depth=1 origin "$commit"
               git -C "$checkout" -c core.hooksPath=/dev/null checkout -q --detach "$commit"
               node "$RUNNER_TEMP/discovery-controller/scripts/materialize-sources.mjs" \
                 "$checkout/$snapshot" "$RUNNER_TEMP/discovery-sources-${#pairs[@]}" > "$file"
@@ -137,6 +138,7 @@ jobs:
           CONTROLLER_REF: ${{ inputs.controller-ref }}
         run: |
           # Credentials reach git only through this step's environment, never its configuration files.
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOUSE_READ_TOKEN" | base64 -w0)"
           if [[ ! "$CONTROLLER_REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -148,22 +150,16 @@ jobs:
           git init -q "$HOUSE/controller"
           git -C "$HOUSE/controller" remote add origin https://github.com/red-cup-engineering/guix-machine-release-service.git
           git -C "$HOUSE/controller" fetch -q --depth=1 origin "$CONTROLLER_REF"
-          git -C "$HOUSE/controller" checkout -q --detach "$CONTROLLER_REF"
+          git -C "$HOUSE/controller" -c core.hooksPath=/dev/null checkout -q --detach "$CONTROLLER_REF"
           test "$(git -C "$HOUSE/controller" rev-parse HEAD)" = "$CONTROLLER_REF"
-          # A machine may be a snapshot below its repository's root (owner/repo:path): only that path is checked out.
+          node section/scripts/hosted-change.mjs --verify-controller "$HOUSE/controller" "$CONTROLLER_REF"
+          # Retain the entire authenticated repository root; select a nested definition separately.
           repo="${MACHINE%%:*}"; snapshot=""; [ "$MACHINE" != "$repo" ] && snapshot="${MACHINE#*:}"
-          if [ -n "$snapshot" ]; then
-            git clone -q --depth=1 --filter=blob:none --sparse "https://github.com/$repo.git" "$HOUSE/machine-repository"
-            git -C "$HOUSE/machine-repository" fetch -q --depth=1 origin "$MACHINE_COMMIT"
-            git -C "$HOUSE/machine-repository" checkout -q --detach "$MACHINE_COMMIT"
-            git -C "$HOUSE/machine-repository" sparse-checkout set "$snapshot"
-            echo "SNAPSHOT=$HOUSE/machine-repository/$snapshot" >> "$GITHUB_ENV"
-          else
-            git clone -q --depth=1 "https://github.com/$repo.git" "$HOUSE/machine-repository"
-            git -C "$HOUSE/machine-repository" fetch -q --depth=1 origin "$MACHINE_COMMIT"
-            git -C "$HOUSE/machine-repository" checkout -q --detach "$MACHINE_COMMIT"
-            echo "SNAPSHOT=$HOUSE/machine-repository" >> "$GITHUB_ENV"
-          fi
+          git init -q "$HOUSE/machine-repository"
+          git -C "$HOUSE/machine-repository" remote add origin "https://github.com/$repo.git"
+          git -C "$HOUSE/machine-repository" fetch -q --depth=1 origin "$MACHINE_COMMIT"
+          git -C "$HOUSE/machine-repository" -c core.hooksPath=/dev/null checkout -q --detach "$MACHINE_COMMIT"
+          echo "SNAPSHOT=$HOUSE/machine-repository${snapshot:+/$snapshot}" >> "$GITHUB_ENV"
           test "$(git -C "$HOUSE/machine-repository" rev-parse HEAD)" = "$MACHINE_COMMIT"
       # Each job prepares fresh sources. Candidate code can write the comparison
       # directories; those bytes must not return through a cache when credentials
@@ -171,13 +167,31 @@ jobs:
       - name: Form the sources (holds the read token; runs none of the change's code)
         env:
           HOUSE_READ_TOKEN: ${{ secrets.house-read-token }}
+          CONTROLLER_REF: ${{ inputs.controller-ref }}
+          CHANGE_REPOSITORY: ${{ github.repository }}
+          CHANGE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOUSE_READ_TOKEN" | base64 -w0)"
+          repo="${MACHINE%%:*}"; definition=""; [ "$MACHINE" != "$repo" ] && definition="${MACHINE#*:}"
+          if [ "$CHANGE_REPOSITORY" = "$repo" ]; then
+            change_args=("--candidate-snapshot=$GITHUB_WORKSPACE/change${definition:+/$definition}")
+          else
+            change_args=("$CHANGE_REPOSITORY=$GITHUB_WORKSPACE/change")
+          fi
           node "$HOUSE/controller/scripts/materialize-sources.mjs" --export-change "$SNAPSHOT" "$HOUSE/carriers" \
-            "${{ github.repository }}=$GITHUB_WORKSPACE/change" > materialized.json 2> materialize.log || {
+            "${change_args[@]}" > materialized.json 2> materialize.log || {
               tail -c 4000 materialize.log; cp materialized.json verdict.json 2>/dev/null; exit 1; }
+          node section/scripts/hosted-change.mjs --prepare-expectation "$HOUSE/controller" "$CONTROLLER_REF" \
+            "$HOUSE/carriers" materialized.json "$MACHINE" "$MACHINE_COMMIT" "$CHANGE_REPOSITORY" "$CHANGE_COMMIT" "$HOUSE/preparation"
           cat materialized.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: change-preparation-${{ env.MACHINE_SLUG }}
+          path: ${{ env.HOUSE }}/preparation/expectation.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Change test (no token, no git network)
         id: test
         run: |
@@ -187,7 +201,7 @@ jobs:
           # No runtime binding is supplied until its owner has qualified the image.
           digest=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("materialized.json","utf8")).sha256)')
           node section/scripts/hosted-change.mjs --run "$HOUSE/controller" "$HOUSE/carriers" "$HOUSE/result" \
-            "$GITHUB_WORKSPACE/section/scripts" "${{ inputs.controller-ref }}" "$digest" materialized.json > verdict.json 2> test-change.log
+            "$GITHUB_WORKSPACE/section/scripts" "${{ inputs.controller-ref }}" "$digest" "$HOUSE/preparation" > verdict.json 2> test-change.log
           status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
           tail -c 4000 test-change.log
@@ -238,15 +252,22 @@ jobs:
           pattern: change-test-*
           path: results
           merge-multiple: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.machines.result == 'success' && needs.machines.outputs.machines != '[]'
+        with:
+          pattern: change-preparation-*
+          path: preparations
+          merge-multiple: false
       - name: One comment, updated in place
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_MACHINES: ${{ needs.machines.outputs.machines }}
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_CONTROLLER: ${{ inputs.controller-ref }}
           DISCOVERY: ${{ needs.machines.result }}
         run: |
-          args=(results --expected "$EXPECTED_MACHINES" --commit "$EXPECTED_COMMIT" --discovery "$DISCOVERY"
+          args=(results --preparations preparations --controller-commit "$EXPECTED_CONTROLLER" --expected "$EXPECTED_MACHINES" --commit "$EXPECTED_COMMIT" --discovery "$DISCOVERY"
                 --repository "${{ github.repository }}" --none "${{ github.repository }}")
           status=0
           node section/scripts/change-test-comment.mjs "${args[@]}" --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}" || status=$?

@@ -9,6 +9,18 @@ on:
       concurrency:
         type: number
         default: 4
+      install:
+        description: 'Install dependencies; set false only for dependency-free source tests'
+        type: boolean
+        default: true
+      check:
+        description: 'Run the package check script'
+        type: boolean
+        default: true
+      test-script:
+        description: 'npm script to run for tests (default remains test)'
+        type: string
+        default: 'test'
 jobs:
   discover:
     runs-on: ubuntu-latest
@@ -42,6 +54,17 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
-      - run: if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
-      - run: npm run --if-present check
-      - run: npm run --if-present test
+      - name: Install dependencies when needed
+        if: inputs.install
+        run: if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+      - name: Check package when requested
+        if: inputs.check
+        run: npm run --if-present check
+      - name: Run selected named test script
+        env:
+          TEST_SCRIPT: ${{ inputs.test-script }}
+        run: |
+          case "$TEST_SCRIPT" in
+            ''|*[!a-zA-Z0-9:._-]*) echo "::error::Invalid npm test script name"; exit 1 ;;
+          esac
+          npm run --if-present "$TEST_SCRIPT"

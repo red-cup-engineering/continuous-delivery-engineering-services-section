@@ -19,9 +19,10 @@ export function githubSlug(url) {
 // Only 'ahead' (the remote head descends from the pin) advances, so a pin is moved
 // only where the remote head differs from it and a reconciliation is not owed.
 export function plan(entries) {
-  const out = { advance: [], diverged: [], current: [] };
+  const out = { advance: [], diverged: [], unread: [], current: [] };
   for (const e of entries) {
     if (e.head && e.head === e.pin) out.current.push(e);
+    else if (!e.head || !e.pin || !['ahead', 'behind', 'diverged'].includes(e.status)) out.unread.push(e);
     else if (e.status === 'ahead') out.advance.push(e);
     else out.diverged.push(e);
   }
@@ -30,12 +31,14 @@ export function plan(entries) {
 
 const short = s => (s || '').slice(0, 9);
 
-export function renderBody({ advance, diverged }, note) {
+export function renderBody({ advance, diverged, unread = [] }, note) {
   const lines = [];
   if (note) lines.push(note, '');
   if (advance.length) lines.push('Advanced:', ...advance.map(e => `- ${e.path}: ${short(e.pin)} -> ${short(e.head)}`), '');
   if (diverged.length) lines.push('Diverged, not advanced (reconcile first, requirement 16):',
     ...diverged.map(e => `- ${e.path}: pin ${short(e.pin)}, remote ${short(e.head)} (${e.status})`), '');
+  if (unread.length) lines.push('Unread supplier observations; ancestry is unknown:',
+    ...unread.map(e => `- ${e.path}: pin ${short(e.pin)}, remote ${short(e.head)} (${e.status})`), '');
   return lines.join('\n');
 }
 
@@ -106,11 +109,11 @@ export function run(cwd, { branch, note = '', head, status, remote }) {
   if (!p.advance.length) {
     if (prepared.remoteSha && git(cwd, 'rev-parse', 'HEAD') !== prepared.remoteSha) {
       pushAndReceive(cwd, branch, remote || 'origin');
-      return { result: 'advanced', pushed: true, foreign: prepared.foreign, diverged: p.diverged, body, bodyFile };
+      return { result: 'advanced', pushed: true, foreign: prepared.foreign, diverged: p.diverged, unread: p.unread, body, bodyFile };
     }
-    return { result: 'nothing to advance', diverged: p.diverged, body };
+    return { result: 'nothing to advance', diverged: p.diverged, unread: p.unread, body };
   }
-  return { result: 'advanced', ...publish(cwd, { branch, advance: p.advance, remote, prepared }), diverged: p.diverged, body, bodyFile };
+  return { result: 'advanced', ...publish(cwd, { branch, advance: p.advance, remote, prepared }), diverged: p.diverged, unread: p.unread, body, bodyFile };
 }
 
 // Live dependencies: ls-remote for heads, the compare API for ancestry.
@@ -119,14 +122,20 @@ function liveDeps(token) {
   if (token) {
     const count = Number(environment.GIT_CONFIG_COUNT ?? 0);
     if (!Number.isSafeInteger(count) || count < 0 || count > 32) throw new Error('invalid inherited Git configuration count');
-    environment.GIT_CONFIG_COUNT = String(count + 1);
+    // Checkout already supplies an Authorization header. Git's extraheader
+    // is multivalued: reset it before selecting this request's authority.
+    // Otherwise GitHub rejects every supplier with Duplicate header (HTTP 400).
+    environment.GIT_CONFIG_COUNT = String(count + 2);
     environment[`GIT_CONFIG_KEY_${count}`] = 'http.https://github.com/.extraheader';
-    environment[`GIT_CONFIG_VALUE_${count}`] = `Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`;
+    environment[`GIT_CONFIG_VALUE_${count}`] = '';
+    environment[`GIT_CONFIG_KEY_${count + 1}`] = 'http.https://github.com/.extraheader';
+    environment[`GIT_CONFIG_VALUE_${count + 1}`] = `Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`;
   }
   return {
     head: (url, ref) => {
       if (!githubSlug(url)) return '';
-      try { return execFileSync('git', ['ls-remote', url, ref], { env: environment, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')[0].split('\t')[0]; }
+      const selectedRef = ref === 'HEAD' ? ref : `refs/heads/${ref}`;
+      try { return execFileSync('git', ['ls-remote', '--', url, selectedRef], { env: environment, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')[0].split('\t')[0]; }
       catch { return ''; }
     },
     status: (url, pin, head) => {
@@ -149,8 +158,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   console.log(r.result);
   if (r.body && process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, r.body + '\n');
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `advanced=${r.result === 'advanced' && r.pushed}\n`);
-  if (r.diverged?.length) {
-    console.error(`${r.diverged.length} supplier pins remain unresolved; sync receiving is incomplete`);
+  const unresolved = (r.diverged?.length ?? 0) + (r.unread?.length ?? 0);
+  if (unresolved) {
+    console.error(`${unresolved} supplier pins remain unresolved (${r.unread?.length ?? 0} unread); sync receiving is incomplete`);
     process.exitCode = 1;
   }
 }

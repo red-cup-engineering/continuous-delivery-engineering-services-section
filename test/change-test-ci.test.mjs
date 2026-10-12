@@ -6,6 +6,8 @@ import path from 'node:path';
 import { machineEntry, machinesPinning } from '../scripts/pinning-machines.mjs';
 import { MARKER, overallVerdict, readResults, renderComment, upsertComment } from '../scripts/change-test-comment.mjs';
 
+import {evidence} from './fixtures/source-evidence.mjs';
+
 const sources = (...repositories) => ({ repositories: repositories.map((repository) => ({ repository, commit: 'a'.repeat(40) })) });
 
 test('a foreign marker cannot make the workflow overwrite another author\'s comment',async()=>{
@@ -59,15 +61,14 @@ test('the results directory is read leg by leg; a leg with an empty verdict read
   try {
     const expected = ['one', 'two'].map((name) => machineEntry(`m/${name}`, 'b'.repeat(40)));
     const commit = 'c'.repeat(40);
-    const clean = JSON.stringify({ kind: 'change-test', snapshot: 'b'.repeat(40), changes: [{ repository: 'o/r', commit }],
-      verdict: 'no-regression', regressions: 0, lock: 'frozen', packages: [], designRules: { added: [], removed: [] } });
-    for (const [name, verdict] of [['one', clean], ['two', '']]) {
+    const preparationByMachine=Object.fromEntries(expected.map(entry=>[entry.machine,evidence({...entry,repository:'o/r',commit}).expected]));
+    for (const [name, verdict] of [['one', JSON.stringify(evidence({...expected[0],repository:'o/r',commit}).verdict)], ['two', '']]) {
       fs.mkdirSync(path.join(root, name));
       fs.writeFileSync(path.join(root, name, 'meta.json'), JSON.stringify({ ...expected.find((entry) => entry.machine === `m/${name}`), commit, status: 0 }));
       fs.writeFileSync(path.join(root, name, 'verdict.json'), verdict);
       fs.writeFileSync(path.join(root, name, 'log-tail.txt'), `log of ${name}`);
     }
-    const results = readResults(root, { expected, commit, repository: 'o/r', discovery: 'success' });
+    const results = readResults(root, { expected, commit, repository: 'o/r', discovery: 'success', controllerCommit:'d'.repeat(40), preparationByMachine });
     assert.deepEqual(results.map((r) => [r.machine, r.verdict?.verdict ?? null, r.logTail]), [['m/one', 'no-regression', 'log of one'], ['m/two', null, 'log of two']]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {evidence} from './fixtures/source-evidence.mjs';
 import { parse } from 'yaml';
 import { isCommit, machineName, machinesPinning } from '../scripts/pinning-machines.mjs';
 import { overallVerdict, readResults, renderComment, upsertComment } from '../scripts/change-test-comment.mjs';
@@ -14,12 +15,12 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const repository = 'o/change', commit = 'c'.repeat(40), machineCommit = 'a'.repeat(40);
 const idFor = (machine, sha = machineCommit) => createHash('sha256').update(JSON.stringify([machine, sha])).digest('hex');
 const expected = ['o/machine:snapshot-a', 'o/machine:snapshot-b'].map((machine) => ({ machine, machineCommit, id: idFor(machine) }));
-const context = { repository, commit, expected, discovery: 'success' };
-const clean = () => ({ kind: 'change-test', snapshot: machineCommit, changes: [{ repository, commit }],
-  verdict: 'no-regression', regressions: 0, lock: 'frozen', packages: [], designRules: { added: [], removed: [] } });
+const preparationByMachine=Object.fromEntries(expected.map(entry=>[entry.machine,evidence({...entry,repository,commit}).expected]));
+const context = { repository, commit, expected, discovery: 'success', controllerCommit:'d'.repeat(40), preparationByMachine };
+const clean = (entry=expected[0]) => evidence({...entry,repository,commit}).verdict;
 const sources = (repo = repository) => ({ repositories: [{ repository: repo, commit }] });
 function temp(t) { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'change-test-coverage-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; }
-function artifact(directory, entry, { name = entry.id, meta = {}, verdict = clean() } = {}) {
+function artifact(directory, entry, { name = entry.id, meta = {}, verdict = clean(entry) } = {}) {
   const at = path.join(directory, name); fs.mkdirSync(at, { recursive: true });
   fs.writeFileSync(path.join(at, 'meta.json'), JSON.stringify({ ...entry, commit, status: 0, ...meta }));
   fs.writeFileSync(path.join(at, 'verdict.json'), JSON.stringify(verdict));
@@ -53,7 +54,7 @@ test('candidate validation rejects malformed and duplicate scope before discover
     assert.notEqual(cli('--candidates', '', candidates).status, 0, candidates);
   }
   assert.equal(cli('--candidates', 'o/machine:snapshot-a', 'ignored').stdout, 'o/machine:snapshot-a\n');
-  assert.equal(cli('--candidates', '', '[]').status, 0);
+  assert.notEqual(cli('--candidates', '', '[]').status, 0);
 });
 
 test('discovery plans bind distinct snapshot paths and repository commits without lossy slugs', (t) => {
@@ -130,7 +131,7 @@ test('workflow carries immutable expected coverage through checkout, artifacts a
   assert.equal(jobs['change-test'].env.MACHINE_SLUG, '${{ matrix.id }}');
   const machineStep = jobs['change-test'].steps.find((s) => s.name === 'Controller and machine');
   assert.match(machineStep.run, /checkout[^\n]+\$MACHINE_COMMIT/);
-  const upload = jobs['change-test'].steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
+  const upload = jobs['change-test'].steps.find((s) => s.uses?.startsWith('actions/upload-artifact@')&&s.with.name.startsWith('change-test-'));
   assert.ok(upload.with.path.includes('MACHINE_SLUG'));
   const download = jobs.report.steps.find((s) => s.uses?.startsWith('actions/download-artifact@'));
   assert.equal(download.with['merge-multiple'], false, 'do not overwrite colliding artifact payloads before validation');
@@ -148,7 +149,7 @@ test('workflow carries immutable expected coverage through checkout, artifacts a
 
 function shellStep(t, script, extraEnv = {}) {
   const d = temp(t), bin = path.join(d, 'bin'); fs.mkdirSync(bin); fs.cpSync(path.join(root, 'scripts'), path.join(d, 'section/scripts'), { recursive: true });
-  if(extraEnv.CONTROLLER_REF)fs.writeFileSync(path.join(d,'section/scripts/reviewed-source-controllers.json'),JSON.stringify({kind:'guix.reviewed-source-controllers.v1',commits:[extraEnv.CONTROLLER_REF]}));
+  if(extraEnv.CONTROLLER_REF)fs.writeFileSync(path.join(d,'section/scripts/reviewed-source-controllers.json'),JSON.stringify({kind:'guix.reviewed-source-controllers.v2',controllers:[{commit:extraEnv.CONTROLLER_REF,tree:extraEnv.CONTROLLER_TREE,verifierBlob:'2d889845a1f6a5dc41211fc9e93dd35e2b554062'}]}));
   const output = path.join(d, 'output'), log = path.join(d, 'requests'); fs.writeFileSync(output, ''); fs.writeFileSync(log, '');
   return { d, bin, output, log, run: () => spawnSync('bash', ['-eo', 'pipefail', '-c', script.replaceAll('${{ github.repository }}', repository)],
     { cwd: d, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: d, GITHUB_OUTPUT: output,
@@ -165,6 +166,7 @@ test('the actual discovery shell resolves recursive reading through its exact co
   // Fixture controller models the committed-graph reading boundary. Separate
   // owner integration tests exercise the genuine recursive controller API.
   fs.writeFileSync(path.join(controller,'scripts/materialize-sources.mjs'), `import fs from 'node:fs';\nif(process.env.SCENARIO==='source-error')process.exit(22);\nconsole.log(process.env.SCENARIO==='invalid-source'?'{}':JSON.stringify(JSON.parse(fs.readFileSync(process.argv[2]+'/reading.json','utf8'))));\n`);
+  fs.copyFileSync(path.join(root,'test/fixtures/verify-release-source.mjs'),path.join(controller,'scripts/verify-release-source.mjs'));
   git(controller,'add','.');git(controller,'commit','-qm','reviewed controller');const controllerCommit=git(controller,'rev-parse','HEAD');
   for(const snapshot of ['snapshot-a','snapshot-b']){fs.mkdirSync(path.join(machine,snapshot));fs.writeFileSync(path.join(machine,snapshot,'reading.json'),JSON.stringify(sources()));}
   git(machine,'add','.');git(machine,'commit','-qm','reviewed machine');const pinned=git(machine,'rev-parse','HEAD');
@@ -172,9 +174,9 @@ test('the actual discovery shell resolves recursive reading through its exact co
   for(const snapshot of ['snapshot-a','snapshot-b'])fs.writeFileSync(path.join(machine,snapshot,'reading.json'),JSON.stringify(sources('o/other')));
   git(machine,'commit','-qam','moving default branch');
   for(const scenario of ['success','source-error','invalid-source','invalid-commit','forced','invalid-list']){
-    const fixture=shellStep(t,script,{SCENARIO:scenario,CONTROLLER_REF:controllerCommit,
+    const fixture=shellStep(t,script,{SCENARIO:scenario,CONTROLLER_REF:controllerCommit,CONTROLLER_TREE:git(controller,'rev-parse',controllerCommit+'^{tree}'),
       ...(scenario==='forced'?{MACHINE:'o/machine:snapshot-a',MACHINES:'invalid'}:{}),...(scenario==='invalid-list'?{MACHINES:'{}'}:{})});
-    fs.writeFileSync(path.join(fixture.bin,'git'), `#!${process.execPath}\nconst args=process.argv.slice(2).map(a=>a==='https://github.com/o/machine.git'?${JSON.stringify(machine)}:a==='https://github.com/red-cup-engineering/guix-machine-release-service.git'?${JSON.stringify(controller)}:a);if(args.some(a=>a.startsWith('https://')))process.exit(99);const r=require('child_process').spawnSync(${JSON.stringify(actualGit)},args,{stdio:'inherit'});process.exit(r.status??1);\n`,{mode:0o755});
+    fs.writeFileSync(path.join(fixture.bin,'git'), `#!${process.execPath}\nconst args=process.argv.slice(2);if(args.includes('fetch')){const at=args.indexOf('origin');if(at>=0)args[at]=args[args.indexOf('-C')+1].includes('controller')?${JSON.stringify(controller)}:${JSON.stringify(machine)};}if(!args.includes('remote')&&args.some(a=>a.startsWith('https://')))process.exit(99);const r=require('child_process').spawnSync(${JSON.stringify(actualGit)},args,{stdio:'inherit'});process.exit(r.status??1);\n`,{mode:0o755});
     fs.writeFileSync(path.join(fixture.bin,'curl'), `#!${process.execPath}\nconst fs=require('fs'),args=process.argv.slice(2),url=args.find(a=>a.startsWith('https://')),out=args[args.indexOf('-o')+1];fs.appendFileSync(process.env.REQUEST_LOG,url+'\\n');if(!url.endsWith('/commits/HEAD'))process.exit(99);fs.writeFileSync(out,JSON.stringify({sha:process.env.SCENARIO==='invalid-commit'?'main':'${pinned}'}));\n`,{mode:0o755});
     const result=fixture.run(),output=fs.readFileSync(fixture.output,'utf8');
     if(['source-error','invalid-source','invalid-commit','invalid-list'].includes(scenario)){assert.notEqual(result.status,0,scenario);assert.equal(output,'');}
@@ -190,6 +192,8 @@ test('the actual machine checkout uses the discovered commit after the default b
     git(repo, 'config', 'user.name', 'Test'); git(repo, 'config', 'user.email', 'test@example.invalid');
     fs.writeFileSync(path.join(repo, 'README.md'), 'initial'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'initial');
   }
+  fs.mkdirSync(path.join(controller,'scripts'));fs.copyFileSync(path.join(root,'test/fixtures/verify-release-source.mjs'),path.join(controller,'scripts/verify-release-source.mjs'));
+  git(controller,'add','.');git(controller,'commit','-qm','trusted verifier fixture');
   const controllerCommit = git(controller, 'rev-parse', 'HEAD');
   fs.writeFileSync(path.join(controller, 'README.md'), 'moved controller'); git(controller, 'commit', '-qam', 'moved controller');
   fs.mkdirSync(path.join(machine, 'snapshot-a')); fs.writeFileSync(path.join(machine, 'snapshot-a', 'sources.json'), JSON.stringify(sources()));
@@ -200,10 +204,10 @@ test('the actual machine checkout uses the discovered commit after the default b
   for (const name of ['o/machine:snapshot-a', 'o/machine']) {
     const house = path.join(temp(t), 'house'), home = temp(t), envFile = path.join(home, 'env');
     fs.mkdirSync(house);
-    const fixture = shellStep(t, script, { MACHINE: name, MACHINE_COMMIT: pinned, CONTROLLER_REF: controllerCommit, HOUSE: house, HOME: home, GITHUB_ENV: envFile });
+    const fixture = shellStep(t, script, { MACHINE: name, MACHINE_COMMIT: pinned, CONTROLLER_REF: controllerCommit, CONTROLLER_TREE:git(controller,'rev-parse',controllerCommit+'^{tree}'), HOUSE: house, HOME: home, GITHUB_ENV: envFile });
     fs.writeFileSync(path.join(fixture.bin, 'git'), `#!${process.execPath}\n`
-      + `const args=process.argv.slice(2).map(a=>a==='https://github.com/o/machine.git'?${JSON.stringify(machine)}:a==='https://github.com/red-cup-engineering/guix-machine-release-service.git'?${JSON.stringify(controller)}:a);\n`
-      + `if(args.some(a=>a.startsWith('https://')))process.exit(99);\n`
+      + `const args=process.argv.slice(2);if(args.includes('fetch')){const at=args.indexOf('origin');if(at>=0)args[at]=args[args.indexOf('-C')+1].includes('controller')?${JSON.stringify(controller)}:${JSON.stringify(machine)};}\n`
+      + `if(!args.includes('remote')&&args.some(a=>a.startsWith('https://')))process.exit(99);\n`
       + `const r=require('child_process').spawnSync(${JSON.stringify(actualGit)},args,{stdio:'inherit'}); process.exit(r.status??1);\n`, { mode: 0o755 });
     const result = fixture.run(); assert.equal(result.status, 0, result.stderr);
     assert.equal(git(path.join(house, 'controller'), 'rev-parse', 'HEAD'), controllerCommit);
@@ -216,8 +220,9 @@ test('the actual machine checkout uses the discovered commit after the default b
 
 test('report CLI is successful only for fully qualified coverage or proven empty discovery', (t) => {
   const d = temp(t); for (const entry of expected) artifact(d, entry);
+  const preparations=temp(t);for(const entry of expected){const at=path.join(preparations,'change-preparation-'+entry.id);fs.mkdirSync(at);fs.writeFileSync(path.join(at,'expectation.json'),JSON.stringify(preparationByMachine[entry.machine]));}
   const report = (dir, opts = {}) => spawnSync(process.execPath, [path.join(root, 'scripts/change-test-comment.mjs'), dir,
-    '--expected', JSON.stringify(opts.expected ?? expected), '--commit', commit, '--repository', repository,
+    '--preparations',preparations,'--controller-commit','d'.repeat(40),'--expected', JSON.stringify(opts.expected ?? expected), '--commit', commit, '--repository', repository,
     '--discovery', opts.discovery ?? 'success', '--none', repository], { encoding: 'utf8' });
   assert.equal(report(d).status, 0);
   fs.rmSync(path.join(d, expected[1].id), { recursive: true });
@@ -235,7 +240,7 @@ test('the controller receipt contract preserves real clean, regression and incom
   const receipts = [
     { ...clean(), packages: [packageResult] },
     { ...clean(), verdict: 'regression', regressions: 1, designRules: { added: [{ key: 'drc-1' }], removed: [] } },
-    { kind: 'change-test', snapshot: machineCommit, changes: [{ repository, commit }], packages: [], regressions: 0,
+    { ...clean(), packages: [], regressions: 0,
       verdict: 'not-composed', reason: 'source unavailable', break: { class: 'repository-formation-unavailable' } },
     { ...clean(), verdict: 'incomplete', packages: [{ name: '@o/a', repository, status: 'not-composed' }] },
   ];
@@ -283,4 +288,14 @@ test('immutable commits and machine identities require the entire input, without
     assert.throws(() => machinesPinning(repository + suffix, { 'o/machine': sources() }), /invalid repository/);
     assert.throws(() => machinesPinning(repository, { 'o/machine': sources(repository + suffix) }), /invalid source/);
   }
+});
+
+test('source preparation keeps complete roots and seals expectations before candidate execution',()=>{
+  const {jobs,on}=workflow();assert.equal(on.workflow_call.inputs.machines.default,'[]');
+  const steps=jobs['change-test'].steps,form=steps.find(step=>step.name?.startsWith('Form the sources'));
+  assert.match(form.run,/--candidate-snapshot=/);assert.match(form.run,/--prepare-expectation/);
+  for(const name of ['GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=\/dev\/null','GIT_NO_REPLACE_OBJECTS=1'])assert.ok(form.run.includes(name));
+  for(const job of Object.values(jobs))for(const step of job.steps??[])assert.doesNotMatch(step.run??'',/sparse-checkout|--sparse|git config --global/);
+  const seal=steps.findIndex(step=>step.with?.name?.startsWith('change-preparation-')),run=steps.findIndex(step=>step.id==='test');assert.ok(seal>=0&&seal<run);
+  const report=jobs.report.steps.find(step=>step.name==='One comment, updated in place');assert.match(report.run,/--preparations preparations/);assert.equal(report.env.EXPECTED_CONTROLLER,'${{ inputs.controller-ref }}');
 });

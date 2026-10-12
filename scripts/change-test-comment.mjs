@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isCommit, machineName, validatePlan } from './pinning-machines.mjs';
+import {validateExpectation,verdictSourceError,receivingError} from './change-source-evidence.mjs';
 
 export const REPORT_AUTHOR = 'github-actions[bot]';
 export const MARKER = '<!-- continuous-delivery-services-section: change-test -->';
@@ -39,6 +40,12 @@ function machineSection({ machine, machineCommit, commit, verdict, logTail, erro
       lines.push(`| ${code(p.name)} | ${p.status ?? `${p.passed ?? '?'}/${p.tests ?? '?'} passed`} | ${(p.regressions ?? []).map(code).join('<br>') || '-'} | ${(p.preexisting ?? []).length} |`);
     }
   }
+  const receiving=verdict.receiving;
+  if(receiving){
+    if(receiving.unread)lines.push('',`Receiving unread: ${receiving.unread}`);
+    if(receiving.unmeasured)lines.push('','Receiving is unmeasured for the changed machine definition or topology.');
+    for(const key of ['removed','removedTests','regressions'])if(receiving[key]?.length)lines.push('',`Receiving ${key}: ${JSON.stringify(receiving[key]).slice(0,2000)}`);
+  }
   const rules = verdict.designRules ?? {};
   if (rules.added?.length) lines.push('', `Design rules **added** (${rules.added.length}): ${rules.added.map((r) => code(r.key ?? r)).join(', ')}`);
   if (rules.removed?.length) lines.push('', `Design rules removed (${rules.removed.length}): ${rules.removed.map((r) => code(r.key ?? r)).join(', ')}`);
@@ -65,13 +72,16 @@ const ruleList = (value) => Array.isArray(value) && value.every((item) => typeof
 const failure = (machine, error, fields = {}) => ({ ...fields, machine, verdict: null, error });
 
 /** Validate the controller receipt, independently of the artifact's claimed metadata. */
-function verdictError(verdict, entry, { commit, repository }, status) {
+function verdictError(verdict, entry, { commit, repository, controllerCommit, preparation }, status) {
   if (!object(verdict) || verdict.kind !== 'change-test' || !Object.hasOwn(RANK, verdict.verdict)
     || !count(verdict.regressions) || !Array.isArray(verdict.packages)) return 'Malformed controller verdict';
   if (verdict.snapshot !== entry.machineCommit) return 'Verdict is for the wrong machine commit';
-  if (!Array.isArray(verdict.changes) || verdict.changes.length !== 1
-    || verdict.changes[0]?.repository?.toLowerCase?.() !== repository.toLowerCase()
-    || verdict.changes[0]?.commit !== commit) return 'Verdict is for the wrong repository or change head';
+  try{validateExpectation(preparation);}catch(error){return error.message;}
+  if(preparation.controllerCommit!==controllerCommit||preparation.machine!==entry.machine||preparation.machineCommit!==entry.machineCommit
+    ||preparation.requestedPR.repository!==repository||preparation.requestedPR.commit!==commit)
+    return 'Preparation is for the wrong machine or requested PR';
+  const sourceError=verdictSourceError(verdict,preparation,status)??receivingError(verdict,preparation);
+  if(sourceError)return sourceError;
   for (const pkg of verdict.packages) {
     if (!object(pkg) || typeof pkg.name !== 'string'
       || (pkg.status !== undefined && typeof pkg.status !== 'string')
@@ -102,7 +112,7 @@ export function readResults(directory, context = {}) {
   try {
     if (context.discovery !== 'success') throw new Error('Machine discovery did not complete successfully; pin coverage is unknown');
     expected = validatePlan(context.expected);
-    if (!isCommit(context.commit) || typeof context.repository !== 'string'
+    if (!isCommit(context.commit) || !isCommit(context.controllerCommit) || typeof context.repository !== 'string'
       || machineName(context.repository) !== context.repository.toLowerCase() || context.repository.includes(':')) {
       throw new Error('Expected repository and exact change head are required');
     }
@@ -133,7 +143,14 @@ export function readResults(directory, context = {}) {
     }
     try { verdict = JSON.parse(fs.readFileSync(at('verdict.json'), 'utf8')); }
     catch { matches.push(failure(entry.machine, 'Missing or malformed controller verdict', fields)); continue; }
-    const error = verdictError(verdict, entry, context, meta.status);
+    let preparation;
+    try{
+      // This directory is downloaded from the preparation-only artifact. It is
+      // never read from the result leg or the worker's source-receipt.json.
+      preparation=context.preparationByMachine?.[entry.machine];
+      if(context.preparations)preparation=JSON.parse(fs.readFileSync(path.join(context.preparations,'change-preparation-'+entry.id,'expectation.json'),'utf8'));
+    }catch{}
+    const error = verdictError(verdict, entry, {...context,preparation}, meta.status);
     matches.push(error ? failure(entry.machine, error, fields) : { ...fields, machine: entry.machine, verdict });
   }
   return [...expected.map((entry) => {
@@ -170,7 +187,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     const args = process.argv.slice(2), options = {};
     let directory;
     for (let i = 0; i < args.length; i += 1) {
-      if (['--repo', '--pr', '--none', '--expected', '--commit', '--repository', '--discovery'].includes(args[i])) {
+      if (['--repo', '--pr', '--none', '--expected', '--commit', '--repository', '--discovery', '--preparations', '--controller-commit'].includes(args[i])) {
         const key = args[i].slice(2);
         if (options[key] !== undefined || args[i + 1] === undefined) throw new Error(`Invalid option: ${args[i]}`);
         options[key] = args[++i];
@@ -179,7 +196,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     }
     // Invalid/missing discovery data must still replace a previous success comment with an unknown result.
     try { options.expected = JSON.parse(options.expected); } catch { options.expected = undefined; }
-    const context = { ...options, repository: options.repository ?? options.repo };
+    const context = { ...options, controllerCommit:options['controller-commit'], repository: options.repository ?? options.repo };
     const results = readResults(directory ?? 'results', context), body = renderComment(results, context);
     if (options.repo && options.pr) {
       const { githubRequest } = await import('../generator/open-pr.mjs');

@@ -1,6 +1,10 @@
 {
-  "kind": "guix.reviewed-source-controllers.v1",
-  "commits": [
-    "1d6f1ae842424fec43be9a892c8d5fc4296174d7"
+  "kind": "guix.reviewed-source-controllers.v2",
+  "controllers": [
+    {
+      "commit": "1456c04103a8011f2d751e0a0a10c347a08c7829",
+      "tree": "6e2ac8f54ddf9fadb5254a7914949377d34706d1",
+      "verifierBlob": "2d889845a1f6a5dc41211fc9e93dd35e2b554062"
+    }
   ]
 }

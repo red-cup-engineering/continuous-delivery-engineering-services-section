@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
-export const isCommit = (value) => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
-const isRepository = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/i.test(value)
+export const isCommit = (value) => typeof value === 'string' && /^[a-f0-9]{40}(?![\s\S])/.test(value);
+const isRepository = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+(?![\s\S])/i.test(value)
   && !['.', '..'].includes(value.split('/')[1]);
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -15,7 +15,7 @@ export function machineName(value) {
   if (typeof value !== 'string') throw new Error('invalid machine identity');
   const [repository, snapshot, extra] = value.split(':');
   if (!isRepository(repository) || extra !== undefined || (snapshot !== undefined
-    && (!snapshot || snapshot.split('/').some((part) => !/^[a-z0-9_.-]+$/i.test(part) || ['.', '..'].includes(part))))) {
+    && (!snapshot || snapshot.split('/').some((part) => !/^[a-z0-9_.-]+(?![\s\S])/i.test(part) || ['.', '..'].includes(part))))) {
     throw new Error(`invalid machine identity: ${value}`);
   }
   return repository.toLowerCase() + (snapshot === undefined ? '' : `:${snapshot}`);
@@ -71,7 +71,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     const args = process.argv.slice(2);
     if (args[0] === '--candidates') {
       const candidates = args[1] ? [args[1]] : JSON.parse(args[2]);
-      if (!Array.isArray(candidates)) throw new Error('invalid machine candidates: an array is required');
+      if (!Array.isArray(candidates) || candidates.length === 0) throw new Error('invalid machine candidates: an array is required');
       const names = candidates.map(machineName);
       if (new Set(names).size !== names.length) throw new Error('duplicate machine candidates');
       if (names.length) process.stdout.write(names.join('\n') + '\n');
