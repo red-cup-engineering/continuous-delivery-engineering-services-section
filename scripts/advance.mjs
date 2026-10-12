@@ -119,14 +119,20 @@ function liveDeps(token) {
   if (token) {
     const count = Number(environment.GIT_CONFIG_COUNT ?? 0);
     if (!Number.isSafeInteger(count) || count < 0 || count > 32) throw new Error('invalid inherited Git configuration count');
-    environment.GIT_CONFIG_COUNT = String(count + 1);
+    // Checkout already supplies an Authorization header. Git's extraheader
+    // is multivalued: reset it before selecting this request's authority.
+    // Otherwise GitHub rejects every supplier with Duplicate header (HTTP 400).
+    environment.GIT_CONFIG_COUNT = String(count + 2);
     environment[`GIT_CONFIG_KEY_${count}`] = 'http.https://github.com/.extraheader';
-    environment[`GIT_CONFIG_VALUE_${count}`] = `Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`;
+    environment[`GIT_CONFIG_VALUE_${count}`] = '';
+    environment[`GIT_CONFIG_KEY_${count + 1}`] = 'http.https://github.com/.extraheader';
+    environment[`GIT_CONFIG_VALUE_${count + 1}`] = `Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`;
   }
   return {
     head: (url, ref) => {
       if (!githubSlug(url)) return '';
-      try { return execFileSync('git', ['ls-remote', url, ref], { env: environment, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')[0].split('\t')[0]; }
+      const selectedRef = ref === 'HEAD' ? ref : `refs/heads/${ref}`;
+      try { return execFileSync('git', ['ls-remote', '--', url, selectedRef], { env: environment, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')[0].split('\t')[0]; }
       catch { return ''; }
     },
     status: (url, pin, head) => {
