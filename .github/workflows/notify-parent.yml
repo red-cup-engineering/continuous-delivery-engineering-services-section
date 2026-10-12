@@ -11,13 +11,16 @@ on:
       event-type:
         type: string
         default: section-advanced
+      runs-on:
+        type: string
+        default: '["ubuntu-latest"]'
     secrets:
       token:
         description: 'PAT allowed to create a repository_dispatch on the parent'
         required: true
 jobs:
   notify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     env:
       GH_TOKEN: ${{ secrets.token }}
       PARENT: ${{ inputs.parent }}
