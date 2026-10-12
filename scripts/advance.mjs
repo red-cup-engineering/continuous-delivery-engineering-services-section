@@ -75,6 +75,13 @@ function prepare(cwd, { branch, remote = 'origin' }) {
   return { foreign: !!foreign, remoteSha };
 }
 
+function pushAndReceive(cwd, branch, remote) {
+  git(cwd, 'push', remote, `HEAD:refs/heads/${branch}`);
+  const published = git(cwd, 'rev-parse', 'HEAD');
+  const observed = git(cwd, 'ls-remote', '--heads', remote, `refs/heads/${branch}`).split(/\s/)[0];
+  if (observed !== published) throw new Error('sync branch moved after publication; receive its current history before claiming success');
+}
+
 export function publish(cwd, { branch, advance, message = 'Advance submodules', remote = 'origin', prepared }) {
   const context = prepared ?? prepare(cwd, { branch, remote });
   for (const e of advance) {
@@ -85,10 +92,7 @@ export function publish(cwd, { branch, advance, message = 'Advance submodules', 
   const foreign = context.foreign;
   if (!git(cwd, 'diff', '--cached', '--name-only')) return { pushed: false, foreign: !!foreign };
   git(cwd, 'commit', '-q', '-m', message);
-  git(cwd, 'push', remote, `HEAD:refs/heads/${branch}`);
-  const published = git(cwd, 'rev-parse', 'HEAD');
-  const observed = git(cwd, 'ls-remote', '--heads', remote, `refs/heads/${branch}`).split(/\s/)[0];
-  if (observed !== published) throw new Error('sync branch moved after publication; receive its current history before claiming success');
+  pushAndReceive(cwd, branch, remote);
   return { pushed: true, foreign: !!foreign };
 }
 
@@ -101,7 +105,7 @@ export function run(cwd, { branch, note = '', head, status, remote }) {
   fs.writeFileSync(bodyFile, body);
   if (!p.advance.length) {
     if (prepared.remoteSha && git(cwd, 'rev-parse', 'HEAD') !== prepared.remoteSha) {
-      git(cwd, 'push', remote || 'origin', `HEAD:refs/heads/${branch}`);
+      pushAndReceive(cwd, branch, remote || 'origin');
       return { result: 'advanced', pushed: true, foreign: prepared.foreign, diverged: p.diverged, body, bodyFile };
     }
     return { result: 'nothing to advance', diverged: p.diverged, body };
