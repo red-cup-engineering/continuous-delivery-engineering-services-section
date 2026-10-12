@@ -19,7 +19,8 @@ test('plan advances only where the remote head differs and descends from the pin
     { path: 'u', pin: A, head: '', status: 'unknown' },
   ]);
   assert.deepEqual(p.advance.map(e => e.path), ['y']);
-  assert.deepEqual(p.diverged.map(e => e.path), ['z', 'w', 'u']);
+  assert.deepEqual(p.diverged.map(e => e.path), ['z', 'w']);
+  assert.deepEqual(p.unread.map(e => e.path), ['u']);
   assert.deepEqual(p.current.map(e => e.path), ['x']);
 });
 

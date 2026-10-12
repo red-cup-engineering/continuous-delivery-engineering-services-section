@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
-          ref: cd20b9ff38de741b488854e07d02a18b6d2eee92
+          ref: 76c31788f372c73eb67a00522b2c937b30ab0d53
           path: .cds
           persist-credentials: false
       - name: keep the engine checkout out of the tree
