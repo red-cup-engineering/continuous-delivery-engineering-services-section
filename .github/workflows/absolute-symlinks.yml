@@ -16,6 +16,10 @@ on:
         default: '"ubuntu-latest"'
 jobs:
   absolute-symlinks:
+    # A newer push to the same pull request or branch supersedes this run: cancel it rather than queue every push.
+    concurrency:
+      group: absolute-symlinks-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     permissions:

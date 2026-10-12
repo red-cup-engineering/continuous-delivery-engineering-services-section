@@ -17,6 +17,10 @@ on:
         default: '"ubuntu-latest"'
 jobs:
   lockfile-fresh:
+    # A newer push to the same pull request or branch supersedes this run: cancel it rather than queue every push.
+    concurrency:
+      group: lockfile-fresh-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 15
     permissions:

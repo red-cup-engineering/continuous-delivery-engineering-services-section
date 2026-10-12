@@ -1,11 +1,20 @@
 name: Agent work intake
 on:
   workflow_call:
+    inputs:
+      runs-on:
+        description: 'JSON runner labels; a repository with a house runner names it (e.g. ["self-hosted","Linux","X64","bare-cedar-fog"])'
+        type: string
+        default: '"ubuntu-latest"'
 permissions:
   contents: read
 jobs:
   receive:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    # Every intake run of one branch or pull request is the same question; the newest answers it.
+    concurrency:
+      group: agent-work-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     timeout-minutes: 5
     permissions:
       contents: read
