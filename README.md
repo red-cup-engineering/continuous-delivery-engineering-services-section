@@ -23,8 +23,8 @@ Workflows (swap the file name):
 - `change-test.yml` - the pre-merge change test: the release controller
   (`red-cup-engineering/guix-machine-release-service`, `scripts/test-change.mjs`) composes the machine's admitted
   workspace with the pull request's commit, installs from `https://registry.561.group/`, builds as a release is
-  assembled and fails only on regressions the change introduces. Inputs: `machine` (default `emsenn/cold-red-gate`),
-  `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN` with contents:read on every
+  assembled and fails only on regressions the change introduces. Inputs: `machine` (required: the repository holding the
+  machine definition that mounts this repository by gitlink), `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN` with contents:read on every
   repository the machine pins.
 - `lockfile-fresh.yml` - the pnpm lock is fresh: every workspace package has an importer whose specifiers are
   exactly its declared dependencies (overrides applied), and every `workspace:*` dependency names a workspace
@@ -100,6 +100,7 @@ on: pull_request
 jobs:
   change-test:
     uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
+    with: { machine: OWNER/MACHINE-REPOSITORY }
     secrets: { house-read-token: "${{ secrets.HOUSE_READ_TOKEN }}" }
 ```
 
