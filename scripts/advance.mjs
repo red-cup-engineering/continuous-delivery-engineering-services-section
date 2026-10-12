@@ -115,15 +115,28 @@ export function run(cwd, { branch, note = '', head, status, remote }) {
 
 // Live dependencies: ls-remote for heads, the compare API for ancestry.
 function liveDeps(token) {
-  const auth = token ? ['-c', `http.extraheader=Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`] : [];
+  const environment = { ...process.env };
+  if (token) {
+    const count = Number(environment.GIT_CONFIG_COUNT ?? 0);
+    if (!Number.isSafeInteger(count) || count < 0 || count > 32) throw new Error('invalid inherited Git configuration count');
+    environment.GIT_CONFIG_COUNT = String(count + 1);
+    environment[`GIT_CONFIG_KEY_${count}`] = 'http.https://github.com/.extraheader';
+    environment[`GIT_CONFIG_VALUE_${count}`] = `Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`;
+  }
   return {
-    head: (url, ref) => execFileSync('git', [...auth, 'ls-remote', url, ref], { encoding: 'utf8' }).split('\n')[0].split('\t')[0],
+    head: (url, ref) => {
+      if (!githubSlug(url)) return '';
+      try { return execFileSync('git', ['ls-remote', url, ref], { env: environment, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')[0].split('\t')[0]; }
+      catch { return ''; }
+    },
     status: (url, pin, head) => {
       const slug = githubSlug(url);
       if (!slug || !pin) return 'unknown';
       try {
-        return JSON.parse(execFileSync('curl', ['-fsS', '-H', `Authorization: Bearer ${token}`, '-H', 'Accept: application/vnd.github+json',
-          `https://api.github.com/repos/${slug}/compare/${pin}...${head}`], { encoding: 'utf8' })).status;
+        return JSON.parse(execFileSync('curl', ['-fsS', '--config', '-', '-H', 'Accept: application/vnd.github+json',
+          `https://api.github.com/repos/${slug}/compare/${pin}...${head}`], {
+          input: `header = ${JSON.stringify(`Authorization: Bearer ${token}`)}\n`, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+        })).status;
       } catch { return 'unknown'; }
     },
   };
@@ -136,4 +149,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   console.log(r.result);
   if (r.body && process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, r.body + '\n');
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `advanced=${r.result === 'advanced' && r.pushed}\n`);
+  if (r.diverged?.length) {
+    console.error(`${r.diverged.length} supplier pins remain unresolved; sync receiving is incomplete`);
+    process.exitCode = 1;
+  }
 }
