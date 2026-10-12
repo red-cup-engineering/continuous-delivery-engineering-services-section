@@ -4,6 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {freshness, lockMismatches, lockReading} from '../scripts/lockfile-fresh.mjs';
 
 function workspace(t, files) {
@@ -150,3 +151,26 @@ test('a negated subtree also leaves out the package at its own root, as pnpm rea
   });
   assert.deepEqual(lockMismatches(root), []);
 });
+
+// GHSA-48c2-rrv3-qjmp: classify excessive nesting as a YAML parse error at
+// the real workspace/lock reader boundary; malformed input never proves freshness.
+for (const path of ['pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+  test(`deeply nested ${path} is rejected as a resource-exhaustion parse error`, (t) => {
+    const root = workspace(t, {
+      'package.json': {name: 'root', private: true},
+      'pnpm-workspace.yaml': 'packages: []\n',
+      'pnpm-lock.yaml': "lockfileVersion: '9.0'\nimporters:\n  .: {}\n",
+      [path]: '['.repeat(5000) + '0' + ']'.repeat(5000),
+    });
+    assert.throws(() => lockReading(root, {readSubmodules: false}),
+      (error) => error.name === 'YAMLParseError' && error.code === 'RESOURCE_EXHAUSTION');
+    const cli = spawnSync(process.execPath,
+      [fileURLToPath(new URL('../scripts/lockfile-fresh.mjs', import.meta.url)), root, '--no-submodules'],
+      {encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024});
+    assert.equal(cli.error, undefined);
+    assert.equal(cli.signal, null);
+    assert.equal(cli.status, 1);
+    assert.equal(cli.stdout, '');
+    assert.match(cli.stderr, /YAMLParseError/);
+  });
+}
