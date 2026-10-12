@@ -19,8 +19,8 @@ test('plan advances only where the remote head differs and descends from the pin
     { path: 'u', pin: A, head: '', status: 'unknown' },
   ]);
   assert.deepEqual(p.advance.map(e => e.path), ['y']);
-  assert.deepEqual(p.diverged.map(e => e.path), ['z', 'w']);
-  assert.deepEqual(p.current.map(e => e.path), ['x', 'u']);
+  assert.deepEqual(p.diverged.map(e => e.path), ['z', 'w', 'u']);
+  assert.deepEqual(p.current.map(e => e.path), ['x']);
 });
 
 test('body lists diverged pins instead of advancing them', () => {
@@ -93,7 +93,7 @@ test('a branch carrying a reviewer commit is extended, never force-pushed', () =
   assert.equal(sh(origin, 'merge-base', '--is-ancestor', reviewerSha, 'ci/submodule-advance') ?? '', '');
 });
 
-test('a branch carrying only bot commits may be replaced (force-with-lease)', () => {
+test('a branch carrying only bot commits retains its prior history', () => {
   const { origin, work } = parent();
   run(work, { branch: 'ci/submodule-advance', ...deps });
   assert.equal(sh(origin, 'log', '-1', '--format=%ae', 'ci/submodule-advance'), BOT_EMAIL);
@@ -101,7 +101,7 @@ test('a branch carrying only bot commits may be replaced (force-with-lease)', ()
   const r = run(work, { branch: 'ci/submodule-advance', head: (u) => u.endsWith('s1') ? C : A, status: (u) => u.endsWith('s1') ? 'ahead' : 'identical' });
   assert.equal(r.foreign, false);
   assert.equal(pin(origin, 'ci/submodule-advance', 's1'), C);
-  assert.equal(sh(origin, 'rev-list', '--count', 'main..ci/submodule-advance'), '1');
+  assert.equal(sh(origin, 'rev-list', '--count', 'main..ci/submodule-advance'), '2');
 });
 
 test('workflows hold no /tmp writes and no force-push flag', () => {

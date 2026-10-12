@@ -10,6 +10,10 @@ on:
         description: 'line placed first in the pull request body (the upward chain names the section that moved)'
         type: string
         default: ''
+      runs-on:
+        description: 'JSON runner labels supplied by the hiring repository'
+        type: string
+        default: '["ubuntu-latest"]'
     secrets:
       token:
         description: 'PAT able to read submodule remotes and push/open PRs in the caller (falls back to GITHUB_TOKEN)'
@@ -19,7 +23,7 @@ permissions:
   pull-requests: write
 jobs:
   advance:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     env:
       GH_TOKEN: ${{ secrets.token || github.token }}
       BRANCH: ${{ inputs.branch }}
@@ -31,17 +35,20 @@ jobs:
           token: ${{ secrets.token || github.token }}
           submodules: false
           fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
+          ref: cd20b9ff38de741b488854e07d02a18b6d2eee92
           path: .cds
+          persist-credentials: false
       - name: keep the engine checkout out of the tree
         run: echo "/.cds" >> .git/info/exclude
       - name: advance gitlinks where the remote head moved
         id: advance
         run: node .cds/scripts/advance.mjs --branch "$BRANCH" --note "$NOTE"
       - name: open or update the one pull request
-        if: steps.advance.outputs.advanced == 'true'
+        if: always() && steps.advance.outputs.advanced == 'true'
         run: |
           set -eu
           if n=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number') && [ -n "$n" ]; then

@@ -17,24 +17,24 @@ Workflows (swap the file name):
 
 - `node-package.yml` - every package.json: `npm ci`, `check`, `test` on Node 24. Inputs: `paths` (JSON array), `concurrency`.
 - `lean.yml` - lake build. Input: `working-directory`.
-- `submodule-advance.yml` - one PR bumping moved submodule heads (`scripts/advance.mjs`). Secret: `token` (needs `secrets: inherit` or `secrets: {token: ...}`). Schedule it with `on: schedule`. It advances a pin only where the remote head descends from the pin, lists diverged pins in the PR body instead of advancing them, writes its body to `.git/advance-body.md` (nothing outside the workspace), and never force-pushes a branch that carries a commit by anyone but the bot: it adds a commit on top instead. Inputs: `branch`, `note`.
+- `submodule-advance.yml` - one PR bumping moved submodule heads (`scripts/advance.mjs`). Secret: `token` (needs `secrets: inherit` or `secrets: {token: ...}`). Schedule it with `on: schedule`. It advances a pin only where the remote head descends from the pin, lists diverged pins in the PR body instead of advancing them, writes its body to `.git/advance-body.md` (nothing outside the workspace), receives the existing sync branch and default history before reading pins, and publishes only by fast-forward. Missing heads and unknown ancestry remain unresolved in the PR body and fail sync receiving visibly; any qualified partial pin proposal is still opened. Git authorization is URL-scoped and subprocess credentials travel in environment or stdin, never command arguments. Inputs: `branch`, `note`.
 - `notify-parent.yml` - section side of the upward chain: on push to `main`, sends `repository_dispatch` (`section-advanced`) to the parent. Input: `parent` (owner/repo). Secret: `token`, a PAT that may dispatch on the parent.
 - `superrepo-advance.yml` - parent side: `submodule-advance` with the dispatching section named in the PR. Call it on `repository_dispatch` and a daily `schedule`. Input: `source`.
 - `change-test.yml` - the pre-merge change test (STD-CI), run against **every machine that pins this repository**:
-  - `machines` reads each candidate machine's `sources.json` (input `machines`, JSON array of `owner/repo` or
+  - `machines` reads each candidate machine's committed recursive Gitlink source graph (input `machines`, JSON array of `owner/repo` or
     `owner/repo:path` for a snapshot below the root; default Cold Red Gate and Bare Cedar Fog's MetroPlat) and keeps
     those that pin the calling repository (`scripts/pinning-machines.mjs`). Input `machine` names one instead.
     Discovery fails on unreadable or invalid declarations; it never treats an unknown machine as unpinned.
     Each selected snapshot is bound to the repository commit read during discovery, and the test checks out that
     exact commit. Snapshot paths and commits are part of the artifact identity.
   - `change-test`, one leg per machine: the release controller (`red-cup-engineering/guix-machine-release-service`,
-    `scripts/test-change.mjs`) composes the machine's admitted workspace with the pull request's commit, installs from
-    `https://registry.561.group/`, builds as a release is assembled and fails only on regressions the change
-    introduces. Each leg's conclusion is that machine's check.
-  - Credentials never reach the change's code. The checkout keeps none (`persist-credentials: false`). The house read
-    token is given to git only through one step's environment, as a header, to form every source
-    (`test-change.mjs --materialize-only`). The builds and tests then run in a step that holds no token and in which
-    git may not reach the network (`GIT_ALLOW_PROTOCOL=file`).
+    `scripts/test-change.mjs`) is consumed through the bounded hosted helper described below. Actual execution
+    requires the owner's qualified image, installed Guix/toolchain and offline frozen dependency supply.
+    Missing runtime admission refuses; a source-only receipt does not qualify the machine.
+  - Credentialed preparation invokes only the pinned helper's reviewed source controller. Checkouts use
+    `persist-credentials: false`; Git receives a URL-scoped read header only in preparation's environment.
+    `materialize-sources.mjs --export-change` carries inert committed objects. Candidate execution, when a real
+    runtime is admitted, uses the restricted non-root container described below, with no preparation-host credentials.
   - `report`: one pull-request comment, found by its marker and updated in place on every run, with each machine's
     verdict, regressions, and design rules added and removed (`scripts/change-test-comment.mjs`). The report
     reconciles every expected machine against the tested pull-request head and the controller receipt. Missing,
@@ -43,16 +43,18 @@ Workflows (swap the file name):
     rechecks the pull request head so an older run cannot replace a newer head's comment. A successful empty discovery
     says only that none of the configured candidate machines pins the repository.
   Inputs: `machine`, `machines`, `controller-ref`. Secret: `house-read-token`, from a secret named `HOUSE_READ_TOKEN`
-  with contents:read on every repository the machines pin. The caller is five lines (written by the generator,
-  `node generator/generate-ci.mjs --only change-test --pr OWNER/REPO`):
+  with existing authorized contents:read on every repository the machines pin. The generator pins the source
+  supplier and maps only this named secret; `--house-read-token-secret` selects an existing binding. The example
+  below names this review's workflow revision and remains a proposal until receiving requirements are met:
 
   ```yaml
   name: change-test
   on: pull_request
   jobs:
     change-test:
-      uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
-      secrets: inherit
+      uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@a819b55e1d4024d177d16706f0ca0e6190354fbe
+      secrets:
+        house-read-token: ${{ secrets.HOUSE_READ_TOKEN }}
   ```
 - `lockfile-fresh.yml` - the pnpm lock is fresh: every workspace package has an importer whose specifiers are
   exactly its declared dependencies (overrides applied), and every `workspace:*` dependency names a workspace
@@ -86,7 +88,11 @@ jobs:
 
 ```
 node generator/generate-ci.mjs <repo-dir> [--parent owner/repo] [--pr owner/repo]
+  [--ref <40-character supplier commit>] [--runs-on '["self-hosted","Linux","X64","bare-cedar-fog"]']
+  [--default-branch main] [--token-secret LMT_SUBMODULE_PAT]
 ```
+
+Generated callers pin the generator checkout's exact commit (or an explicitly selected commit). Sync callers serialize runs and take the hiring repository's actual runner labels and token secret; the nested reusable workflow comes from the same supplier revision, and its engine checkout is immutable.
 
 Selects `node-package` (any `package.json`), `lean` (a `lakefile.lean`/`lakefile.toml`, one job per directory) and `content` (JSON with a relative `$schema`, or Markdown with relative links), and writes `.github/workflows/ci.yml`. A repository with `.gitmodules` also gets `sync.yml` (advance on dispatch/schedule); `--parent` adds the push-to-main notify. Handwritten workflows are reported against the reusable workflow that covers them and are never removed. With `--pr`, nothing is written locally: the files go up as one pull request through the git-data API (`GH_TOKEN`), extending an existing `ci/caller-generator` branch without force.
 
@@ -115,15 +121,16 @@ A house package is made, tested, received and released along one path:
 3. **Receive:** the machine's own release workflow advances to the merged commit with the controller's
    `advance-reviewed-sources.mjs`, then builds, seals, probes and receives it.
 
-`change-test.yml` is the same change test for a GitHub-hosted runner. It needs a `HOUSE_READ_TOKEN` secret
-with contents:read on every pinned repository, so the machine's runner is the default path:
+`change-test.yml` proposes a hosted adapter for the same controller. It still needs the actual runtime,
+machine formation and existing authorized source-reader binding described below; the machine's existing
+receiving path remains the default:
 
 ```yaml
 name: change-test
 on: pull_request
 jobs:
   change-test:
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@a819b55e1d4024d177d16706f0ca0e6190354fbe
     secrets: { house-read-token: "${{ secrets.HOUSE_READ_TOKEN }}" }
 ```
 
@@ -174,3 +181,33 @@ Source preparation is separately allowlisted by immutable controller revision in
 source-reader environment. Current source-only supplier is Guix PR107 at
 `1d6f1ae842424fec43be9a892c8d5fc4296174d7` (47 source-level checks independently replayed).
 This admission does not admit a runtime image or establish machine receiving.
+## Agent branch intake
+
+`agent-work.yml` receives same-repository branch pushes into draft pull requests and adds `agent:work`, `agent:blocked` and `agent:received` metadata. Its implementation is pinned to an immutable source commit and both external actions are pinned. It checks out only that maintained implementation; branch code, issue bodies and artifacts are never executed with its write token. The ordinary build/release workflows keep responsibility for source and operating qualification.
+
+Install the caller below on the repository default branch. Existing branch work is reconciled separately because a push workflow is read from the pushed branch. Enable Issues and automatic merged-branch deletion in repository settings. To let `GITHUB_TOKEN` create draft pulls, the repository/org Actions policy must permit Actions to create pulls; without that permission the intake records a blocked issue and fails visibly. Keep default token permission read-only; the metadata job declares only its required issue and pull permissions. An Actions-created pull can require workflow approval; observe the actual checks rather than assuming a draft created by a workflow triggers every build.
+
+```yaml
+name: Agent work
+on:
+  push:
+    branches: ['**']
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+jobs:
+  receive:
+    if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@9941b91847d4c5e7947fb044faeb4e77476dc17d
+```
+
+The example binds the received workflow commit `9941b91847d4c5e7947fb044faeb4e77476dc17d`. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
+
+## Publication
+
+`publish-package.yml` owns registry publication for hiring repositories. The caller supplies runner labels and a registry token or registry user/password; authentication configuration contains environment placeholders. Tags are `publish/<organization>/<package>/v<declared version>`; a legacy `publish/<package>/v<declared version>` remains valid only when it selects exactly one manifest. The declared manifest supplies the scope. The tag source must already be in the default branch's history; private packages and the existing SQLite refusal remain intact.
+
+The package is packed once. `receive-registry-package.mjs` compares its digest with authoritative registry metadata before and after publication. An occupied version with different bytes is a refusal, and network/authentication errors cannot be reported as absence or receipt. Machine installation and useful operating receiving remain separate.

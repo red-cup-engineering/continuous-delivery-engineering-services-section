@@ -11,7 +11,7 @@ export const BOT_EMAIL = 'ci@users.noreply.github.com';
 const git = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
 
 export function githubSlug(url) {
-  const m = /^https:\/\/github\.com\/([^/]+\/[^/.]+?)(?:\.git)?\/?$/.exec(url);
+  const m = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)\/?$/.exec(url.replace(/\.git\/?$/, ''));
   return m && m[1];
 }
 
@@ -21,7 +21,7 @@ export function githubSlug(url) {
 export function plan(entries) {
   const out = { advance: [], diverged: [], current: [] };
   for (const e of entries) {
-    if (!e.head || e.head === e.pin) out.current.push(e);
+    if (e.head && e.head === e.pin) out.current.push(e);
     else if (e.status === 'ahead') out.advance.push(e);
     else out.diverged.push(e);
   }
@@ -49,49 +49,94 @@ export function readEntries(cwd, { head, status }) {
     const pin = git(cwd, 'ls-tree', 'HEAD', p).split(/\s+/)[2] ?? '';
     const e = { path: p, url, branch, pin };
     e.head = head(url, branch || 'HEAD');
-    e.status = e.head && e.head !== pin ? status(url, pin, e.head) : 'identical';
+    e.status = !e.head || !pin ? 'unknown' : e.head !== pin ? status(url, pin, e.head) : 'identical';
     return e;
   });
 }
 
-// Commit the new pins without losing a reviewer's work. A branch that carries a
-// commit by anyone but the bot is extended by fast-forward, never replaced.
-export function publish(cwd, { branch, advance, message = 'Advance submodules', remote = 'origin' }) {
+// Receive the existing branch and the checked-out base before observing pins.
+// Every contributor's history is retained, including prior bot commits.
+function prepare(cwd, { branch, remote = 'origin' }) {
+  git(cwd, 'check-ref-format', '--branch', branch);
+  // Supplier checkouts need not be materialized: this operation owns parent
+  // gitlinks, never the supplier's worktree. Staged gitlinks still count as dirt.
+  if (git(cwd, 'diff', '--ignore-submodules=all', '--name-only') || git(cwd, 'diff', '--cached', '--name-only')) throw new Error('pin advance requires clean parent files and index');
+  const base = git(cwd, 'rev-parse', 'HEAD');
   git(cwd, 'config', 'user.name', 'continuous-delivery-services-section');
   git(cwd, 'config', 'user.email', BOT_EMAIL);
-  let remoteSha = '';
-  try { git(cwd, 'fetch', remote, branch); remoteSha = git(cwd, 'rev-parse', 'FETCH_HEAD'); } catch { /* branch absent */ }
+  const remoteSha = git(cwd, 'ls-remote', '--heads', remote, `refs/heads/${branch}`).split(/\s/)[0];
+  if (remoteSha) {
+    git(cwd, 'fetch', remote, `refs/heads/${branch}`);
+    if (git(cwd, 'rev-parse', 'FETCH_HEAD') !== remoteSha) throw new Error('sync branch moved during observation; receive it again');
+  }
   const foreign = remoteSha && git(cwd, 'log', '--format=%ae', `HEAD..${remoteSha}`).split('\n').some(a => a && a !== BOT_EMAIL);
-  git(cwd, 'checkout', '-q', '-B', branch, foreign ? remoteSha : 'HEAD');
-  for (const e of advance) git(cwd, 'update-index', '--add', '--cacheinfo', `160000,${e.head},${e.path}`);
+  git(cwd, 'checkout', '-q', '-B', branch, remoteSha || base);
+  if (remoteSha) git(cwd, 'merge', '--no-edit', base);
+  return { foreign: !!foreign, remoteSha };
+}
+
+function pushAndReceive(cwd, branch, remote) {
+  git(cwd, 'push', remote, `HEAD:refs/heads/${branch}`);
+  const published = git(cwd, 'rev-parse', 'HEAD');
+  const observed = git(cwd, 'ls-remote', '--heads', remote, `refs/heads/${branch}`).split(/\s/)[0];
+  if (observed !== published) throw new Error('sync branch moved after publication; receive its current history before claiming success');
+}
+
+export function publish(cwd, { branch, advance, message = 'Advance submodules', remote = 'origin', prepared }) {
+  const context = prepared ?? prepare(cwd, { branch, remote });
+  for (const e of advance) {
+    const current = git(cwd, 'ls-tree', 'HEAD', '--', e.path).split(/\s+/)[2];
+    if (current !== e.pin) throw new Error(`pin changed since observation: ${e.path}`);
+    git(cwd, 'update-index', '--add', '--cacheinfo', `160000,${e.head},${e.path}`);
+  }
+  const foreign = context.foreign;
   if (!git(cwd, 'diff', '--cached', '--name-only')) return { pushed: false, foreign: !!foreign };
   git(cwd, 'commit', '-q', '-m', message);
-  if (!remoteSha || foreign) git(cwd, 'push', remote, `${branch}:${branch}`);
-  else git(cwd, 'push', `--force-with-lease=${branch}:${remoteSha}`, remote, `${branch}:${branch}`);
+  pushAndReceive(cwd, branch, remote);
   return { pushed: true, foreign: !!foreign };
 }
 
 export function run(cwd, { branch, note = '', head, status, remote }) {
   if (!fs.existsSync(path.join(cwd, '.gitmodules'))) return { result: 'no submodules' };
+  const prepared = prepare(cwd, { branch, remote });
   const p = plan(readEntries(cwd, { head, status }));
   const body = renderBody(p, note);
-  const bodyFile = path.join(cwd, '.git', 'advance-body.md');
+  const bodyFile = path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'advance-body.md'));
   fs.writeFileSync(bodyFile, body);
-  if (!p.advance.length) return { result: 'nothing to advance', diverged: p.diverged, body };
-  return { result: 'advanced', ...publish(cwd, { branch, advance: p.advance, remote }), diverged: p.diverged, body, bodyFile };
+  if (!p.advance.length) {
+    if (prepared.remoteSha && git(cwd, 'rev-parse', 'HEAD') !== prepared.remoteSha) {
+      pushAndReceive(cwd, branch, remote || 'origin');
+      return { result: 'advanced', pushed: true, foreign: prepared.foreign, diverged: p.diverged, body, bodyFile };
+    }
+    return { result: 'nothing to advance', diverged: p.diverged, body };
+  }
+  return { result: 'advanced', ...publish(cwd, { branch, advance: p.advance, remote, prepared }), diverged: p.diverged, body, bodyFile };
 }
 
 // Live dependencies: ls-remote for heads, the compare API for ancestry.
 function liveDeps(token) {
-  const auth = token ? ['-c', `http.extraheader=Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`] : [];
+  const environment = { ...process.env };
+  if (token) {
+    const count = Number(environment.GIT_CONFIG_COUNT ?? 0);
+    if (!Number.isSafeInteger(count) || count < 0 || count > 32) throw new Error('invalid inherited Git configuration count');
+    environment.GIT_CONFIG_COUNT = String(count + 1);
+    environment[`GIT_CONFIG_KEY_${count}`] = 'http.https://github.com/.extraheader';
+    environment[`GIT_CONFIG_VALUE_${count}`] = `Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`;
+  }
   return {
-    head: (url, ref) => execFileSync('git', [...auth, 'ls-remote', url, ref], { encoding: 'utf8' }).split('\n')[0].split('\t')[0],
+    head: (url, ref) => {
+      if (!githubSlug(url)) return '';
+      try { return execFileSync('git', ['ls-remote', url, ref], { env: environment, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')[0].split('\t')[0]; }
+      catch { return ''; }
+    },
     status: (url, pin, head) => {
       const slug = githubSlug(url);
       if (!slug || !pin) return 'unknown';
       try {
-        return JSON.parse(execFileSync('curl', ['-fsS', '-H', `Authorization: Bearer ${token}`, '-H', 'Accept: application/vnd.github+json',
-          `https://api.github.com/repos/${slug}/compare/${pin}...${head}`], { encoding: 'utf8' })).status;
+        return JSON.parse(execFileSync('curl', ['-fsS', '--config', '-', '-H', 'Accept: application/vnd.github+json',
+          `https://api.github.com/repos/${slug}/compare/${pin}...${head}`], {
+          input: `header = ${JSON.stringify(`Authorization: Bearer ${token}`)}\n`, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+        })).status;
       } catch { return 'unknown'; }
     },
   };
@@ -104,4 +149,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   console.log(r.result);
   if (r.body && process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, r.body + '\n');
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `advanced=${r.result === 'advanced' && r.pushed}\n`);
+  if (r.diverged?.length) {
+    console.error(`${r.diverged.length} supplier pins remain unresolved; sync receiving is incomplete`);
+    process.exitCode = 1;
+  }
 }

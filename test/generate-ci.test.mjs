@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { detect, generate, renderChangeTest, renderCi, renderSync, REUSABLE } from '../generator/generate-ci.mjs';
+import { detect, generate, renderChangeTest, renderCi, renderSync, REUSABLE, REF } from '../generator/generate-ci.mjs';
 import { openPullRequest } from '../generator/open-pr.mjs';
 
 // Fixture repositories are built from a map of path -> content.
@@ -30,7 +30,7 @@ test('package.json selects node-package, also when nested; node_modules is ignor
 test('lakefile selects lean with its working directory', () => {
   assert.deepEqual(detect(fixture({ 'lakefile.lean': '' })).lean, ['.']);
   const y = renderCi(detect(fixture({ 'proofs/lakefile.toml': '' })));
-  assert.match(y, /lean-proofs:\n    uses: .*\/lean\.yml@main\n    with:\n      working-directory: proofs/);
+  assert.match(y, /lean-proofs:\n    uses: .*\/lean\.yml@[a-f0-9]{40}\n    with:\n      working-directory: proofs/);
 });
 
 test('relative $schema selects content; remote $schema does not', () => {
@@ -48,7 +48,7 @@ test('relative markdown links select content; urls, anchors and fenced code do n
 test('all three selected: short caller naming each reusable workflow', () => {
   const r = generate(fixture({ 'package.json': '{}', 'lakefile.lean': '', 'README.md': '[d](d.md)' }));
   const y = r.files['.github/workflows/ci.yml'];
-  for (const w of ['node-package', 'lean', 'content']) assert.ok(y.includes(`${REUSABLE}/${w}.yml@main`), w);
+  for (const w of ['node-package', 'lean', 'content']) assert.ok(y.includes(`${REUSABLE}/${w}.yml@${REF}`), w);
   assert.ok(y.split('\n').length < 20);
   assert.match(y, /on: \[push, pull_request\]/);
 });
@@ -67,8 +67,8 @@ test('handwritten workflows are reported against the covering reusable workflow'
 test('repository with submodules gets a sync caller; a parent adds the upward notify', () => {
   const r = generate(fixture({ '.gitmodules': '' }), { parent: 'o/parent' });
   const y = r.files['.github/workflows/sync.yml'];
-  assert.match(y, /superrepo-advance\.yml@main/);
-  assert.match(y, /notify-parent\.yml@main/);
+  assert.match(y, /superrepo-advance\.yml@[a-f0-9]{40}/);
+  assert.match(y, /notify-parent\.yml@[a-f0-9]{40}/);
   assert.match(y, /parent: o\/parent/);
   assert.equal(renderSync({ submodules: false }), null);
 });
@@ -94,16 +94,32 @@ test('pull request by git-data API extends an existing branch without force', as
   assert.ok(!calls.some(c => c[1].endsWith('/git/refs') && c[0] === 'POST'));
 });
 
-test('a package repository gets the change-test caller: five lines, every machine that pins it, the house token inherited', () => {
+test('a package repository gets the change-test caller: pinned supplier and only its named source-reader secret', () => {
   const r = generate(fixture({ 'package.json': '{}' }));
   const y = r.files['.github/workflows/change-test.yml'];
   assert.equal(y, renderChangeTest({ node: true }));
   assert.match(y, /^name: change-test$/m);
   assert.match(y, /^on: pull_request$/m);
-  assert.ok(y.includes(`uses: ${REUSABLE}/change-test.yml@main`));
-  assert.match(y, /^    secrets: inherit$/m);
-  assert.equal(y.split('\n').filter((l) => l && !l.startsWith('#')).length, 6);
+  assert.ok(y.includes(`uses: ${REUSABLE}/change-test.yml@${REF}`));
+  assert.match(y, /^      house-read-token: \$\{\{ secrets.HOUSE_READ_TOKEN \}\}$/m);
+  assert.doesNotMatch(y,/secrets: inherit/);
+  assert.equal(y.split('\n').filter((l) => l && !l.startsWith('#')).length, 7);
   // Not a package repository: no change-test caller. An existing one is not reported as handwritten.
   assert.equal(generate(fixture({ 'lakefile.lean': '' })).files['.github/workflows/change-test.yml'], undefined);
   assert.deepEqual(generate(fixture({ 'package.json': '{}', '.github/workflows/change-test.yml': y })).handwritten, []);
+});
+
+test('change-test supplier and source secret options do not expand inherited access',()=>{
+  const ref='a'.repeat(40),y=renderChangeTest({node:true},{ref,houseReadTokenSecret:'SOURCE_READER'});
+  assert.ok(y.includes('change-test.yml@'+ref));assert.ok(y.includes('secrets.SOURCE_READER'));
+  assert.doesNotMatch(y,/inherit|@main/);
+  assert.throws(()=>renderChangeTest({node:true},{ref:'main'}),/exact source/);
+  assert.throws(()=>renderChangeTest({node:true},{houseReadTokenSecret:'bad secret'}),/secret name/);
+});
+
+test('supplier and source-reader fields reject trailing line separators',()=>{
+  for(const suffix of ['\n','\r','\r\n','\u2028','\u2029']){
+    assert.throws(()=>renderChangeTest({node:true},{ref:'a'.repeat(40)+suffix}),/exact source/);
+    assert.throws(()=>renderChangeTest({node:true},{houseReadTokenSecret:'SOURCE_READER'+suffix}),/secret name/);
+  }
 });

@@ -1,0 +1,22 @@
+{
+  "repository": "red-cup-engineering/continuous-delivery-services-section",
+  "base": "1cdfec7b9802db99328dc13c3eaa3bbd2a600302",
+  "directive": {
+    "repository": "561-group/bare-cedar-fog",
+    "commit": "450f94236938002227dc7912d1326141d78355ac",
+    "blob": "1d7a3ff5545816bae3e8a398fb0767f6269869ed",
+    "section": "method note section4 item4",
+    "rule": "Integrated work is not preserved under archive refs."
+  },
+  "sourceDisposition": "Restore metadata-only implementation and read-only reusable workflow; remove merged-source archive implementation/contract and correct README in place. Original immutable caller remains valid.",
+  "restoredFrom": "21ac0da71b8a140cc01e0a380a6ce4fcd105d275",
+  "restoredPaths": [
+    "src/agent-work.mjs",
+    ".github/workflows/agent-work.yml",
+    "README.md"
+  ],
+  "removedPaths": [
+    "src/preserve-merged-head.mjs",
+    "content/contracts/github-merged-source-custody.json"
+  ]
+}

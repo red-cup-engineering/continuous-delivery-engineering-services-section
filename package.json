@@ -1,5 +1,5 @@
 {
-  "name": "continuous-delivery-services-section",
+  "name": "@red-cup-engineering/continuous-delivery-services-section",
   "private": true,
   "type": "module",
   "scripts": {
