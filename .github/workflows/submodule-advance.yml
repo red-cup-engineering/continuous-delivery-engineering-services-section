@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
-          ref: c02f055712eb6356aad7dce55a6dfd06277e017f
+          ref: cd20b9ff38de741b488854e07d02a18b6d2eee92
           path: .cds
           persist-credentials: false
       - name: keep the engine checkout out of the tree
@@ -48,7 +48,7 @@ jobs:
         id: advance
         run: node .cds/scripts/advance.mjs --branch "$BRANCH" --note "$NOTE"
       - name: open or update the one pull request
-        if: steps.advance.outputs.advanced == 'true'
+        if: always() && steps.advance.outputs.advanced == 'true'
         run: |
           set -eu
           if n=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number') && [ -n "$n" ]; then
