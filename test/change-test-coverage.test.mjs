@@ -148,34 +148,37 @@ test('workflow carries immutable expected coverage through checkout, artifacts a
 
 function shellStep(t, script, extraEnv = {}) {
   const d = temp(t), bin = path.join(d, 'bin'); fs.mkdirSync(bin); fs.cpSync(path.join(root, 'scripts'), path.join(d, 'section/scripts'), { recursive: true });
+  if(extraEnv.CONTROLLER_REF)fs.writeFileSync(path.join(d,'section/scripts/reviewed-source-controllers.json'),JSON.stringify({kind:'guix.reviewed-source-controllers.v1',commits:[extraEnv.CONTROLLER_REF]}));
   const output = path.join(d, 'output'), log = path.join(d, 'requests'); fs.writeFileSync(output, ''); fs.writeFileSync(log, '');
   return { d, bin, output, log, run: () => spawnSync('bash', ['-eo', 'pipefail', '-c', script.replaceAll('${{ github.repository }}', repository)],
     { cwd: d, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: d, GITHUB_OUTPUT: output,
       REQUEST_LOG: log, HOUSE_READ_TOKEN: 'fixture-token', MACHINE: '', MACHINES: JSON.stringify(expected.map((e) => e.machine)), ...extraEnv } }) };
 }
 
-test('the actual discovery shell fails closed on read failures and pins reads to its resolved commit', (t) => {
+test('the actual discovery shell resolves recursive reading through its exact controller and machine commits', (t) => {
   const script = workflow().jobs.machines.steps.find((step) => step.id === 'pins').run;
-  for (const scenario of ['success', 'source-error', 'invalid-source', 'invalid-commit', 'unpinned', 'forced', 'invalid-list']) {
-    const fixture = shellStep(t, script, { SCENARIO: scenario, ...(scenario === 'forced' ? { MACHINE: 'o/machine:snapshot-a', MACHINES: 'invalid' } : {}),
-      ...(scenario === 'invalid-list' ? { MACHINES: '{}' } : {}) });
-    fs.writeFileSync(path.join(fixture.bin, 'curl'), `#!${process.execPath}\n`
-      + `const fs=require('fs'),args=process.argv.slice(2),url=args.find(a=>a.startsWith('https://')),out=args[args.indexOf('-o')+1];\n`
-      + `fs.appendFileSync(process.env.REQUEST_LOG,url+'\\n'); const scenario=process.env.SCENARIO;\n`
-      + `if(url.includes('/commits/HEAD'))fs.writeFileSync(out,JSON.stringify({sha:scenario==='invalid-commit'?'main':'${machineCommit}'}));\n`
-      + `else { if(scenario==='source-error')process.exit(22); fs.writeFileSync(out,scenario==='invalid-source'?'{}':JSON.stringify({repositories:[{repository:scenario==='unpinned'?'o/other':'${repository}',commit:'${commit}'}]})); }\n`, { mode: 0o755 });
-    const result = fixture.run(), output = fs.readFileSync(fixture.output, 'utf8'), calls = fs.readFileSync(fixture.log, 'utf8').trim().split('\n').filter(Boolean);
-    if (['source-error', 'invalid-source', 'invalid-commit', 'invalid-list'].includes(scenario)) {
-      assert.notEqual(result.status, 0, scenario); assert.equal(output, '', scenario);
-      if (scenario === 'invalid-list') assert.equal(calls.length, 0);
-    } else {
-      assert.equal(result.status, 0, result.stderr);
-      assert.match(output, /^machines=/, `${scenario}: ${JSON.stringify(result)}`);
-      const plan = JSON.parse(output.trim().slice('machines='.length));
-      assert.deepEqual(plan, scenario === 'unpinned' ? [] : scenario === 'forced' ? expected.slice(0, 1) : expected);
-      if (scenario === 'forced') assert.equal(calls.length, 1);
-      else assert.ok(calls.filter((url) => url.includes('/contents/')).every((url) => url.endsWith(`?ref=${machineCommit}`)));
-    }
+  const d=temp(t),controller=path.join(d,'controller'),machine=path.join(d,'machine');
+  const actualGit=spawnSync('which',['git'],{encoding:'utf8'}).stdout.trim();
+  const git=(cwd,...args)=>{const r=spawnSync(actualGit,args,{cwd,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
+  for(const directory of [controller,machine]){fs.mkdirSync(directory);git(directory,'init','-q','-b','main');git(directory,'config','user.name','Fixture');git(directory,'config','user.email','fixture@example.invalid');}
+  fs.mkdirSync(path.join(controller,'scripts'));
+  // Fixture controller models the committed-graph reading boundary. Separate
+  // owner integration tests exercise the genuine recursive controller API.
+  fs.writeFileSync(path.join(controller,'scripts/materialize-sources.mjs'), `import fs from 'node:fs';\nif(process.env.SCENARIO==='source-error')process.exit(22);\nconsole.log(process.env.SCENARIO==='invalid-source'?'{}':JSON.stringify(JSON.parse(fs.readFileSync(process.argv[2]+'/reading.json','utf8'))));\n`);
+  git(controller,'add','.');git(controller,'commit','-qm','reviewed controller');const controllerCommit=git(controller,'rev-parse','HEAD');
+  for(const snapshot of ['snapshot-a','snapshot-b']){fs.mkdirSync(path.join(machine,snapshot));fs.writeFileSync(path.join(machine,snapshot,'reading.json'),JSON.stringify(sources()));}
+  git(machine,'add','.');git(machine,'commit','-qm','reviewed machine');const pinned=git(machine,'rev-parse','HEAD');
+  const planExpected=expected.map(entry=>({...entry,machineCommit:pinned,id:idFor(entry.machine,pinned)}));
+  for(const snapshot of ['snapshot-a','snapshot-b'])fs.writeFileSync(path.join(machine,snapshot,'reading.json'),JSON.stringify(sources('o/other')));
+  git(machine,'commit','-qam','moving default branch');
+  for(const scenario of ['success','source-error','invalid-source','invalid-commit','forced','invalid-list']){
+    const fixture=shellStep(t,script,{SCENARIO:scenario,CONTROLLER_REF:controllerCommit,
+      ...(scenario==='forced'?{MACHINE:'o/machine:snapshot-a',MACHINES:'invalid'}:{}),...(scenario==='invalid-list'?{MACHINES:'{}'}:{})});
+    fs.writeFileSync(path.join(fixture.bin,'git'), `#!${process.execPath}\nconst args=process.argv.slice(2).map(a=>a==='https://github.com/o/machine.git'?${JSON.stringify(machine)}:a==='https://github.com/red-cup-engineering/guix-machine-release-service.git'?${JSON.stringify(controller)}:a);if(args.some(a=>a.startsWith('https://')))process.exit(99);const r=require('child_process').spawnSync(${JSON.stringify(actualGit)},args,{stdio:'inherit'});process.exit(r.status??1);\n`,{mode:0o755});
+    fs.writeFileSync(path.join(fixture.bin,'curl'), `#!${process.execPath}\nconst fs=require('fs'),args=process.argv.slice(2),url=args.find(a=>a.startsWith('https://')),out=args[args.indexOf('-o')+1];fs.appendFileSync(process.env.REQUEST_LOG,url+'\\n');if(!url.endsWith('/commits/HEAD'))process.exit(99);fs.writeFileSync(out,JSON.stringify({sha:process.env.SCENARIO==='invalid-commit'?'main':'${pinned}'}));\n`,{mode:0o755});
+    const result=fixture.run(),output=fs.readFileSync(fixture.output,'utf8');
+    if(['source-error','invalid-source','invalid-commit','invalid-list'].includes(scenario)){assert.notEqual(result.status,0,scenario);assert.equal(output,'');}
+    else{assert.equal(result.status,0,result.stderr);assert.deepEqual(JSON.parse(output.trim().slice('machines='.length)),scenario==='forced'?planExpected.slice(0,1):planExpected);}
   }
 });
 
@@ -187,6 +190,8 @@ test('the actual machine checkout uses the discovered commit after the default b
     git(repo, 'config', 'user.name', 'Test'); git(repo, 'config', 'user.email', 'test@example.invalid');
     fs.writeFileSync(path.join(repo, 'README.md'), 'initial'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'initial');
   }
+  const controllerCommit = git(controller, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(controller, 'README.md'), 'moved controller'); git(controller, 'commit', '-qam', 'moved controller');
   fs.mkdirSync(path.join(machine, 'snapshot-a')); fs.writeFileSync(path.join(machine, 'snapshot-a', 'sources.json'), JSON.stringify(sources()));
   git(machine, 'add', '.'); git(machine, 'commit', '-qm', 'discovered'); const pinned = git(machine, 'rev-parse', 'HEAD');
   fs.writeFileSync(path.join(machine, 'snapshot-a', 'sources.json'), JSON.stringify(sources('o/other'))); git(machine, 'commit', '-qam', 'moved');
@@ -195,12 +200,14 @@ test('the actual machine checkout uses the discovered commit after the default b
   for (const name of ['o/machine:snapshot-a', 'o/machine']) {
     const house = path.join(temp(t), 'house'), home = temp(t), envFile = path.join(home, 'env');
     fs.mkdirSync(house);
-    const fixture = shellStep(t, script, { MACHINE: name, MACHINE_COMMIT: pinned, CONTROLLER_REF: 'main', HOUSE: house, HOME: home, GITHUB_ENV: envFile });
+    const fixture = shellStep(t, script, { MACHINE: name, MACHINE_COMMIT: pinned, CONTROLLER_REF: controllerCommit, HOUSE: house, HOME: home, GITHUB_ENV: envFile });
     fs.writeFileSync(path.join(fixture.bin, 'git'), `#!${process.execPath}\n`
       + `const args=process.argv.slice(2).map(a=>a==='https://github.com/o/machine.git'?${JSON.stringify(machine)}:a==='https://github.com/red-cup-engineering/guix-machine-release-service.git'?${JSON.stringify(controller)}:a);\n`
       + `if(args.some(a=>a.startsWith('https://')))process.exit(99);\n`
       + `const r=require('child_process').spawnSync(${JSON.stringify(actualGit)},args,{stdio:'inherit'}); process.exit(r.status??1);\n`, { mode: 0o755 });
     const result = fixture.run(); assert.equal(result.status, 0, result.stderr);
+    assert.equal(git(path.join(house, 'controller'), 'rev-parse', 'HEAD'), controllerCommit);
+    assert.equal(fs.readFileSync(path.join(house, 'controller/README.md'), 'utf8'), 'initial');
     assert.equal(git(path.join(house, 'machine-repository'), 'rev-parse', 'HEAD'), pinned);
     const checked = JSON.parse(fs.readFileSync(path.join(house, 'machine-repository/snapshot-a/sources.json'), 'utf8'));
     assert.equal(checked.repositories[0].repository, repository);
@@ -247,7 +254,7 @@ test('an older run cannot overwrite a comment for a newer pull-request head', as
       if (method !== 'GET') { writes.push([method, url]); return { html_url: 'published' }; }
       reads.push(url);
       if (url.includes('/pulls/')) return { head: { sha: current } };
-      return existing ? [{ id: 9, body: '<!-- continuous-delivery-services-section: change-test -->' }] : [];
+      return existing ? [{ id: 9, user: {login:'github-actions[bot]'}, body: '<!-- continuous-delivery-services-section: change-test -->' }] : [];
     };
     const result = upsertComment({ repo: repository, pr: 1, body: 'report', request, commit });
     if (current === commit) { assert.equal(await result, 'published'); assert.equal(writes.length, 1); }

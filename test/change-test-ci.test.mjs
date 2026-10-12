@@ -8,6 +8,18 @@ import { MARKER, overallVerdict, readResults, renderComment, upsertComment } fro
 
 const sources = (...repositories) => ({ repositories: repositories.map((repository) => ({ repository, commit: 'a'.repeat(40) })) });
 
+test('a foreign marker cannot make the workflow overwrite another author\'s comment',async()=>{
+  for(const user of [undefined,{login:'contributor'},{login:'github-actions'},{login:'another-bot[bot]'}]){
+    const writes=[];
+    const request=async(method,url,body)=>{
+      if(method==='GET')return [{id:7,user,body:MARKER+'\nforeign content'}];
+      writes.push([method,url,body]);return {html_url:'https://example.invalid/report'};
+    };
+    await upsertComment({repo:'o/r',pr:1,body:MARKER+'\nreport',request});
+    assert.deepEqual(writes.map(([method,url])=>[method,url]),[['POST','/repos/o/r/issues/1/comments']]);
+  }
+});
+
 test('a change is tested against every machine that pins its repository, and only those', () => {
   const readings = {
     'emsenn/cold-red-gate': sources('red-cup-engineering/computer-data-services-section', 'red-cup-engineering/feltos'),
@@ -69,7 +81,7 @@ test('the comment is updated in place when it exists and created once when it do
   };
   const others = Array.from({ length: 100 }, (_, i) => ({ id: i, body: 'someone else' }));
   // The marked comment on the second page is found and patched; nothing new is posted.
-  assert.equal(await upsertComment({ repo: 'o/r', pr: 7, body: `${MARKER}\nnew`, request: requestWith([others, [{ id: 555, body: `${MARKER}\nold` }]]) }),
+  assert.equal(await upsertComment({ repo: 'o/r', pr: 7, body: `${MARKER}\nnew`, request: requestWith([others, [{ id: 555, user: {login:'github-actions[bot]'}, body: `${MARKER}\nold` }]]) }),
     'PATCH /repos/o/r/issues/comments/555');
   assert.ok(!calls.some(([method]) => method === 'POST'));
   calls.length = 0;

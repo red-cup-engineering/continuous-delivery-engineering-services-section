@@ -10,6 +10,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isCommit, machineName, validatePlan } from './pinning-machines.mjs';
 
+export const REPORT_AUTHOR = 'github-actions[bot]';
 export const MARKER = '<!-- continuous-delivery-services-section: change-test -->';
 const RANK = { regression: 4, 'not-composed': 3, incomplete: 2, 'not-run': 1, 'no-regression': 0 };
 
@@ -157,7 +158,7 @@ export async function upsertComment({ repo, pr, body, request, commit }) {
   for (let page = 1; ; page += 1) {
     const comments = await request('GET', `/repos/${repo}/issues/${pr}/comments?per_page=100&page=${page}`);
     if (!comments?.length) break;
-    const mine = comments.find((c) => typeof c.body === 'string' && c.body.startsWith(MARKER));
+    const mine = comments.find((c) => c.user?.login === REPORT_AUTHOR && typeof c.body === 'string' && c.body.startsWith(MARKER));
     if (mine) return write('PATCH', `/repos/${repo}/issues/comments/${mine.id}`);
     if (comments.length < 100) break;
   }

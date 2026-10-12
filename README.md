@@ -126,3 +126,51 @@ jobs:
     uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
     secrets: { house-read-token: "${{ secrets.HOUSE_READ_TOKEN }}" }
 ```
+
+### Source-only hosted change receiving
+
+The change-test workflow reads the reviewed controller's recursive committed
+Gitlinks, rather than legacy `sources.json` pins. Its preparation step calls
+`materialize-sources.mjs --export-change`: a complete, independent Git source
+carrier and inventory, with the preparation digest retained outside the carrier.
+The controller refuses machine-definition or mounted-topology changes that need
+separate head/base graph receiving. Publication-purpose raw sources remain on
+their existing bounded publication route.
+
+`hosted-change.mjs` consumes that carrier through the controller's actual
+`prepareExportedComparison` and `test-change.mjs` interfaces. Only the trusted
+helper runs on the acquisition host. The candidate process is a non-root Docker
+container with read-only controller/helper/carrier inputs, fresh writable result
+state, no network, no capabilities, no Docker socket or credential-bearing host
+mounts, and explicit PID, memory, CPU and time bounds. Controller local Git config
+is allowlisted before mounting; host credential environment is never forwarded.
+A returned verdict must match the prepared machine and changed commit identities.
+Candidate processes can write their comparison results; this is not independent
+adversarial test-result integrity or a SLSA claim.
+
+No runtime image is admitted by this change. The existing delivery owner must
+review a `scripts/runtime-bindings/<controller-commit>.json` binding with kind
+`guix.hosted-runtime.v1`, matching `controllerCommit`, source contract
+`guix.change-source-carriers.v1`, an immutable owner image digest, a retained
+`qualificationSha256`, and positive `uid`/`gid` matching the runner. The image must
+already be present: the helper never pulls one. Qualification must establish the
+controller's actual pinned Guix/channel/toolchain, offline frozen dependency
+supply, and container execution with the real machine closure. Merely filling in
+these fields is not qualification. Without that reviewed provider, the workflow
+refuses before container execution. This source proposal does not add credentials,
+image grants, runner capacity, deployment targets or runtime acceptance.
+
+The controller's 512 MiB/100,000-file carrier limits bound accepted output after
+acquisition; they are not a peak-disk or network acquisition quota. Source bytes
+plus a separately retained digest are source custody evidence, not build
+provenance or installed receiving. The current machine repositories still require
+their owner-reviewed migration to the recursive formation contract before this
+new controller can receive them. Preparation and container execution currently
+share a hosted runner; splitting acquisition and test jobs requires authenticated
+artifact transport preserving file modes and independently bound digests.
+
+Source preparation is separately allowlisted by immutable controller revision in
+`scripts/reviewed-source-controllers.json` before any controller code receives the
+source-reader environment. Current source-only supplier is Guix PR107 at
+`1d6f1ae842424fec43be9a892c8d5fc4296174d7` (47 source-level checks independently replayed).
+This admission does not admit a runtime image or establish machine receiving.
