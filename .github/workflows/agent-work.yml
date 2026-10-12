@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
-          ref: eeed441ba1e6b7fb8e5b1783b6d5972ea41cd508
+          ref: c79c67ad02c83f2230f180e0fab4822976455856
           sparse-checkout: src/agent-work.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
