@@ -8,9 +8,9 @@ on:
   workflow_call:
     inputs:
       machine:
-        description: 'Machine snapshot repository whose sources.json pins this repository'
+        description: 'The repository (OWNER/REPO) holding the machine definition (machine.json) that mounts this repository by gitlink'
         type: string
-        default: emsenn/cold-red-gate
+        required: true
       controller-ref:
         description: 'Ref of red-cup-engineering/guix-machine-release-service to test with'
         type: string
