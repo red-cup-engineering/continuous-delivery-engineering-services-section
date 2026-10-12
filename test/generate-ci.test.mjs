@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { detect, generate, renderCi, renderSync, REUSABLE } from '../generator/generate-ci.mjs';
+import { detect, generate, renderCi, renderSync, REUSABLE, REF } from '../generator/generate-ci.mjs';
 import { openPullRequest } from '../generator/open-pr.mjs';
 
 // Fixture repositories are built from a map of path -> content.
@@ -30,7 +30,7 @@ test('package.json selects node-package, also when nested; node_modules is ignor
 test('lakefile selects lean with its working directory', () => {
   assert.deepEqual(detect(fixture({ 'lakefile.lean': '' })).lean, ['.']);
   const y = renderCi(detect(fixture({ 'proofs/lakefile.toml': '' })));
-  assert.match(y, /lean-proofs:\n    uses: .*\/lean\.yml@main\n    with:\n      working-directory: proofs/);
+  assert.match(y, /lean-proofs:\n    uses: .*\/lean\.yml@[a-f0-9]{40}\n    with:\n      working-directory: proofs/);
 });
 
 test('relative $schema selects content; remote $schema does not', () => {
@@ -48,7 +48,7 @@ test('relative markdown links select content; urls, anchors and fenced code do n
 test('all three selected: short caller naming each reusable workflow', () => {
   const r = generate(fixture({ 'package.json': '{}', 'lakefile.lean': '', 'README.md': '[d](d.md)' }));
   const y = r.files['.github/workflows/ci.yml'];
-  for (const w of ['node-package', 'lean', 'content']) assert.ok(y.includes(`${REUSABLE}/${w}.yml@main`), w);
+  for (const w of ['node-package', 'lean', 'content']) assert.ok(y.includes(`${REUSABLE}/${w}.yml@${REF}`), w);
   assert.ok(y.split('\n').length < 20);
   assert.match(y, /on: \[push, pull_request\]/);
 });
@@ -67,8 +67,8 @@ test('handwritten workflows are reported against the covering reusable workflow'
 test('repository with submodules gets a sync caller; a parent adds the upward notify', () => {
   const r = generate(fixture({ '.gitmodules': '' }), { parent: 'o/parent' });
   const y = r.files['.github/workflows/sync.yml'];
-  assert.match(y, /superrepo-advance\.yml@main/);
-  assert.match(y, /notify-parent\.yml@main/);
+  assert.match(y, /superrepo-advance\.yml@[a-f0-9]{40}/);
+  assert.match(y, /notify-parent\.yml@[a-f0-9]{40}/);
   assert.match(y, /parent: o\/parent/);
   assert.equal(renderSync({ submodules: false }), null);
 });

@@ -1,0 +1,139 @@
+name: Publish package
+# Shared publication implementation. Publish one workspace package to registry.561.group when a tag names it. The tag is
+# publish/<package name without its scope>/v<version>, for example
+# publish/activitypub-services-section/v0.8.2. The job checks out every mounted section (so the
+# pnpm workspace is whole and each workspace: dependency resolves to the version in the workspace),
+# finds the package by name, refuses unless the tag's version is the package's version, refuses a
+# package whose manifest declares a SQLite module (design rule DRC-3: the rule is not weakened by
+# publishing), and publishes with the repository secret REGISTRY_561_GROUP_TOKEN. The token is read
+# only by the publish step; npm configuration holds environment placeholders, never credential bytes.
+# A missing credential fails visibly; a version already on the registry is a no-op. Scoped tags
+# publish/<organization>/<name>/v<version> select the manifest name; legacy unscoped tags
+# must select exactly one package. The exact tag source must be an ancestor of the default branch.
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '["ubuntu-latest"]'
+    secrets:
+      registry-token:
+        required: false
+      registry-user:
+        required: false
+      registry-password:
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    # The house runs CI on its own machines (GitHub-hosted runners are not available to this repository).
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 45
+    env:
+      REGISTRY: https://registry.561.group
+    steps:
+      - name: Name the package and version from the tag
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^publish/(([a-z0-9][a-z0-9._-]*)/)?([a-z0-9][a-z0-9._-]*)/v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] \
+            || { echo "tag $GITHUB_REF_NAME is not publish/<name>/v<version>" >&2; exit 1; }
+          tag_scope="${BASH_REMATCH[2]}"
+          tag_name="${BASH_REMATCH[3]}"
+          tag_version="${BASH_REMATCH[4]}"
+          echo "PACKAGE_SELECTOR=${tag_scope:+@$tag_scope/}$tag_name" >> "$GITHUB_ENV"
+          echo "VERSION=$tag_version" >> "$GITHUB_ENV"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.ref }}
+          submodules: false
+          filter: blob:none
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The tag source has been received into the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --no-tags origin "refs/heads/$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD
+      - name: Check out the exact mounted supplier commits
+        run: |
+          if [ -f .gitmodules ]; then
+            git submodule deinit --all --force
+            git config -f .gitmodules --get-regexp '\.path$' | while read -r _ path; do
+              if [ -d ".git/modules/$path" ] && [ ! -f ".git/modules/$path/HEAD" ]; then rm -rf ".git/modules/$path"; fi
+            done
+            git -c protocol.file.allow=never submodule update --init --checkout --recursive --jobs 4
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          ref: b5174c711a907de629979ebcf39e1309e20f31d9
+          path: .publication-engine
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Find the package and check it may be published
+        run: |
+          set -euo pipefail
+          pnpm_version=$(node -p 'require("./package.json").packageManager.replace(/^pnpm@/, "")')
+          echo "PNPM=pnpm@${pnpm_version}" >> "$GITHUB_ENV"
+          npm exec --yes --package="pnpm@${pnpm_version}" -- pnpm install --frozen-lockfile --ignore-scripts
+          npm exec --yes --package="pnpm@${pnpm_version}" -- pnpm -r list --depth -1 --json > "$RUNNER_TEMP/workspace.json"
+          node -e '
+            const fs = require("fs");
+            const found = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/workspace.json", "utf8")).filter((p) => process.env.PACKAGE_SELECTOR.startsWith("@") ? p.name === process.env.PACKAGE_SELECTOR : p.name?.split("/").at(-1) === process.env.PACKAGE_SELECTOR);
+            if (found.length !== 1) { console.error(`expected exactly one workspace package named ${process.env.PACKAGE_SELECTOR}, found ${found.length}`); process.exit(1); }
+            const [pkg] = found;
+            if (!/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/.test(pkg.name)) { console.error("house publication requires an owning organization scope"); process.exit(1); }
+            fs.appendFileSync(process.env.GITHUB_ENV, `PACKAGE=${pkg.name}\nSCOPE=${pkg.name.split("/")[0]}\n`);
+            if (pkg.version !== process.env.VERSION) { console.error(`tag says ${process.env.VERSION}, the package at ${pkg.path} says ${pkg.version}`); process.exit(1); }
+            const manifest = JSON.parse(fs.readFileSync(pkg.path + "/package.json", "utf8"));
+            if (manifest.private) { console.error("the package is private"); process.exit(1); }
+            const declared = Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies, ...manifest.devDependencies });
+            const sqlite = declared.filter((n) => /(^|\/)(sqlite|better-sqlite3|sqlite3|node-sqlite|sql\.js)|[-/]sqlite$/u.test(n));
+            if (sqlite.length) { console.error(`design rule DRC-3: refusing to publish a manifest that declares SQLite modules: ${sqlite.join(", ")}`); process.exit(1); }
+            fs.appendFileSync(process.env.GITHUB_ENV, `PACKAGE_DIR=${pkg.path}\n`);
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Publishing \`${pkg.name}@${process.env.VERSION}\` from \`${pkg.path}\` to ${process.env.REGISTRY}\n`);'
+      - name: Pack the selected source once
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-package.tgz"
+          npm exec --yes --package="$PNPM" -- pnpm --dir "$PACKAGE_DIR" pack --out "$archive"
+          echo "PACKAGE_ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - name: Publish to the registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.registry-token }}
+          REGISTRY_USER: ${{ secrets.registry-user }}
+          REGISTRY_PASSWORD: ${{ secrets.registry-password }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REGISTRY_TOKEN:-}" ]; then
+            auth_field=_authToken
+            export REGISTRY_AUTH_KIND=Bearer
+            export REGISTRY_AUTH="$REGISTRY_TOKEN"
+          elif [ -n "${REGISTRY_USER:-}" ] && [ -n "${REGISTRY_PASSWORD:-}" ]; then
+            auth_field=_auth
+            export REGISTRY_AUTH_KIND=Basic
+            export REGISTRY_AUTH="$(printf '%s:%s' "$REGISTRY_USER" "$REGISTRY_PASSWORD" | base64 -w0)"
+          else
+            echo "credential gap: publication needs a registry token or its user and password" >&2
+            exit 1
+          fi
+          host="${REGISTRY#https://}"
+          npmrc="$RUNNER_TEMP/publish.npmrc"
+          umask 077
+          trap 'rm -f "$npmrc"' EXIT
+          printf '%s\n' "//${host}/:${auth_field}=\${REGISTRY_AUTH}" "${SCOPE}:registry=${REGISTRY}" > "$npmrc"
+          receipt="$(node .publication-engine/scripts/receive-registry-package.mjs before)"
+          if [ "$(printf '%s' "$receipt" | node -e 'let s=""; process.stdin.on("data", c => s+=c).on("end", () => console.log(JSON.parse(s).state))')" = received ]; then
+            echo "$receipt" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          NPM_CONFIG_USERCONFIG="$npmrc" npm publish "$PACKAGE_ARCHIVE" --access restricted --registry "$REGISTRY"
+          node .publication-engine/scripts/receive-registry-package.mjs after >> "$GITHUB_STEP_SUMMARY"
