@@ -127,3 +127,9 @@ jobs:
 ```
 
 The example binds the received workflow commit `9941b91847d4c5e7947fb044faeb4e77476dc17d`. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
+
+## Publication
+
+`publish-package.yml` owns registry publication for hiring repositories. The caller supplies runner labels and a registry token or registry user/password; authentication configuration contains environment placeholders. Tags are `publish/<organization>/<package>/v<declared version>`; a legacy `publish/<package>/v<declared version>` remains valid only when it selects exactly one manifest. The declared manifest supplies the scope. The tag source must already be in the default branch's history; private packages and the existing SQLite refusal remain intact.
+
+The package is packed once. `receive-registry-package.mjs` compares its digest with authoritative registry metadata before and after publication. An occupied version with different bytes is a refusal, and network/authentication errors cannot be reported as absence or receipt. Machine installation and useful operating receiving remain separate.
