@@ -10,6 +10,7 @@ name: Publish package
 # A missing credential fails visibly; a version already on the registry is a no-op. Scoped tags
 # publish/<organization>/<name>/v<version> select the manifest name; legacy unscoped tags
 # must select exactly one package. The exact tag source must be an ancestor of the default branch.
+# Packed-artifact receiving is hired through the declared bin of the mounted npm publication owner.
 on:
   workflow_call:
     inputs:
@@ -68,12 +69,6 @@ jobs:
             done
             git -c protocol.file.allow=never submodule update --init --checkout --recursive --jobs 4
           fi
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          repository: red-cup-engineering/continuous-delivery-services-section
-          ref: b5174c711a907de629979ebcf39e1309e20f31d9
-          path: .publication-engine
-          persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
@@ -90,6 +85,16 @@ jobs:
             const found = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/workspace.json", "utf8")).filter((p) => process.env.PACKAGE_SELECTOR.startsWith("@") ? p.name === process.env.PACKAGE_SELECTOR : p.name?.split("/").at(-1) === process.env.PACKAGE_SELECTOR);
             if (found.length !== 1) { console.error(`expected exactly one workspace package named ${process.env.PACKAGE_SELECTOR}, found ${found.length}`); process.exit(1); }
             const [pkg] = found;
+            const owners = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/workspace.json", "utf8")).filter((p) => p.name === "@red-cup-engineering/npm-workspace-publication-service");
+            if (owners.length !== 1) { console.error(`expected one mounted npm publication owner, found ${owners.length}`); process.exit(1); }
+            const owner = owners[0];
+            const ownerManifest = JSON.parse(fs.readFileSync(owner.path + "/package.json", "utf8"));
+            const receiver = ownerManifest.bin?.["receive-packed-registry-artifact"];
+            const path = require("path");
+            if (typeof receiver !== "string" || path.isAbsolute(receiver) || path.relative(owner.path, path.resolve(owner.path, receiver)).startsWith("..")) { console.error("mounted publication owner has not declared its artifact receiver"); process.exit(1); }
+            const receiverPath = path.resolve(owner.path, receiver);
+            if (!fs.existsSync(receiverPath)) { console.error("declared publication receiver is absent"); process.exit(1); }
+            fs.appendFileSync(process.env.GITHUB_ENV, `PUBLICATION_RECEIVER=${receiverPath}\n`);
             if (!/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/.test(pkg.name)) { console.error("house publication requires an owning organization scope"); process.exit(1); }
             fs.appendFileSync(process.env.GITHUB_ENV, `PACKAGE=${pkg.name}\nSCOPE=${pkg.name.split("/")[0]}\n`);
             if (pkg.version !== process.env.VERSION) { console.error(`tag says ${process.env.VERSION}, the package at ${pkg.path} says ${pkg.version}`); process.exit(1); }
@@ -130,10 +135,10 @@ jobs:
           umask 077
           trap 'rm -f "$npmrc"' EXIT
           printf '%s\n' "//${host}/:${auth_field}=\${REGISTRY_AUTH}" "${SCOPE}:registry=${REGISTRY}" > "$npmrc"
-          receipt="$(node .publication-engine/scripts/receive-registry-package.mjs before)"
+          receipt="$(NPM_CONFIG_USERCONFIG="$npmrc" node "$PUBLICATION_RECEIVER" before)"
           if [ "$(printf '%s' "$receipt" | node -e 'let s=""; process.stdin.on("data", c => s+=c).on("end", () => console.log(JSON.parse(s).state))')" = received ]; then
             echo "$receipt" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           NPM_CONFIG_USERCONFIG="$npmrc" npm publish "$PACKAGE_ARCHIVE" --access restricted --registry "$REGISTRY"
-          node .publication-engine/scripts/receive-registry-package.mjs after >> "$GITHUB_STEP_SUMMARY"
+          NPM_CONFIG_USERCONFIG="$npmrc" node "$PUBLICATION_RECEIVER" after >> "$GITHUB_STEP_SUMMARY"
