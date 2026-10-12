@@ -94,7 +94,7 @@ jobs:
             if (typeof receiver !== "string" || path.isAbsolute(receiver) || path.relative(owner.path, path.resolve(owner.path, receiver)).startsWith("..")) { console.error("mounted publication owner has not declared its artifact receiver"); process.exit(1); }
             const receiverPath = path.resolve(owner.path, receiver);
             if (!fs.existsSync(receiverPath)) { console.error("declared publication receiver is absent"); process.exit(1); }
-            fs.appendFileSync(process.env.GITHUB_ENV, `PUBLICATION_RECEIVER=${receiverPath}\n`);
+            fs.appendFileSync(process.env.GITHUB_ENV, `PUBLICATION_RECEIVER=${receiverPath}\nPUBLICATION_OWNER_DIR=${owner.path}\n`);
             if (!/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/.test(pkg.name)) { console.error("house publication requires an owning organization scope"); process.exit(1); }
             fs.appendFileSync(process.env.GITHUB_ENV, `PACKAGE=${pkg.name}\nSCOPE=${pkg.name.split("/")[0]}\n`);
             if (pkg.version !== process.env.VERSION) { console.error(`tag says ${process.env.VERSION}, the package at ${pkg.path} says ${pkg.version}`); process.exit(1); }
@@ -140,5 +140,12 @@ jobs:
             echo "$receipt" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          NPM_CONFIG_USERCONFIG="$npmrc" npm publish "$PACKAGE_ARCHIVE" --access restricted --registry "$REGISTRY"
+          (
+            cd "$PUBLICATION_OWNER_DIR"
+            NPM_CONFIG_USERCONFIG="$npmrc" node --input-type=module -e '
+              import { execFileSync } from "node:child_process";
+              import { npmPublicationArguments } from "@red-cup-engineering/npm-workspace-publication-service/npm-publication-command";
+              const arguments_ = npmPublicationArguments({ name: process.env.PACKAGE, version: process.env.VERSION }, process.env.REGISTRY);
+              execFileSync("npm", [arguments_[0], process.env.PACKAGE_ARCHIVE, ...arguments_.slice(1)], { stdio: "inherit", env: process.env });'
+          )
           NPM_CONFIG_USERCONFIG="$npmrc" node "$PUBLICATION_RECEIVER" after >> "$GITHUB_STEP_SUMMARY"
