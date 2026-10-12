@@ -93,3 +93,7 @@ test('pull request by git-data API extends an existing branch without force', as
   assert.deepEqual(calls.find(c => c[1].endsWith('/git/commits') && c[0] === 'POST')[2].parents, ['b1']);
   assert.ok(!calls.some(c => c[1].endsWith('/git/refs') && c[0] === 'POST'));
 });
+
+test('current machine-neutral generator does not assign a package to implicit machines',()=>{
+  assert.equal(generate(fixture({'package.json':'{}'})).files['.github/workflows/change-test.yml'],undefined);
+});
