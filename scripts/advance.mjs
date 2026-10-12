@@ -58,7 +58,9 @@ export function readEntries(cwd, { head, status }) {
 // Every contributor's history is retained, including prior bot commits.
 function prepare(cwd, { branch, remote = 'origin' }) {
   git(cwd, 'check-ref-format', '--branch', branch);
-  if (git(cwd, 'diff', '--name-only') || git(cwd, 'diff', '--cached', '--name-only')) throw new Error('pin advance requires a clean checkout and index');
+  // Supplier checkouts need not be materialized: this operation owns parent
+  // gitlinks, never the supplier's worktree. Staged gitlinks still count as dirt.
+  if (git(cwd, 'diff', '--ignore-submodules=all', '--name-only') || git(cwd, 'diff', '--cached', '--name-only')) throw new Error('pin advance requires clean parent files and index');
   const base = git(cwd, 'rev-parse', 'HEAD');
   git(cwd, 'config', 'user.name', 'continuous-delivery-services-section');
   git(cwd, 'config', 'user.email', BOT_EMAIL);
@@ -97,7 +99,13 @@ export function run(cwd, { branch, note = '', head, status, remote }) {
   const body = renderBody(p, note);
   const bodyFile = path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'advance-body.md'));
   fs.writeFileSync(bodyFile, body);
-  if (!p.advance.length) return { result: 'nothing to advance', diverged: p.diverged, body };
+  if (!p.advance.length) {
+    if (prepared.remoteSha && git(cwd, 'rev-parse', 'HEAD') !== prepared.remoteSha) {
+      git(cwd, 'push', remote || 'origin', `HEAD:refs/heads/${branch}`);
+      return { result: 'advanced', pushed: true, foreign: prepared.foreign, diverged: p.diverged, body, bodyFile };
+    }
+    return { result: 'nothing to advance', diverged: p.diverged, body };
+  }
   return { result: 'advanced', ...publish(cwd, { branch, advance: p.advance, remote, prepared }), diverged: p.diverged, body, bodyFile };
 }
 
