@@ -91,6 +91,14 @@ export function verifyGeneratedTransformation(proposal, sourceTree, receivedTree
   return true;
 }
 
+/** Large owners use the same complete transformation contract through shared Git frames. */
+export async function verifyGeneratedTreeFrames(proposal,sourceTree,targetTree,readTree,{proveTreePatch}={}) {
+  const prove=proveTreePatch??(await import('@red-cup-engineering/git-services-section/source-tree-patch')).proveSourceTreePatch;
+  return prove({sourceTree,targetTree,readTree,changes:proposal.outputs.map(output=>({
+    path:output.path,mode:output.mode,type:'blob',sha:output.blob,
+  }))});
+}
+
 /** Receive a configured no-billing runner before proposing workflow callers. */
 export async function receiveRunnerSelection({repo,runsOn,request,repositoryRecord}) {
   if(typeof repo!=='string'||!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo)
@@ -117,7 +125,7 @@ export async function receiveRunnerSelection({repo,runsOn,request,repositoryReco
  * rejects a non-fast-forward race. Lost mutation replies are reconciled at the
  * original ref/PR. A repeat after restart is identified by its durable commit. */
 export async function openPullRequest({ repo, files, sourceCommit, inputs, token, runsOn, branch = 'ci/caller-generator',
-  title = 'Receive generated source', request = githubRequest(token) }) {
+  title = 'Receive generated source', request = githubRequest(token), proveTreePatch, deriveTreePatch }) {
   const proposal = generatedSource({ repo, branch, sourceCommit, inputs, files });
   const prefix = `/repos/${repo}`;
   const repository = required(await request('GET', prefix), 'source repository');
@@ -135,8 +143,22 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
   };
   const parent = required(await request('GET', `${prefix}/git/commits/${sourceCommit}`), 'generation source commit');
   if (parent.sha !== sourceCommit || !sha(parent.tree?.sha)) fail('wrong-source', 'generation source commit differs');
-  const before = entries(await request('GET', `${prefix}/git/trees/${parent.tree.sha}?recursive=1`));
-  const expected = expectedTree(proposal, before);
+  const recursive = await request('GET', `${prefix}/git/trees/${parent.tree.sha}?recursive=1`);
+  const framed = recursive?.truncated===true;
+  const before = framed ? null : entries(recursive);
+  const expected = framed ? null : expectedTree(proposal, before);
+  const treeFrames=new Map();
+  const readFrame=async sha=>{
+    if(!treeFrames.has(sha))treeFrames.set(sha,required(await request('GET',`${prefix}/git/trees/${sha}`),'immediate source tree'));
+    return treeFrames.get(sha);
+  };
+  const framePlan=framed?(deriveTreePatch??(await import('@red-cup-engineering/git-services-section/source-tree-patch')).deriveSourceTreePatch):null;
+  const plan=framed?await framePlan({sourceTree:parent.tree.sha,readTree:readFrame,
+    changes:proposal.outputs.map(output=>({path:output.path,mode:output.mode,type:'blob',sha:output.blob}))}):null;
+  const verifyTree=async sha=>framed
+    ? verifyGeneratedTreeFrames(proposal,parent.tree.sha,sha,readFrame,{proveTreePatch})
+    : sameTree(expected,entries(await request('GET',`${prefix}/git/trees/${sha}?recursive=1`)))
+      || fail('output-mismatch','source tree differs from the complete generated transformation');
   const head = await readHead();
   if (head === null) {
     const current = required(await request('GET', `${prefix}/git/ref/heads/${base}`), 'default source ref');
@@ -146,19 +168,20 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
   const receiveCommit = async commit => {
     const observed = required(await request('GET', `${prefix}/git/commits/${commit}`), 'proposed commit');
     if (observed.sha !== commit || observed.parents?.length !== 1 || observed.parents[0].sha !== sourceCommit || !observed.message?.split('\n').includes(marker)) fail('stale-head', 'source review branch moved; regenerate from its exact current head');
-    if (!sameTree(expected, entries(await request('GET', `${prefix}/git/trees/${observed.tree.sha}?recursive=1`)))) fail('output-mismatch', 'published source tree differs from the complete generated transformation');
+    await verifyTree(observed.tree.sha);
     return observed.tree.sha;
   };
   let commit, tree;
   if (head !== null && head !== sourceCommit) {
     commit = head; tree = await receiveCommit(commit);
-  } else if (sameTree(before, expected)) {
+  } else if (framed ? plan.targetTree===parent.tree.sha : sameTree(before, expected)) {
     return { status: 'unchanged', proposal, commit: sourceCommit, tree: parent.tree.sha, pullRequest: null };
   } else {
     const createdTree = required(await request('POST', `${prefix}/git/trees`, { base_tree: parent.tree.sha,
       tree: proposal.outputs.map(output => ({ path: output.path, mode: output.mode, type: 'blob', content: files[output.path] })) }), 'generated source tree');
     tree = createdTree.sha;
-    if (!sha(tree) || !sameTree(expected, entries(await request('GET', `${prefix}/git/trees/${tree}?recursive=1`)))) fail('output-mismatch', 'created tree differs from the complete generated transformation');
+    if (!sha(tree))fail('output-mismatch','created tree identity is unavailable');
+    await verifyTree(tree);
     const created = required(await request('POST', `${prefix}/git/commits`, {
       message: `${title}\n\n${marker}\n${JSON.stringify(proposal)}`, tree, parents: [sourceCommit],
     }), 'generated source commit');

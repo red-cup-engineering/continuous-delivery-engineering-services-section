@@ -225,11 +225,11 @@ export function verifyGeneratedCaller({ root, receiptCommit, ...options }) {
 
 // The same producer is used for first receiving and later byte-parity checking.
 // It does not need a model, a workflow permission change or a new service.
-export async function receiveGeneratedCaller({ root, repo, token, request, branch, ...options }) {
+export async function receiveGeneratedCaller({ root, repo, token, request, branch, proveTreePatch, deriveTreePatch, ...options }) {
   const produced = generateFromSource(root, options);
   if (!Object.keys(produced.files).length) return { status: 'empty', ...produced };
   const inputs = generatorInputs();
-  const result = await openPullRequest({ repo, branch, files: produced.files, sourceCommit: produced.sourceCommit, inputs, token, request, runsOn: options.runsOn,
+  const result = await openPullRequest({ repo, branch, files: produced.files, sourceCommit: produced.sourceCommit, inputs, token, request, runsOn: options.runsOn,proveTreePatch,deriveTreePatch,
     title: 'Call the continuous-delivery services section' });
   // Exercise the receiving contract on the actual producer, not an unused helper.
   const regenerated = generateFromSource(root, options);
