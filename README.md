@@ -1,7 +1,16 @@
 # continuous-delivery-services-section
 
-The one hired CI/CD section. Repos do not hand-write CI; they call these workflows.
-Public so private repos in any org can call it. Callers pay their own minutes and use their own secrets.
+The one hired CI/CD section. Repos consume its reusable workflows instead of duplicating CI implementations. This source is public so that private repositories in the Group's different GitHub organizations can reference exact commits.
+
+## Runner custody: normative Group default (2026-10-13)
+
+**Use our own machines for ordinary Group CI, change receiving, branch intake, and releases. Do not select GitHub-hosted runners as an implicit fallback.** The existing caller generator requires a `self-hosted` label and an explicit machine or pool identity. For example, `["self-hosted","Linux","X64","bare-cedar-fog"]` names a machine observed completing jobs for `561-group`. A different organization or repository may not have permission to use it.
+
+A callable workflow does **not** provide the runner: its *owning repository* must have a registered, authorized, online runner (or access to an organization/enterprise runner group) with every requested label. A runner registered in the `561-group` organization is **not** automatically available to `causeway-services`, `red-cup-engineering`, `coesite-operations`, or `lenticule-science`. Runner provisioning is an Operations/host-custody responsibility; do not create a made-up machine catalogue or hand-wave access by copying labels. No repo should silently spend GitHub-hosted minutes when house capacity is absent. If a house runner is not reachable, say `runner-capacity-unreceived`, retain the work, and repair the actual organization registration, runner group permissions, or machine service.
+
+**Audit existing callers:** `node generator/generate-ci.mjs /path/to/checkout --audit-runners` prints all static routing defects and exits nonzero; run it on the actual source checkout with this section's pinned Node dependencies installed. `--public-repo` permits intentional public-repository GitHub-hosted jobs to be reported as exceptions. GitHub-hosted jobs in public repositories are free but should be used to isolate untrusted public contributions; **never run untrusted fork PR code on a persistent privileged house machine**. Audit proof is not a running-job receipt. Independently check the actual job's `runner_id`, labels, steps, result, and customer receiving. GitHub-hosted workflow billing and self-hosted machine operating costs are different expense classes.
+
+`Guix` defines the installed machine/release; the registry at `registry.561.group` distributes admitted build inputs. GitHub only coordinates source and execution requests. Correct a routing policy here and in the generated/handwritten callers, not by adding a separate per-repository runner manager.
 
 Caller snippet (`.github/workflows/ci.yml`):
 
@@ -10,7 +19,9 @@ name: ci
 on: [push, pull_request]
 jobs:
   ci:
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/node-package.yml@main
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/node-package.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
+    with:
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
 ```
 
 Workflows (swap the file name):
@@ -50,8 +61,10 @@ Lean with a directory:
 ```yaml
 jobs:
   ci:
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/lean.yml@main
-    with: { working-directory: . }
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/lean.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
+    with:
+      working-directory: .
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
 ```
 
 ## Caller generator
@@ -117,8 +130,10 @@ name: change-test
 on: pull_request
 jobs:
   change-test:
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@main
-    with: { machine: OWNER/MACHINE-REPOSITORY }
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
+    with:
+      machine: OWNER/MACHINE-REPOSITORY
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
     secrets: { house-read-token: "${{ secrets.HOUSE_READ_TOKEN }}" }
 ```
 
@@ -142,10 +157,12 @@ permissions:
 jobs:
   receive:
     if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@9941b91847d4c5e7947fb044faeb4e77476dc17d
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
+    with:
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
 ```
 
-The example binds the received workflow commit `9941b91847d4c5e7947fb044faeb4e77476dc17d`. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
+The example pins a retained source commit and a concrete authorized house-runner selector; the current repository's runner access must still be independently received. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
 
 ## Publication
 
