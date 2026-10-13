@@ -124,7 +124,7 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
     let doc;
     try { doc = YAML.parse(fs.readFileSync(path.join(dir, name), 'utf8'), { uniqueKeys: true }); }
     catch { findings.push({file, job: null, reason: 'unparseable or duplicate-key workflow YAML'}); continue; }
-    if (!doc || typeof doc.jobs !== 'object' || Array.isArray(doc.jobs)) continue;
+    if (!doc || !doc.jobs || typeof doc.jobs !== 'object' || Array.isArray(doc.jobs)) continue;
     const inputs = doc.on?.workflow_call?.inputs ?? {};
     for (const [jobId, job] of Object.entries(doc.jobs)) {
       if (!job || typeof job !== 'object') continue;
@@ -152,6 +152,9 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
         } else {
           let parsed;
           try { parsed = JSON.parse(value); } catch { parsed = undefined; }
+          if (publicRepository && Array.isArray(parsed) && parsed.length === 1
+              && typeof parsed[0] === 'string'
+              && /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(parsed[0])) continue;
           try { runnerLabels(parsed); } catch {
             report('shared delivery caller has no explicit house runner input');
           }
@@ -198,7 +201,7 @@ export function generate(root, options = {}) {
     if ([...selected].some(name => !files[name])) throw new Error('selected workflow has no source capability');
     for (const name of Object.keys(files)) if (!selected.has(name)) delete files[name];
   }
-  return { files, handwritten: reportHandwritten(root), selection };
+  return { files, handwritten: reportHandwritten(root), runnerFindings: auditRunnerRouting(root, {publicRepository:options.publicRepository}), selection };
 }
 
 // The review consumer generates from Git's immutable source, not a dirty or
@@ -313,6 +316,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     runsOn: opt('--runs-on') ? JSON.parse(opt('--runs-on')) : undefined,
     workflows: opt('--workflows') ? JSON.parse(opt('--workflows')) : undefined,
     defaultBranch: opt('--default-branch') ?? 'main', tokenSecret: opt('--token-secret'),
+    publicRepository: args.includes('--public-repo'),
   };
   if (args.includes('--audit-runners')) {
     const findings = auditRunnerRouting(root, {publicRepository:args.includes('--public-repo')});
@@ -324,9 +328,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     console.log('source parity:', JSON.stringify(await verifyGeneratedCaller({ root, receiptCommit: opt('--verify-commit'), ...options })));
     process.exit(0);
   }
-  const { files, handwritten, selection } = args.includes('--pr') ? generateFromSource(root, options) : generate(root, options);
+  const { files, handwritten, runnerFindings, selection } = args.includes('--pr') ? generateFromSource(root, options) : generate(root, options);
   console.log('selected:', JSON.stringify(selection));
   for (const h of handwritten) console.log(`handwritten ${h.file}: ${h.coveredBy ?? '-'} (${h.note})`);
+  for (const issue of runnerFindings) console.log(`runner drift ${issue.file}:${issue.job ?? '-'}: ${issue.reason}`);
   if (args.includes('--pr')) {
     const retainedRunnerEvidence = opt('--retained-runner-evidence') === undefined ? undefined
       : JSON.parse(fs.readFileSync(path.resolve(opt('--retained-runner-evidence')), 'utf8'));
