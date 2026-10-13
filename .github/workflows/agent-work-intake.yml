@@ -14,4 +14,6 @@ concurrency:
 jobs:
   receive:
     if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@9941b91847d4c5e7947fb044faeb4e77476dc17d
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@39965c07fdcbb0b59123827e88740d817362ccc3
+    with:
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
