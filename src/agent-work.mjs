@@ -1,6 +1,22 @@
 // GitHub event receiving. No branch code, issue prose, or artifact is executed.
 const persistent = /^(?:release\/|claim\/|rescue\/|emergency-snapshot|gh-pages$|automation-state$)/;
 const sha = /^[a-f0-9]{40}$/;
+const observedHeadLine = /^Observed head: \`[a-f0-9]{40}\`\\. Compare base: \`[a-f0-9]{40}\`\\.$/mu;
+const aheadBehindLine = /^\\d+ commits ahead; \\d+ behind\\.$/mu;
+
+/** Update only generated revision lines in the original owning PR body.
+ * Preserve all later requirements, human review, evidence and annotations.
+ * A manually owned PR body (or one without these exact lines) is untouched.
+ */
+export function refreshAgentWorkMetadata(body, {repositoryId, branch, headSha, baseSha, ahead, behind}) {
+  const marker = `<!-- agent-work:${repositoryId}:${branch} -->`;
+  if (typeof body !== 'string' || !body.startsWith(marker + '\n') ||
+      !observedHeadLine.test(body) || !aheadBehindLine.test(body)) return null;
+  const revised = body
+    .replace(observedHeadLine, `Observed head: \`${headSha}\`. Compare base: \`${baseSha}\`.`)
+    .replace(aheadBehindLine, `${ahead} commits ahead; ${behind} behind.`);
+  return revised === body ? null : revised;
+}
 export async function receiveAgentWork({github, context, core}) {
   const {owner, repo}=context.repo;
   const repository=(await github.rest.repos.get({owner,repo})).data;
@@ -30,11 +46,29 @@ export async function receiveAgentWork({github, context, core}) {
   if(branch===repository.default_branch||persistent.test(branch)||!sha.test(context.sha))return;
   const observed=(await github.rest.git.getRef({owner,repo,ref:`heads/${branch}`})).data;
   if(observed.object.sha!==context.sha){core.info('Branch advanced beyond this event; the later event owns intake.');return;}
+  const marker=`<!-- agent-work:${repository.id}:${branch} -->`;
   const existing=await github.paginate(github.rest.pulls.list,{owner,repo,state:'open',head:`${owner}:${branch}`,per_page:100});
-  if(existing.length){await label(existing[0].number,'agent:work');return;}
+  if(existing.length){
+    const pr=existing[0];
+    await label(pr.number,'agent:work');
+    // Existing source work must track the real head, but generated metadata
+    // must not overwrite human-authored requirements or later review notes.
+    if(typeof pr.body==='string' && pr.body.startsWith(marker+'\n') &&
+       observedHeadLine.test(pr.body) && aheadBehindLine.test(pr.body)) {
+      const comparison=(await github.rest.repos.compareCommitsWithBasehead({owner,repo,basehead:`${repository.default_branch}...${context.sha}`})).data;
+      const revised=refreshAgentWorkMetadata(pr.body,{
+        repositoryId:repository.id,branch,headSha:context.sha,
+        baseSha:comparison.base_commit.sha,ahead:comparison.ahead_by,behind:comparison.behind_by
+      });
+      if(revised!==null) {
+        await github.rest.pulls.update({owner,repo,pull_number:pr.number,body:revised});
+        core.info(`Refreshed generated revision metadata for pull #${pr.number}.`);
+      }
+    }
+    return;
+  }
   const comparison=(await github.rest.repos.compareCommitsWithBasehead({owner,repo,basehead:`${repository.default_branch}...${context.sha}`})).data;
   if(!comparison.ahead_by){core.info('No unreceived commits.');return;}
-  const marker=`<!-- agent-work:${repository.id}:${branch} -->`;
   const title=`Receive branch: ${branch}`.slice(0,240);
   const body=[marker,`Receive the work on branch \`${branch}\` against \`${repository.default_branch}\`.`,
     `Observed head: \`${context.sha}\`. Compare base: \`${comparison.base_commit.sha}\`.`,
