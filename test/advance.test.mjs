@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { plan, renderBody, run, githubSlug, BOT_EMAIL } from '../scripts/advance.mjs';
+import { plan, renderBody, readEntries, run, githubSlug, BOT_EMAIL } from '../scripts/advance.mjs';
 
 const sh = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim();
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cds-adv-'));
@@ -61,10 +61,14 @@ const pin = (cwd, ref, p) => sh(cwd, 'ls-tree', ref, p).split(/\s+/)[2];
 // Two parent histories advance the same unmaterialized gitlink. This is the
 // ordinary later-run failure: Git lacks supplier objects, while the supplier's
 // compare operation can prove the chain without checking out its worktree.
-function conflictingParent({ ours = B, theirs = C, ours2 = A, theirs2 = A, edit } = {}) {
+function conflictingParent({ ours = B, theirs = C, ours2 = A, theirs2 = A, edit, editReview, initialEdit } = {}) {
   const result = parent(), { origin, work } = result;
+  if (initialEdit) {
+    initialEdit(work); sh(work, 'add', '.gitmodules'); sh(work, 'commit', '-q', '-m', 'original supplier definitions'); sh(work, 'push', '-q', 'origin', 'main');
+  }
   run(work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? ours : ours2, status: () => 'ahead' });
   fs.writeFileSync(path.join(work, 'reviewer.txt'), 'retain reviewer source\n');
+  editReview?.(work);
   sh(work, 'config', 'user.email', 'reviewer@example.com');
   sh(work, 'add', 'reviewer.txt'); sh(work, 'commit', '-q', '-m', 'reviewer source');
   sh(work, 'push', '-q', 'origin', 'ci/submodule-advance');
@@ -143,6 +147,113 @@ test('changed supplier definitions refuse automatic conflict resolution', () => 
   } });
   assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /supplier definitions changed/);
   assertNotPublished(fixture);
+});
+
+test('an unrelated clean supplier addition does not block unchanged conflicting supplier ancestry', () => {
+  const fixture = conflictingParent({ edit(work) {
+    fs.appendFileSync(path.join(work, '.gitmodules'), '[submodule "group-computer-engineering"]\n\tpath = group-computer-engineering\n\turl = https://github.com/561-group/computer-engineering-services-section.git\n');
+    sh(work, 'add', '.gitmodules');
+    sh(work, 'update-index', '--add', '--cacheinfo', `160000,${A},group-computer-engineering`);
+  } });
+  const { origin, work, review, base } = fixture;
+  const result = run(work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? C : A, status: chainStatus });
+  assert.equal(result.result, 'advanced');
+  assert.equal(pin(origin, 'ci/submodule-advance', 's1'), C);
+  assert.equal(pin(origin, 'ci/submodule-advance', 'group-computer-engineering'), A);
+  assert.equal(sh(origin, 'show', 'ci/submodule-advance:.gitmodules'), sh(origin, 'show', `${base}:.gitmodules`));
+  const joined = sh(origin, 'rev-parse', 'ci/submodule-advance');
+  assert.deepEqual(sh(origin, 'show', '-s', '--format=%P', joined).split(' '), [review, base]);
+  for (const source of [review, base]) sh(origin, 'merge-base', '--is-ancestor', source, joined);
+  sh(work, 'checkout', '-q', 'main');
+  assert.equal(run(work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? C : A, status: chainStatus }).result, 'nothing to advance');
+  assert.equal(sh(origin, 'rev-parse', 'ci/submodule-advance'), joined);
+});
+
+for (const [name, edit] of [
+  ['branch', work => sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.branch', 'other')],
+  ['ref metadata', work => sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.ref', 'refs/heads/other')],
+  ['path', work => sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.path', 'relocated')],
+  ['section rename', work => sh(work, 'config', '-f', '.gitmodules', '--rename-section', 'submodule.s1', 'submodule.renamed')],
+  ['definition removal', work => sh(work, 'config', '-f', '.gitmodules', '--remove-section', 'submodule.s1')],
+  ['duplicate URL', work => sh(work, 'config', '-f', '.gitmodules', '--add', 'submodule.s1.url', 'https://github.com/o/s1')],
+  ['duplicate path', work => sh(work, 'config', '-f', '.gitmodules', '--add', 'submodule.s1.path', 's1')],
+  ['alias path', work => {
+    sh(work, 'config', '-f', '.gitmodules', 'submodule.alias.path', 's1');
+    sh(work, 'config', '-f', '.gitmodules', 'submodule.alias.url', 'https://github.com/o/s1');
+  }],
+]) {
+  test(`conflicting supplier ${name} change remains refused before ancestry lookup or publication`, () => {
+    const fixture = conflictingParent({ edit(work) { edit(work); sh(work, 'add', '.gitmodules'); } });
+    let observations = 0;
+    assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C,
+      status: () => { observations++; return 'ahead'; } }), /supplier definitions changed|ambiguous supplier path|ambiguous conflicting supplier/);
+    assert.equal(observations, 0);
+    assertNotPublished(fixture);
+  });
+}
+
+for (const field of ['url', 'branch', 'ref', 'ignore']) {
+  test(`unchanged duplicate ${field} values remain ambiguous across all four conflicting snapshots`, () => {
+    const fixture = conflictingParent({ initialEdit(work) {
+      const value = field === 'url' ? 'https://github.com/o/s1' : field === 'ignore' ? 'none' : 'main';
+      sh(work, 'config', '-f', '.gitmodules', `submodule.s1.${field}`, value);
+      sh(work, 'config', '-f', '.gitmodules', '--add', `submodule.s1.${field}`, value);
+    } });
+    let observations = 0;
+    assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C,
+      status: () => { observations++; return 'ahead'; } }), /ambiguous conflicting supplier values/);
+    assert.equal(observations, 0); assertNotPublished(fixture);
+  });
+}
+
+test('normal supplier reads and conflict qualification both ignore external include directives', () => {
+  const { work } = parent();
+  const external = path.join(work, 'external-config');
+  fs.writeFileSync(external, '[submodule "s1"]\nurl = https://github.com/another/s1\nbranch = other\n');
+  fs.appendFileSync(path.join(work, '.gitmodules'), `[include]\npath = ${external}\n`);
+  // Git's explicitly selected file defaults to includes disabled. Pin that
+  // behavior in both consumers rather than letting ambient configuration win.
+  assert.equal(sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.url'), sh(work, 'config', '--no-includes', '-f', '.gitmodules', 'submodule.s1.url'));
+  const entries = readEntries(work, { head: () => A, status: () => 'identical' });
+  assert.deepEqual(entries.map(e => e.path), ['s1', 's2']);
+  assert.equal(entries.find(e => e.path === 's1').url, 'https://github.com/o/s1');
+  assert.equal(entries.find(e => e.path === 's1').branch, '');
+  const fixture = conflictingParent({ initialEdit(work) {
+    fs.writeFileSync(path.join(work, 'external-config'), '[submodule "s1"]\nurl = https://github.com/another/s1\n');
+    fs.appendFileSync(path.join(work, '.gitmodules'), '[include]\npath = external-config\n');
+  } });
+  const observed = [];
+  const result = run(fixture.work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? C : A,
+    status: (url, pin, head) => { observed.push(url); return chainStatus(url, pin, head); } });
+  assert.equal(result.result, 'advanced'); assert.deepEqual(result.unread, []);
+  assert.equal(pin(fixture.origin, 'ci/submodule-advance', 's1'), C);
+  assert.ok(observed.length > 0 && observed.every(url => url === 'https://github.com/o/s1'));
+});
+
+test('an actual conflicting supplier definition stays a text conflict', () => {
+  const fixture = conflictingParent({
+    editReview(work) { sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.url', 'https://github.com/reviewer/s1'); sh(work, 'add', '.gitmodules'); },
+    edit(work) { sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.url', 'https://github.com/base/s1'); sh(work, 'add', '.gitmodules'); },
+  });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /non-gitlink base merge conflict: .gitmodules/);
+  assertNotPublished(fixture);
+});
+
+test('supplier definition file mode changes cannot be excused by matching values', () => {
+  const fixture = conflictingParent({ edit(work) { fs.chmodSync(path.join(work, '.gitmodules'), 0o755); sh(work, 'add', '.gitmodules'); } });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /supplier definitions changed file mode/);
+  assertNotPublished(fixture);
+});
+
+test('supplier definition symlink replacement remains refused', () => {
+  const fixture = conflictingParent({ edit(work) {
+    fs.unlinkSync(path.join(work, '.gitmodules')); fs.symlinkSync('not-a-supplier-definition', path.join(work, '.gitmodules'));
+    sh(work, 'add', '.gitmodules');
+  } });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /supplier definitions.*file kind|non-gitlink base merge conflict/);
+  assert.equal(sh(fixture.origin, 'rev-parse', 'ci/submodule-advance'), fixture.review);
+  assert.equal(sh(fixture.work, 'rev-parse', 'HEAD'), fixture.base);
+  assert.equal(sh(fixture.work, 'status', '--porcelain', '--ignore-submodules=all'), '');
 });
 
 test('a text conflict alongside the comparable gitlink remains a refusal', () => {
