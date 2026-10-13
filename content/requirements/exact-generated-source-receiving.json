@@ -5,11 +5,30 @@
   "owner": "red-cup-engineering/continuous-delivery-services-section",
   "consumer": "generator/generate-ci.mjs --pr and its later --verify-commit build consumer",
   "specification": {
-    "inputs": ["target repository", "exact generation source commit", "owning review branch", "immutable supplier commits", "complete regular UTF-8 generated files"],
+    "inputs": [
+      "target repository",
+      "exact generation source commit",
+      "owning review branch",
+      "immutable supplier commits",
+      "complete regular UTF-8 generated files"
+    ],
     "output": "a verified source commit and owning draft review, or explicit unchanged/stale/unavailable result",
-    "refusals": ["missing source-write actuator", "stale source or review head", "incomplete source tree", "unexpected tree transformation", "unsupported output kind", "unknown publication outcome", "closed exact review", "later source/supplier/output parity mismatch"],
+    "refusals": [
+      "missing source-write actuator",
+      "stale source or review head",
+      "incomplete source tree",
+      "unexpected tree transformation",
+      "unsupported output kind",
+      "unknown publication outcome",
+      "closed exact review",
+      "later source/supplier/output parity mismatch"
+    ],
     "publication": "non-forced Git ref update followed by authoritative ref and review readback; exact commit identity provides restart reconciliation",
-    "treeReceiving": "Bind exact base and result root identities by reconstructing Git tree objects along every declared output path. Verify complete immediate ancestor entries, Git mode/type/name/object identity and canonical tree encoding. Preserve every untouched sibling subtree by its identical object identity; do not enumerate its leaves. Refuse truncated or malformed objects, missing ancestors, undeclared changes, path/prefix collisions and symlink or file-kind changes. Read back the result's changed-path ancestors and exact output identities. This is complete transformation verification, not permission to accept a partial inventory."
+    "treeReceiving": "Bind exact base and result root identities by reconstructing Git tree objects along every declared output path. Verify complete immediate ancestor entries, Git mode/type/name/object identity and canonical tree encoding. Preserve every untouched sibling subtree by its identical object identity; do not enumerate its leaves. Refuse truncated or malformed objects, missing ancestors, undeclared changes, path/prefix collisions and symlink or file-kind changes. Read back the result's changed-path ancestors and exact output identities. This is complete transformation verification, not permission to accept a partial inventory.",
+    "runnerSelection": "Before a workflow source proposal, receive the explicit no-billing selector through a complete online repository runner inventory, or explicitly qualify a retained self-hosted selector from an authenticated prior same-repository default-branch run and started job. Historical source H, current generation base S and proposed bytes are distinct immutable inputs. Prove H-to-S unchanged per-job selectors, reusable supplier identities, permission and credential declarations, then prove S-to-proposal retention. Reject ambiguous/dynamic/unbound selectors, unresolved admission expressions and hidden grant changes. Historical execution establishes neither current availability nor future execution entitlement. Never silently fall back from a denied or failed inventory call.",
+    "boundedAddedJob": "Only an exact direct read-only job fragment produced by an independently qualified existing owner may join the retained-selector source proposal. Bind its producer, generation source, review branch, proposal identity and complete output fragment; require the identical self-hosted selector, explicit contents:read, no environment/secrets/container/services/credential grant, and preserve explicit checkout persist-credentials:false. No new reusable supplier or arbitrary job class is admitted. A fragment descriptor proves byte association, not review or execution approval.",
+    "activationDeclarations": "Expose event, job-if and concurrency differences for historical-to-current and current-to-proposed separately in the source receiving result. Source publication can trigger existing CI; those exact changes require ordinary independent owner review and existing authorized source-trigger admission. Do not invent a blanket no-trigger or draft-only execution rule. Actual scheduling, trust, no-spend and activation receiving remain at execution.",
+    "sharedProofProvider": "The default receiver requires the genuine @red-cup-engineering/git-services-section source-tree-patch API at version 4.1.1 or newer, declared as a required peer. The existing authenticated source selection/materialization owner must supply it; a version constraint is not source availability, package enrollment, public-registry installation or activation evidence. Keep missing provider and unqualified CI explicit."
   },
   "design": "Strengthen the existing generator/open-pr.mjs operation and migrate its actual caller. Preserve the generated proposal in its source commit and review. Re-run the same producer for later full-tree and byte parity. Do not create a separate controller, receipt repository, credential or deployment path.",
   "receiving": "Git-backed tests exercise the actual producer and receiver, stale/concurrent publication, lost replies, restart idempotence, counterfeit receipt trees and later CLI parity. A production descriptor generator needs its own qualified artifact-to-writer binding; the read-only machine build and PR-metadata intake do not confer source-writing authority. Source qualification does not close runtime recovery."

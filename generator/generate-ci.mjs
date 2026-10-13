@@ -192,7 +192,7 @@ export function generateFromSource(root, options = {}) {
 
 function generatorInputs() {
   const supplier = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  for (const file of ['generator/generate-ci.mjs', 'generator/open-pr.mjs']) {
+  for (const file of ['generator/generate-ci.mjs', 'generator/open-pr.mjs', 'generator/retained-runner.mjs']) {
     const committed = execFileSync('git', ['show', `${REF}:${file}`], { cwd: supplier });
     if (!committed.equals(fs.readFileSync(path.join(supplier, file)))) throw new Error('generator implementation differs from its supplier commit');
   }
@@ -228,11 +228,11 @@ export async function verifyGeneratedCaller({ root, receiptCommit, ...options })
 
 // The same producer is used for first receiving and later byte-parity checking.
 // It does not need a model, a workflow permission change or a new service.
-export async function receiveGeneratedCaller({ root, repo, token, request, branch, proveTreePatch, deriveTreePatch, ...options }) {
+export async function receiveGeneratedCaller({ root, repo, token, request, branch, proveTreePatch, deriveTreePatch, retainedRunnerEvidence, ...options }) {
   const produced = generateFromSource(root, options);
   if (!Object.keys(produced.files).length) return { status: 'empty', ...produced };
   const inputs = generatorInputs();
-  const result = await openPullRequest({ repo, branch, files: produced.files, sourceCommit: produced.sourceCommit, inputs, token, request, runsOn: options.runsOn,proveTreePatch,deriveTreePatch,
+  const result = await openPullRequest({ repo, branch, files: produced.files, sourceCommit: produced.sourceCommit, inputs, token, request, runsOn: options.runsOn,proveTreePatch,deriveTreePatch,retainedRunnerEvidence,
     title: 'Call the continuous-delivery services section' });
   // Exercise the receiving contract on the actual producer, not an unused helper.
   const regenerated = generateFromSource(root, options);
@@ -244,7 +244,7 @@ export async function receiveGeneratedCaller({ root, repo, token, request, branc
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
   const opt = n => { const i = args.indexOf(n); return i < 0 ? undefined : args[i + 1]; };
-  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--branch', '--verify-commit', '--workflows'];
+  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--branch', '--verify-commit', '--workflows', '--retained-runner-evidence'];
   const root = path.resolve(args.find((a, i) => !a.startsWith('--') && !valueOptions.includes(args[i - 1])) ?? '.');
   const options = {
     parent: opt('--parent'), ref: opt('--ref') ?? REF,
@@ -261,7 +261,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   console.log('selected:', JSON.stringify(selection));
   for (const h of handwritten) console.log(`handwritten ${h.file}: ${h.coveredBy ?? '-'} (${h.note})`);
   if (args.includes('--pr')) {
-    const result = await receiveGeneratedCaller({ root, repo: opt('--pr'), branch: opt('--branch'), token: process.env.GH_TOKEN, ...options });
+    const retainedRunnerEvidence = opt('--retained-runner-evidence') === undefined ? undefined
+      : JSON.parse(fs.readFileSync(path.resolve(opt('--retained-runner-evidence')), 'utf8'));
+    const result = await receiveGeneratedCaller({ root, repo: opt('--pr'), branch: opt('--branch'), token: process.env.GH_TOKEN, retainedRunnerEvidence, ...options });
     console.log('source receiving:', JSON.stringify(result));
   } else {
     for (const [p, c] of Object.entries(files)) {
