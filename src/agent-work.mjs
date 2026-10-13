@@ -1,8 +1,8 @@
 // GitHub event receiving. No branch code, issue prose, or artifact is executed.
 const persistent = /^(?:release\/|claim\/|rescue\/|emergency-snapshot|gh-pages$|automation-state$)/;
 const sha = /^[a-f0-9]{40}$/;
-const observedHeadLine = /^Observed head: \`[a-f0-9]{40}\`\\. Compare base: \`[a-f0-9]{40}\`\\.$/mu;
-const aheadBehindLine = /^\\d+ commits ahead; \\d+ behind\\.$/mu;
+const observedHeadLine = /^Observed head: `[a-f0-9]{40}`\. Compare base: `[a-f0-9]{40}`\.$/mu;
+const aheadBehindLine = /^\d+ commits ahead; \d+ behind\.$/mu;
 
 /** Update only generated revision lines in the original owning PR body.
  * Preserve all later requirements, human review, evidence and annotations.
