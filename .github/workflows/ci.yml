@@ -2,11 +2,15 @@ name: ci
 on: [push, pull_request]
 jobs:
   node-package:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/node-package.yml
     with:
-      runs-on: '["ubuntu-latest"]'
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
   agent-work-contract:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # No GitHub-hosted fallback. The engineering organization must grant a
+    # real house runner access; pending jobs do not mean tests passed.
+    runs-on: [self-hosted, Linux, X64, bare-cedar-fog]
     timeout-minutes: 5
     permissions:
       contents: read
