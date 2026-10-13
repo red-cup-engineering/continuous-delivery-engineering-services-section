@@ -4,4 +4,4 @@ jobs:
   node-package:
     uses: ./.github/workflows/node-package.yml
     with:
-      runs-on: ${{ vars.CI_RUNNER_LABELS }}
+      runs-on: '["ubuntu-latest"]'

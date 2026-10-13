@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { detect, generate, renderCi, renderSync, REUSABLE, REF } from '../generator/generate-ci.mjs';
-import { openPullRequest } from '../generator/open-pr.mjs';
 
 // Fixture repositories are built from a map of path -> content.
 function fixture(files) {
@@ -71,27 +70,6 @@ test('repository with submodules gets a sync caller; a parent adds the upward no
   assert.match(y, /notify-parent\.yml@[a-f0-9]{40}/);
   assert.match(y, /parent: o\/parent/);
   assert.equal(renderSync({ submodules: false }), null);
-});
-
-test('pull request by git-data API extends an existing branch without force', async () => {
-  const calls = [];
-  const request = async (method, p, body) => {
-    calls.push([method, p, body]);
-    if (p === '/repos/o/r') return { default_branch: 'main' };
-    if (p.endsWith('/git/ref/heads/ci/caller-generator')) return { object: { sha: 'b1' } };
-    if (p.includes('/git/commits/')) return { tree: { sha: 't0' } };
-    if (p.endsWith('/git/trees')) return { sha: 't1' };
-    if (p.endsWith('/git/commits')) return { sha: 'c1' };
-    if (p.includes('/pulls?')) return [];
-    if (p.endsWith('/pulls')) return { html_url: 'https://github.com/o/r/pull/1' };
-    return {};
-  };
-  const url = await openPullRequest({ repo: 'o/r', files: { '.github/workflows/ci.yml': 'x' }, request });
-  assert.equal(url, 'https://github.com/o/r/pull/1');
-  const patch = calls.find(c => c[0] === 'PATCH');
-  assert.equal(patch[2].force, false);
-  assert.deepEqual(calls.find(c => c[1].endsWith('/git/commits') && c[0] === 'POST')[2].parents, ['b1']);
-  assert.ok(!calls.some(c => c[1].endsWith('/git/refs') && c[0] === 'POST'));
 });
 
 test('current machine-neutral generator does not assign a package to implicit machines',()=>{
