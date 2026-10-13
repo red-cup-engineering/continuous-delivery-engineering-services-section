@@ -144,7 +144,7 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
             && /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(selection)) continue;
         try { runnerLabels(Array.isArray(selection) ? selection : [selection]); }
         catch { report('job does not select an explicitly named self-hosted house machine/pool'); }
-      } else if (typeof job.uses === 'string' && job.uses.startsWith(shared)) {
+      } else if (typeof job.uses === 'string' && (job.uses.startsWith(shared) || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
         const value = job.with?.['runs-on'];
         if (value === '${{ inputs.runs-on }}') {
           if (inputs['runs-on']?.required !== true)
@@ -159,6 +159,8 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
             report('shared delivery caller has no explicit house runner input');
           }
         }
+      } else if (job.uses) {
+        report('reusable job is not a verified shared-delivery caller; audit its actual runner supplier');
       } else if (job.steps && !job.uses) {
         report('executable job has no runner selection');
       }
