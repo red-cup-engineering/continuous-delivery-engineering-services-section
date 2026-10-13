@@ -11,7 +11,7 @@ on:
         default: ''
       runs-on:
         type: string
-        default: '["ubuntu-latest"]'
+        required: true
     secrets:
       token:
         required: false

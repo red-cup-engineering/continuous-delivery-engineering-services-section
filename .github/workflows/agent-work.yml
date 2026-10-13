@@ -5,7 +5,7 @@ on:
       runs-on:
         description: 'JSON runner labels; a repository with a house runner names it (e.g. ["self-hosted","Linux","X64","bare-cedar-fog"])'
         type: string
-        default: '"ubuntu-latest"'
+        required: true
 permissions:
   contents: read
 jobs:

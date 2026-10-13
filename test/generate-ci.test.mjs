@@ -4,7 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { detect, generate, renderCi, renderSync, REUSABLE, REF } from '../generator/generate-ci.mjs';
+import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, REUSABLE, REF } from '../generator/generate-ci.mjs';
+
+
+const runsOn=['self-hosted','existing-runner'];
+const generate=(root,options={})=>generateSource(root,{runsOn,...options});
+const renderCi=(selection,options={})=>renderCiSource(selection,{runsOn,...options});
+const renderSync=options=>renderSyncSource({runsOn,...options});
 
 // Fixture repositories are built from a map of path -> content.
 function fixture(files) {
@@ -16,10 +22,10 @@ function fixture(files) {
   return d;
 }
 
-test('empty repository selects nothing and writes no caller', () => {
+test('empty repository selects no fabrication while retaining original-work intake', () => {
   const r = generate(fixture({ 'a.txt': 'x' }));
   assert.deepEqual(r.selection, { node: false, lean: [], content: false });
-  assert.deepEqual(r.files, {});
+  assert.deepEqual(Object.keys(r.files), ['.github/workflows/agent-work-intake.yml']);
 });
 
 test('package.json selects node-package, also when nested; node_modules is ignored', () => {

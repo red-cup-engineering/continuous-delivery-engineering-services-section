@@ -14,7 +14,7 @@ on:
       runs-on:
         description: 'JSON runner labels, for repositories without GitHub-hosted runners (e.g. ["self-hosted","Linux","X64","bare-cedar-fog"])'
         type: string
-        default: '"ubuntu-latest"'
+        required: true
 jobs:
   lockfile-fresh:
     # A newer push to the same pull request or branch supersedes this run: cancel it rather than queue every push.

@@ -2,12 +2,16 @@ name: lean
 on:
   workflow_call:
     inputs:
+      runs-on:
+        description: 'Explicit JSON runner labels supplied by the caller'
+        type: string
+        required: true
       working-directory:
         type: string
         default: '.'
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}

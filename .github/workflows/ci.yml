@@ -3,3 +3,5 @@ on: [push, pull_request]
 jobs:
   node-package:
     uses: ./.github/workflows/node-package.yml
+    with:
+      runs-on: '["ubuntu-latest"]'

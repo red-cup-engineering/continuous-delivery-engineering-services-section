@@ -2,6 +2,10 @@ name: node-package
 on:
   workflow_call:
     inputs:
+      runs-on:
+        description: 'Explicit JSON runner labels supplied by the caller'
+        type: string
+        required: true
       paths:
         description: 'JSON array of package directories; empty = every package.json in the repo'
         type: string
@@ -23,7 +27,7 @@ on:
         default: 'test'
 jobs:
   discover:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     outputs:
       dirs: ${{ steps.d.outputs.dirs }}
     steps:
@@ -40,7 +44,7 @@ jobs:
   package:
     needs: discover
     if: needs.discover.outputs.dirs != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     strategy:
       fail-fast: false
       max-parallel: ${{ inputs.concurrency }}

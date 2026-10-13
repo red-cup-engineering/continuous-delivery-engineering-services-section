@@ -9,6 +9,10 @@ const branchName = value => typeof value === 'string' && /^[A-Za-z0-9_][A-Za-z0-
   && value.split('/').every(p => !p.startsWith('.') && !p.endsWith('.') && !p.endsWith('.lock'));
 const sourcePath = value => typeof value === 'string' && value.length > 0 && !/[\\\x00-\x1f\x7f]/.test(value)
   && value.split('/').every(p => p && p !== '.' && p !== '..' && p.toLowerCase() !== '.git');
+// Unchanged Git source can contain POSIX names that portable generated outputs
+// cannot use. Preserve their object identities without publishing new such paths.
+const trackedPath = value => typeof value === 'string' && value.length > 0 && !value.includes('\0')
+  && value.split('/').every(p => p && p !== '.' && p !== '..' && p.toLowerCase() !== '.git');
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const required = (value, label) => value ?? fail('unavailable', `${label} unavailable; no receiving claim`);
 
@@ -18,6 +22,7 @@ export function githubRequest(token, fetchImpl = fetch) {
     const r = await fetchImpl(`https://api.github.com${path}`, {
       method, headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
     });
     if (method === 'GET' && r.status === 404) return null;
     if (!r.ok) fail('github-error', `${method} ${path}: HTTP ${r.status}`);
@@ -58,7 +63,7 @@ function entries(response) {
   if (!response || response.truncated !== false || !Array.isArray(response.tree)) fail('incomplete-tree', 'complete source tree required');
   const leaves = new Map();
   for (const e of response.tree) {
-    if (!sourcePath(e.path) || !sha(e.sha)) fail('invalid-tree', 'invalid source tree entry');
+    if (!trackedPath(e.path) || !sha(e.sha)) fail('invalid-tree', 'invalid source tree entry');
     if (e.type === 'tree') continue;
     if (leaves.has(e.path)) fail('invalid-tree', 'duplicate source tree path');
     leaves.set(e.path, { mode: e.mode, type: e.type, sha: e.sha });
@@ -86,98 +91,58 @@ export function verifyGeneratedTransformation(proposal, sourceTree, receivedTree
   return true;
 }
 
-// Git trees are Merkle objects. A bounded edit needs the complete immediate
-// entries at each changed-path ancestor, not the leaves of every untouched
-// archive. Reconstruct the expected root using Git's actual object encoding;
-// unchanged sibling identities preserve their entire subtrees transitively.
-const treeKinds = new Map([['040000', 'tree'], ['100644', 'blob'], ['100755', 'blob'], ['120000', 'blob'], ['160000', 'commit']]);
-function treeIdentity(values) {
-  const ordered = [...values].sort((a, b) => Buffer.compare(
-    Buffer.from(a.path + (a.type === 'tree' ? '/' : '')),
-    Buffer.from(b.path + (b.type === 'tree' ? '/' : ''))));
-  const body = Buffer.concat(ordered.flatMap(e => [
-    Buffer.from(`${e.mode === '040000' ? '40000' : e.mode} ${e.path}\0`), Buffer.from(e.sha, 'hex'),
-  ]));
-  return hash('sha1', Buffer.concat([Buffer.from(`tree ${body.length}\0`), body]));
+/** Large owners use the same complete transformation contract through shared Git frames. */
+export async function verifyGeneratedTreeFrames(proposal,sourceTree,targetTree,readTree,{proveTreePatch}={}) {
+  const prove=proveTreePatch??(await import('@red-cup-engineering/git-services-section/source-tree-patch')).proveSourceTreePatch;
+  return prove({sourceTree,targetTree,readTree,changes:proposal.outputs.map(output=>({
+    path:output.path,mode:output.mode,type:'blob',sha:output.blob,
+  }))});
 }
 
-/** Plan and receive an exact root-to-root transformation. readTree must return
- * complete non-recursive Git tree objects at the requested immutable SHA. */
-export async function planGeneratedTree(proposal, { sourceTree, readTree }) {
-  if (!sha(sourceTree) || typeof readTree !== 'function') fail('invalid-tree', 'exact source tree and reader required');
-  const edits = new Map();
-  if (!Array.isArray(proposal.outputs) || !proposal.outputs.length) fail('invalid-output', 'no generated tree outputs');
-  for (const output of proposal.outputs) {
-    if (!sourcePath(output.path) || output.mode !== '100644' || !sha(output.blob)) fail('invalid-output', 'invalid generated tree output');
-    let node = edits;
-    const parts = output.path.split('/');
-    for (const [i, part] of parts.entries()) {
-      if (i === parts.length - 1) {
-        if (node.has(part)) fail('invalid-output', 'duplicate or colliding generated output');
-        node.set(part, output);
-      } else {
-        if (!node.has(part)) node.set(part, new Map());
-        node = node.get(part);
-        if (!(node instanceof Map)) fail('invalid-output', 'generated output file/directory collision');
-      }
-    }
-  }
-  const cache = new Map();
-  const read = async id => {
-    if (cache.has(id)) return cache.get(id);
-    const response = required(await readTree(id), 'source tree object');
-    if (response.truncated !== false || !Array.isArray(response.tree)) fail('incomplete-tree', 'complete immediate source tree required');
-    if (response.sha !== id) fail('invalid-tree', 'source tree identity differs');
-    const values = new Map();
-    for (const e of response.tree) {
-      if (!sourcePath(e.path) || e.path.includes('/') || !sha(e.sha) || treeKinds.get(e.mode) !== e.type || values.has(e.path)) fail('invalid-tree', 'invalid immediate source tree entry');
-      values.set(e.path, { path: e.path, mode: e.mode, type: e.type, sha: e.sha });
-    }
-    if (treeIdentity(values.values()) !== id) fail('invalid-tree', 'source tree bytes do not match its identity');
-    cache.set(id, values);
-    return values;
-  };
-  const project = async (id, node) => {
-    const values = new Map(id ? await read(id) : []);
-    for (const [name, change] of node) {
-      const prior = values.get(name);
-      if (change instanceof Map) {
-        if (prior && prior.type !== 'tree') fail('unsupported-output', 'generated source crosses an existing file or symlink');
-        values.set(name, { path: name, mode: '040000', type: 'tree', sha: await project(prior?.sha, change) });
-      } else {
-        if (prior && (prior.type !== 'blob' || prior.mode !== change.mode)) fail('unsupported-output', `generated source changes file kind or mode: ${change.path}`);
-        values.set(name, { path: name, mode: change.mode, type: 'blob', sha: change.blob });
-      }
-    }
-    return treeIdentity(values.values());
-  };
-  const tree = await project(sourceTree, edits);
-  const inspect = async (id, node) => {
-    const values = await read(id);
-    for (const [name, change] of node) {
-      const value = values.get(name);
-      if (change instanceof Map) {
-        if (value?.type !== 'tree') fail('output-mismatch', 'received generated directory differs');
-        await inspect(value.sha, change);
-      } else if (value?.type !== 'blob' || value.mode !== change.mode || value.sha !== change.blob) fail('output-mismatch', 'received generated output differs');
-    }
-  };
-  return { sourceTree, tree, verify: async receivedTree => {
-    if (receivedTree !== tree) fail('output-mismatch', 'received source root differs from the complete generated transformation');
-    await inspect(receivedTree, edits);
-    return true;
-  } };
+/** Receive a configured no-billing runner before proposing workflow callers. */
+export async function receiveRunnerSelection({repo,runsOn,request,repositoryRecord}) {
+  if(typeof repo!=='string'||!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo)
+      ||!Array.isArray(runsOn)||!runsOn.length||runsOn.some(label=>typeof label!=='string'||!label.trim()))
+    throw new Error('workflow callers require an explicit repository and runner labels');
+  const owner=repositoryRecord??await request('GET',`/repos/${repo}`);
+  if(owner?.full_name!==repo||!Number.isSafeInteger(owner.id))throw new Error('runner repository identity differs');
+  // Standard Ubuntu execution is free for an explicitly observed public repository.
+  // A private caller never inherits the public supplier's execution entitlement.
+  if(owner.visibility==='public'&&runsOn.length===1&&runsOn[0]==='ubuntu-latest')
+    return {repository:repo,labels:runsOn,execution:'public-standard',billingActivation:false,executed:false};
+  if(!runsOn.includes('self-hosted'))throw new Error('private workflow callers require registered house runner labels');
+  const observation=await request('GET',`/repos/${repo}/actions/runners?per_page=100`);
+  if(!observation||!Number.isSafeInteger(observation.total_count)||!Array.isArray(observation.runners)
+      ||observation.total_count!==observation.runners.length)
+    throw new Error('repository runner observation is unavailable or incomplete');
+  const runners=observation.runners.filter(runner=>runner.status==='online'
+    &&runsOn.every(label=>runner.labels?.some(row=>row.name===label)));
+  if(!runners.length)throw new Error(`no online registered house runner matches ${repo}; caller proposal held`);
+  return {repository:repo,labels:runsOn,runnerIds:runners.map(runner=>runner.id),billingActivation:false,executed:false};
+}
+
+/** Shared Git owns canonical object encoding and full transformation proof. */
+export async function planGeneratedTree(proposal,{sourceTree,readTree}) {
+  const {deriveSourceTreePatch,proveSourceTreePatch}=await import('@red-cup-engineering/git-services-section/source-tree-patch');
+  const request={sourceTree,readTree,changes:proposal.outputs.map(output=>({path:output.path,mode:output.mode,type:'blob',sha:output.blob}))};
+  const plan=await deriveSourceTreePatch(request);
+  return {sourceTree,tree:plan.targetTree,verify:async targetTree=>{
+    try {await proveSourceTreePatch({...request,targetTree});return true;}
+    catch {fail('output-mismatch','received source tree differs from the complete generated transformation');}
+  }};
 }
 
 /** Publish from the exact generation base into the named review branch. GitHub
  * rejects a non-fast-forward race. Lost mutation replies are reconciled at the
  * original ref/PR. A repeat after restart is identified by its durable commit. */
-export async function openPullRequest({ repo, files, sourceCommit, inputs, token, branch = 'ci/caller-generator',
-  title = 'Receive generated source', request = githubRequest(token) }) {
+export async function openPullRequest({ repo, files, sourceCommit, inputs, token, runsOn, branch = 'ci/caller-generator',
+  title = 'Receive generated source', request = githubRequest(token), proveTreePatch, deriveTreePatch }) {
   const proposal = generatedSource({ repo, branch, sourceCommit, inputs, files });
   const prefix = `/repos/${repo}`;
   const repository = required(await request('GET', prefix), 'source repository');
   if (repository.full_name !== repo || !branchName(repository.default_branch)) fail('wrong-owner', 'source repository identity differs');
+  if(Object.keys(files).some(path=>path.startsWith('.github/workflows/')))
+    await receiveRunnerSelection({repo,runsOn,request,repositoryRecord:repository});
   const base = repository.default_branch;
   if (branch === base) fail('protected-base', 'generated source requires a separate review branch');
   const refPath = `${prefix}/git/ref/heads/${branch}`;
@@ -189,9 +154,22 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
   };
   const parent = required(await request('GET', `${prefix}/git/commits/${sourceCommit}`), 'generation source commit');
   if (parent.sha !== sourceCommit || !sha(parent.tree?.sha)) fail('wrong-source', 'generation source commit differs');
-  const transformation = await planGeneratedTree(proposal, {
-    sourceTree: parent.tree.sha, readTree: id => request('GET', `${prefix}/git/trees/${id}`),
-  });
+  const recursive = await request('GET', `${prefix}/git/trees/${parent.tree.sha}?recursive=1`);
+  const framed = recursive?.truncated===true;
+  const before = framed ? null : entries(recursive);
+  const expected = framed ? null : expectedTree(proposal, before);
+  const treeFrames=new Map();
+  const readFrame=async sha=>{
+    if(!treeFrames.has(sha))treeFrames.set(sha,required(await request('GET',`${prefix}/git/trees/${sha}`),'immediate source tree'));
+    return treeFrames.get(sha);
+  };
+  const framePlan=framed?(deriveTreePatch??(await import('@red-cup-engineering/git-services-section/source-tree-patch')).deriveSourceTreePatch):null;
+  const plan=framed?await framePlan({sourceTree:parent.tree.sha,readTree:readFrame,
+    changes:proposal.outputs.map(output=>({path:output.path,mode:output.mode,type:'blob',sha:output.blob}))}):null;
+  const verifyTree=async sha=>framed
+    ? verifyGeneratedTreeFrames(proposal,parent.tree.sha,sha,readFrame,{proveTreePatch})
+    : sameTree(expected,entries(await request('GET',`${prefix}/git/trees/${sha}?recursive=1`)))
+      || fail('output-mismatch','source tree differs from the complete generated transformation');
   const head = await readHead();
   if (head === null) {
     const current = required(await request('GET', `${prefix}/git/ref/heads/${base}`), 'default source ref');
@@ -201,19 +179,20 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
   const receiveCommit = async commit => {
     const observed = required(await request('GET', `${prefix}/git/commits/${commit}`), 'proposed commit');
     if (observed.sha !== commit || observed.parents?.length !== 1 || observed.parents[0].sha !== sourceCommit || !observed.message?.split('\n').includes(marker)) fail('stale-head', 'source review branch moved; regenerate from its exact current head');
-    await transformation.verify(observed.tree.sha);
+    await verifyTree(observed.tree.sha);
     return observed.tree.sha;
   };
   let commit, tree;
   if (head !== null && head !== sourceCommit) {
     commit = head; tree = await receiveCommit(commit);
-  } else if (transformation.tree === parent.tree.sha) {
+  } else if (framed ? plan.targetTree===parent.tree.sha : sameTree(before, expected)) {
     return { status: 'unchanged', proposal, commit: sourceCommit, tree: parent.tree.sha, pullRequest: null };
   } else {
     const createdTree = required(await request('POST', `${prefix}/git/trees`, { base_tree: parent.tree.sha,
       tree: proposal.outputs.map(output => ({ path: output.path, mode: output.mode, type: 'blob', content: files[output.path] })) }), 'generated source tree');
     tree = createdTree.sha;
-    await transformation.verify(tree);
+    if (!sha(tree))fail('output-mismatch','created tree identity is unavailable');
+    await verifyTree(tree);
     const created = required(await request('POST', `${prefix}/git/commits`, {
       message: `${title}\n\n${marker}\n${JSON.stringify(proposal)}`, tree, parents: [sourceCommit],
     }), 'generated source commit');
