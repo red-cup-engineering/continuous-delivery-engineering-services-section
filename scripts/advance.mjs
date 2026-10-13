@@ -171,7 +171,7 @@ function prepare(cwd, { branch, remote = 'origin', status }) {
   git(cwd, 'config', 'user.email', BOT_EMAIL);
   const remoteSha = git(cwd, 'ls-remote', '--heads', remote, `refs/heads/${branch}`).split(/\s/)[0];
   if (remoteSha) {
-    git(cwd, 'fetch', remote, `refs/heads/${branch}`);
+    git(cwd, 'fetch', '--no-recurse-submodules', '--no-tags', remote, `refs/heads/${branch}`);
     if (git(cwd, 'rev-parse', 'FETCH_HEAD') !== remoteSha) throw new Error('sync branch moved during observation; receive it again');
   }
   const foreign = remoteSha && git(cwd, 'log', '--format=%ae', `HEAD..${remoteSha}`).split('\n').some(a => a && a !== BOT_EMAIL);
@@ -181,7 +181,7 @@ function prepare(cwd, { branch, remote = 'origin', status }) {
 }
 
 function pushAndReceive(cwd, branch, remote) {
-  git(cwd, 'push', remote, `HEAD:refs/heads/${branch}`);
+  git(cwd, 'push', '--recurse-submodules=no', remote, `HEAD:refs/heads/${branch}`);
   const published = git(cwd, 'rev-parse', 'HEAD');
   const observed = git(cwd, 'ls-remote', '--heads', remote, `refs/heads/${branch}`).split(/\s/)[0];
   if (observed !== published) throw new Error('sync branch moved after publication; receive its current history before claiming success');
