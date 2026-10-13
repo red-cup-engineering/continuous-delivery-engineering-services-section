@@ -9,6 +9,10 @@ const branchName = value => typeof value === 'string' && /^[A-Za-z0-9_][A-Za-z0-
   && value.split('/').every(p => !p.startsWith('.') && !p.endsWith('.') && !p.endsWith('.lock'));
 const sourcePath = value => typeof value === 'string' && value.length > 0 && !/[\\\x00-\x1f\x7f]/.test(value)
   && value.split('/').every(p => p && p !== '.' && p !== '..' && p.toLowerCase() !== '.git');
+// Unchanged Git source can contain POSIX names that portable generated outputs
+// cannot use. Preserve their object identities without publishing new such paths.
+const trackedPath = value => typeof value === 'string' && value.length > 0 && !value.includes('\0')
+  && value.split('/').every(p => p && p !== '.' && p !== '..' && p.toLowerCase() !== '.git');
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const required = (value, label) => value ?? fail('unavailable', `${label} unavailable; no receiving claim`);
 
@@ -18,6 +22,7 @@ export function githubRequest(token, fetchImpl = fetch) {
     const r = await fetchImpl(`https://api.github.com${path}`, {
       method, headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
     });
     if (method === 'GET' && r.status === 404) return null;
     if (!r.ok) fail('github-error', `${method} ${path}: HTTP ${r.status}`);
@@ -58,7 +63,7 @@ function entries(response) {
   if (!response || response.truncated !== false || !Array.isArray(response.tree)) fail('incomplete-tree', 'complete source tree required');
   const leaves = new Map();
   for (const e of response.tree) {
-    if (!sourcePath(e.path) || !sha(e.sha)) fail('invalid-tree', 'invalid source tree entry');
+    if (!trackedPath(e.path) || !sha(e.sha)) fail('invalid-tree', 'invalid source tree entry');
     if (e.type === 'tree') continue;
     if (leaves.has(e.path)) fail('invalid-tree', 'duplicate source tree path');
     leaves.set(e.path, { mode: e.mode, type: e.type, sha: e.sha });
@@ -117,7 +122,8 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
   const prefix = `/repos/${repo}`;
   const repository = required(await request('GET', prefix), 'source repository');
   if (repository.full_name !== repo || !branchName(repository.default_branch)) fail('wrong-owner', 'source repository identity differs');
-  await receiveRunnerSelection({repo,runsOn,request,repositoryRecord:repository});
+  if(Object.keys(files).some(path=>path.startsWith('.github/workflows/')))
+    await receiveRunnerSelection({repo,runsOn,request,repositoryRecord:repository});
   const base = repository.default_branch;
   if (branch === base) fail('protected-base', 'generated source requires a separate review branch');
   const refPath = `${prefix}/git/ref/heads/${branch}`;

@@ -138,18 +138,43 @@ export function generateFromSource(root, options = {}) {
   const rows = git(['ls-tree', '-r', '-z', '--full-tree', sourceCommit]).split('\0').filter(Boolean);
   const temporary = fs.mkdtempSync(path.join(tmpdir(), 'cd-generated-source-'));
   try {
+    const selected = [];
     for (const row of rows) {
       const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);
       if (!match) throw new Error('invalid generation source tree');
       const [, mode, type, blob, file] = match;
-      if (type === 'commit') continue;
-      if (file.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git') || file.includes('\\')) throw new Error('invalid generation source path');
-      if (mode === '120000') throw new Error('caller generation needs regular source files; symlink source is unsupported');
-      const target = path.join(temporary, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, execFileSync('git', ['cat-file', 'blob', blob], { cwd: root, maxBuffer: 32 * 1024 * 1024 }));
+      // Match the actual detector's source boundary before materialization.
+      // Ignored libraries and unrelated blobs cannot affect these callers.
+      if (type === 'commit' || file.split('/').some(part => SKIP.has(part))) continue;
+      const needed = file === '.gitmodules' || file.endsWith('.json') || file.endsWith('.md')
+        || /^lakefile\.(lean|toml)$/.test(path.basename(file))
+        || /^\.github\/workflows\/[^/]+\.ya?ml$/.test(file);
+      if (!needed) continue;
+      if (file.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')
+          || (process.platform === 'win32' && file.includes('\\'))) throw new Error('invalid generation source path');
+      if (mode === '120000') throw new Error('caller generation needs regular source inputs; symlink input is unsupported');
+      selected.push({blob,file});
     }
-    return { ...generate(temporary, options), sourceCommit };
+    // One bounded immutable Git reading replaces one child process per blob.
+    const objects = selected.length ? execFileSync('git', ['cat-file', '--batch'], {
+      cwd: root, input: selected.map(row => row.blob).join('\n') + '\n', maxBuffer: 32 * 1024 * 1024,
+    }) : Buffer.alloc(0);
+    let cursor = 0;
+    for (const {blob,file} of selected) {
+      const end = objects.indexOf(10, cursor);
+      const header = end < 0 ? null : /^([a-f0-9]{40}) blob ([0-9]+)$/.exec(objects.subarray(cursor,end).toString('ascii'));
+      const size = header ? Number(header[2]) : NaN;
+      if (!header || header[1] !== blob || !Number.isSafeInteger(size)
+          || end + 1 + size >= objects.length || objects[end + 1 + size] !== 10) throw new Error('incomplete generation source blob');
+      const target = path.join(temporary,file);
+      fs.mkdirSync(path.dirname(target), {recursive:true});
+      fs.writeFileSync(target,objects.subarray(end + 1,end + 1 + size));
+      cursor = end + 2 + size;
+    }
+    if (cursor !== objects.length) throw new Error('unexpected generation source blob output');
+    return { ...generate(temporary, options), sourceCommit,
+      sourceReading: {trackedLeaves: rows.length, selectedBlobs: selected.length,
+        blobReadProcesses: selected.length ? 1 : 0, stagedBytes: objects.length} };
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
