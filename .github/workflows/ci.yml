@@ -17,7 +17,10 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '24'
-      - name: Check maintained intake contracts
+      - name: Install pinned generator parser
+        run: npm ci --no-audit --no-fund
+      - name: Check maintained intake and generated caller contracts
         run: |
           node --check src/agent-work.mjs
-          node --test test/agent-work.test.mjs
+          node --check generator/generate-ci.mjs
+          node --test test/agent-work.test.mjs test/generate-ci.test.mjs
