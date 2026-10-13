@@ -16,9 +16,18 @@ const revision = ref => {
   if (!/^[a-f0-9]{40}$/.test(ref)) throw new Error('workflow supplier needs an exact source commit');
   return ref;
 };
+// The Group's generator may only hire an explicitly identified house runner.
+// "ubuntu-latest" works on some accounts until their hosted-minute budget ends;
+// treating that as the default hides an operational dependency and costs money.
+const STANDARD_LABELS = new Set(['self-hosted', 'linux', 'windows', 'macos', 'x64', 'arm', 'arm64']);
 const runnerLabels = labels => {
-  if (!Array.isArray(labels) || !labels.length || labels.some(label => typeof label !== 'string' || !label.trim()))
-    throw new Error('explicit runner labels need a nonempty string array');
+  if (!Array.isArray(labels) || !labels.length || labels.some(label =>
+    typeof label !== 'string' || !/^[A-Za-z0-9_-]+$/.test(label)))
+    throw new Error('runner labels need an explicit nonempty array of GitHub label names');
+  const normalized = labels.map(label => label.toLowerCase());
+  if (new Set(normalized).size !== normalized.length || !normalized.includes('self-hosted')
+      || !normalized.some(label => !STANDARD_LABELS.has(label)))
+    throw new Error('house CI requires a self-hosted runner and a retained machine/pool label; GitHub-hosted runners are not a fallback');
   return JSON.stringify(JSON.stringify(labels));
 };
 // Mirrors content.yml's walk, so selection matches what content.yml would check.
