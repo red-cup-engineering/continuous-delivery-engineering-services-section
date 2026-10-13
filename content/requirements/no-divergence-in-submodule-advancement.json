@@ -7,7 +7,8 @@
   "specification": {
     "inputs": ["checked-out parent commit", "existing sync branch", "gitlinks", "declared supplier default branches", "authenticated head and ancestry observations"],
     "output": "one pull request retaining the existing sync branch and checked-out base history with only proven descendant pin changes",
-    "refusals": ["dirty index or checkout", "changed observed pin", "concurrent sync branch movement", "conflicting base merge", "unknown or non-descendant supplier ancestry"],
+    "refusals": ["dirty index or checkout", "changed observed pin", "concurrent sync branch movement", "non-gitlink, deleted, ambiguous or supplier-definition base conflict", "unknown or non-descendant supplier ancestry"],
+    "baseConflictReceiving": "A conflicting base merge may select only the descendant of two comparable gitlink stages, each proven to descend from their recorded common stage. Require exactly one merge base, an exact original-stage match and unchanged .gitmodules. Qualify every conflict before staging any resolution; retain both parent histories and unrelated clean merge changes. Abort and publish nothing when any condition is unresolved.",
     "publication": "ordinary fast-forward push followed by authoritative ref readback; never a force push"
   },
   "design": "Receive the existing branch and checked-out base before computing pin changes in the existing advance engine. Publish through the shared reusable workflows; gitlinks remain the parent source references. Machine deployment is a separate receiving operation.",
