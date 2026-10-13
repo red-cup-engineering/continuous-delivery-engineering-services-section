@@ -163,3 +163,17 @@ test('runner auditor refuses duplicate workflow keys and anonymous direct runner
   });
   assert.equal(auditRunnerRouting(root).length,2);
 });
+
+test('runner auditor follows local reusable selectors and does not trust unknown providers', () => {
+  const root=fixture({
+    '.github/workflows/local.yml': 'on: [push]\njobs:\n  use:\n    uses: ./.github/workflows/node-package.yml\n    with:\n      runs-on: \'["ubuntu-latest"]\'\n',
+    '.github/workflows/external.yml': 'on: [push]\njobs:\n  use:\n    uses: some-third-party/unknown/.github/workflows/ci.yml@' + REF + '\n',
+    '.github/workflows/bound.yml': 'on: [push]\njobs:\n  use:\n    uses: ./.github/workflows/node-package.yml\n    with:\n      runs-on: \'["self-hosted","Linux","X64","bare-cedar-fog"]\'\n',
+  });
+  const findings=auditRunnerRouting(root);
+  assert.equal(findings.length, 2);
+  assert.deepEqual(findings.map(f=>f.file),[
+    '.github/workflows/external.yml',
+    '.github/workflows/local.yml'
+  ]);
+});
