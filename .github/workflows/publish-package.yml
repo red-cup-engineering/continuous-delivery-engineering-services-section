@@ -15,7 +15,7 @@ on:
     inputs:
       runs-on:
         type: string
-        default: '["ubuntu-latest"]'
+        required: true
     secrets:
       registry-token:
         required: false

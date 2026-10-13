@@ -9,7 +9,7 @@ on:
       runs-on:
         description: 'JSON runner labels (the machine build runner, which can read every pinned source)'
         type: string
-        default: '"ubuntu-latest"'
+        required: true
 jobs:
   machine-lock-fresh:
     runs-on: ${{ fromJSON(inputs.runs-on) }}

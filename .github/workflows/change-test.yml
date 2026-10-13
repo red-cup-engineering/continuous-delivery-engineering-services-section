@@ -12,6 +12,10 @@ name: change-test
 on:
   workflow_call:
     inputs:
+      runs-on:
+        description: 'Explicit JSON runner labels supplied by the caller'
+        type: string
+        required: true
       machine:
         description: 'One machine to test against (owner/repo, or owner/repo:path for a snapshot below the root); empty tests every machine in `machines` that pins this repository'
         type: string
@@ -30,7 +34,7 @@ on:
         required: false
 jobs:
   machines:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -102,7 +106,7 @@ jobs:
   change-test:
     needs: machines
     if: needs.machines.result == 'success' && needs.machines.outputs.machines != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -230,7 +234,7 @@ jobs:
   report:
     needs: [machines, change-test]
     if: always() && github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     permissions:
       contents: read
