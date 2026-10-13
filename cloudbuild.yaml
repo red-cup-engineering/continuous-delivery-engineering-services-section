@@ -1,0 +1,30 @@
+# This is the owning Continuous Delivery section's provider-native Cloud Build
+# self-check, NOT a replacement for its GitHub reusable workflows or LAGOON.
+# Only bind through a qualified GitHub source trigger: exact commit, no deploy.
+# Trigger MUST bind _NODE_IMAGE to a verified node:24 image by @sha256:digest.
+# Trigger MUST use a dedicated read-only build identity; no secrets.
+# A missing toolchain digest refuses at Cloud Build substitution time.
+timeout: 900s
+options:
+  machineType: E2_STANDARD_2
+  logging: CLOUD_LOGGING_ONLY
+  sourceProvenanceHash:
+    - SHA256
+steps:
+  - id: source-and-test
+    name: '${_NODE_IMAGE}'
+    entrypoint: bash
+    env:
+      - 'BUILDER_IMAGE=${_NODE_IMAGE}'
+    args:
+      - -euc
+      - |
+        # The provider's GitHub source trigger must supply an exact revision.
+        # '$$' escapes a shell '$' from Cloud Build substitution processing.
+        test -n "$COMMIT_SHA"
+        [[ "$BUILDER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "unpinned builder" >&2; exit 78; }
+        revision="$$(git rev-parse --verify HEAD)"
+        test "$$revision" = "$COMMIT_SHA"
+        test -s package-lock.json
+        npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+        npm test
