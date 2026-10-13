@@ -44,11 +44,11 @@ export function renderBody({ advance, diverged, unread = [] }, note) {
 }
 
 export function readEntries(cwd, { head, status }) {
-  const cfg = git(cwd, 'config', '-f', '.gitmodules', '--get-regexp', '\\.path$');
+  const cfg = git(cwd, 'config', '--no-includes', '-f', '.gitmodules', '--get-regexp', '^submodule\\..*\\.path$');
   return cfg.split('\n').filter(Boolean).map(line => {
     const [key, p] = line.split(/\s+/);
     const name = key.slice('submodule.'.length, -'.path'.length);
-    const get = k => { try { return git(cwd, 'config', '-f', '.gitmodules', `submodule.${name}.${k}`); } catch { return ''; } };
+    const get = k => { try { return git(cwd, 'config', '--no-includes', '-f', '.gitmodules', `submodule.${name}.${k}`); } catch { return ''; } };
     const url = get('url'), branch = get('branch');
     const pin = git(cwd, 'ls-tree', 'HEAD', p).split(/\s+/)[2] ?? '';
     const e = { path: p, url, branch, pin };
@@ -59,8 +59,48 @@ export function readEntries(cwd, { head, status }) {
 }
 
 // Git cannot compare unmaterialized supplier commits when merging parent trees.
-// Resolve only the closed case: unchanged supplier definitions, three gitlink
+// Resolve only the closed case: unchanged conflicting supplier definitions, three gitlink
 // stages, and a proven ancestor chain. Every other conflict still needs review.
+function supplierDefinitions(cwd, blob) {
+  const sections = new Map();
+  for (const record of gitRaw(cwd, 'config', '--no-includes', '--blob', blob, '-z', '--list').split('\0').filter(Boolean)) {
+    const separator = record.indexOf('\n');
+    const key = separator < 0 ? record : record.slice(0, separator);
+    const value = separator < 0 ? null : record.slice(separator + 1);
+    const match = /^submodule\.(.+)\.([^.]+)$/.exec(key);
+    if (!match) continue;
+    const [, name, field] = match;
+    if (!sections.has(name)) sections.set(name, new Map());
+    const section = sections.get(name);
+    if (!section.has(field)) section.set(field, []);
+    section.get(field).push(value);
+  }
+  const paths = new Map();
+  for (const [name, fields] of sections) {
+    const declared = fields.get('path');
+    if (!declared || declared.length !== 1 || typeof declared[0] !== 'string' || !declared[0]) throw new Error('ambiguous supplier path definition');
+    const file = declared[0];
+    if (paths.has(file)) throw new Error(`ambiguous supplier path: ${file}`);
+    const identity = JSON.stringify([name, [...fields].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)]);
+    paths.set(file, { identity, urls: fields.get('url'), ambiguous: [...fields.values()].some(values => values.length !== 1 || typeof values[0] !== 'string') });
+  }
+  return paths;
+}
+
+function mergeSupplierDefinitions(cwd, base, ancestor) {
+  const objects = ['HEAD', base, ancestor].map(ref => {
+    const record = gitRaw(cwd, 'ls-tree', '-z', ref, '--', '.gitmodules');
+    const match = /^(100644|100755) blob ([0-9a-f]{40})\t\.gitmodules\0$/.exec(record);
+    if (!match) throw new Error('supplier definitions missing or changed file kind');
+    return { mode: match[1], blob: match[2] };
+  });
+  const index = /^(100644|100755) ([0-9a-f]{40}) 0\t\.gitmodules\0$/.exec(gitRaw(cwd, 'ls-files', '--stage', '-z', '--', '.gitmodules'));
+  if (!index) throw new Error('supplier definitions are unresolved or changed file kind');
+  objects.push({ mode: index[1], blob: index[2] });
+  if (new Set(objects.map(o => o.mode)).size !== 1) throw new Error('supplier definitions changed file mode');
+  return objects.map(o => supplierDefinitions(cwd, o.blob));
+}
+
 function receiveBase(cwd, base, status) {
   try { git(cwd, 'merge', '--no-edit', base); return; }
   catch (mergeError) {
@@ -72,10 +112,6 @@ function receiveBase(cwd, base, status) {
       const ancestors = git(cwd, 'merge-base', '--all', 'HEAD', base).split('\n');
       if (ancestors.length !== 1) throw new Error('ambiguous base merge ancestry');
       const ancestor = ancestors[0];
-      // Do not interpret a changed supplier identity or branch as pin ancestry.
-      const definitions = ['HEAD', base, ancestor].map(ref => git(cwd, 'rev-parse', `${ref}:.gitmodules`));
-      definitions.push(git(cwd, 'rev-parse', ':.gitmodules'));
-      if (new Set(definitions).size !== 1) throw new Error('supplier definitions changed during conflicting base merge');
       const conflicts = new Map();
       for (const record of gitRaw(cwd, 'ls-files', '--unmerged', '-z').split('\0').filter(Boolean)) {
         const match = /^(\d{6}) ([0-9a-f]{40}) ([123])\t([\s\S]+)$/.exec(record);
@@ -85,24 +121,22 @@ function receiveBase(cwd, base, status) {
         conflicts.get(file).set(stage, { mode, sha });
       }
       if (!conflicts.size) throw mergeError;
-      const modules = new Map();
-      for (const record of gitRaw(cwd, 'config', '--blob', 'HEAD:.gitmodules', '-z', '--get-regexp', '^submodule\\..*\\.path$').split('\0').filter(Boolean)) {
-        const separator = record.indexOf('\n');
-        if (separator < 0) throw new Error('unread supplier definition');
-        const key = record.slice(0, separator), file = record.slice(separator + 1);
-        if (modules.has(file)) throw new Error(`ambiguous supplier path: ${file}`);
-        modules.set(file, key.slice(0, -'.path'.length));
-      }
+      for (const [file, stages] of conflicts) if (stages.size !== 3 || [...stages.values()].some(e => e.mode !== '160000')) throw new Error(`non-gitlink base merge conflict: ${file}`);
+      const definitions = mergeSupplierDefinitions(cwd, base, ancestor);
       const resolved = [];
       for (const [file, stages] of conflicts) {
-        if (stages.size !== 3 || [...stages.values()].some(e => e.mode !== '160000')) throw new Error(`non-gitlink base merge conflict: ${file}`);
         const original = stages.get('1').sha, ours = stages.get('2').sha, theirs = stages.get('3').sha;
         const source = gitRaw(cwd, 'ls-tree', '-z', ancestor, '--', file);
         if (source !== `160000 commit ${original}\t${file}\0`) throw new Error(`ambiguous original gitlink: ${file}`);
-        const module = modules.get(file);
-        if (!module) throw new Error(`undeclared conflicting supplier: ${file}`);
-        const urls = gitRaw(cwd, 'config', '--blob', 'HEAD:.gitmodules', '-z', '--get-all', `${module}.url`).split('\0').filter(Boolean);
-        if (urls.length !== 1 || !githubSlug(urls[0])) throw new Error(`unread conflicting supplier identity: ${file}`);
+        // An unrelated clean addition is ordinary merge content. The supplier
+        // at this exact conflicted path must retain its section name and every
+        // configured value on both sides, the common base and the merge index.
+        const suppliers = definitions.map(paths => paths.get(file));
+        if (suppliers.some(s => !s)) throw new Error(`supplier definitions changed or removed: ${file}`);
+        if (suppliers.some(s => s.ambiguous)) throw new Error(`ambiguous conflicting supplier values: ${file}`);
+        if (new Set(suppliers.map(s => s.identity)).size !== 1) throw new Error(`supplier definitions changed for conflicting path: ${file}`);
+        const urls = suppliers[0].urls;
+        if (!urls || urls.length !== 1 || typeof urls[0] !== 'string' || !githubSlug(urls[0])) throw new Error(`unread conflicting supplier identity: ${file}`);
         const url = urls[0];
         const descends = (pin, head) => pin === head || status?.(url, pin, head) === 'ahead';
         if (!descends(original, ours) || !descends(original, theirs)) throw new Error(`unproven base gitlink ancestry: ${file}`);
@@ -166,7 +200,9 @@ export function publish(cwd, { branch, advance, message = 'Advance submodules', 
 }
 
 export function run(cwd, { branch, note = '', head, status, remote }) {
-  if (!fs.existsSync(path.join(cwd, '.gitmodules'))) return { result: 'no submodules' };
+  const definitions = fs.lstatSync(path.join(cwd, '.gitmodules'), { throwIfNoEntry: false });
+  if (!definitions) return { result: 'no submodules' };
+  if (!definitions.isFile()) throw new Error('supplier definitions changed file kind; regular source required');
   const prepared = prepare(cwd, { branch, remote, status });
   const p = plan(readEntries(cwd, { head, status }));
   const body = renderBody(p, note);
