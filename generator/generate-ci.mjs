@@ -126,6 +126,15 @@ export function generate(root, options = {}) {
   const sync = renderSync({ ...options, submodules: fs.existsSync(path.join(root, '.gitmodules')) });
   if (sync) files['.github/workflows/sync.yml'] = sync;
   files['.github/workflows/agent-work-intake.yml'] = renderAgentWork(options);
+  if (options.workflows !== undefined) {
+    if (!Array.isArray(options.workflows) || !options.workflows.length
+        || new Set(options.workflows).size !== options.workflows.length
+        || options.workflows.some(name => !['ci','sync','agent-work-intake'].includes(name)))
+      throw new Error('explicit generated workflow selection required');
+    const selected = new Set(options.workflows.map(name => `.github/workflows/${name}.yml`));
+    if ([...selected].some(name => !files[name])) throw new Error('selected workflow has no source capability');
+    for (const name of Object.keys(files)) if (!selected.has(name)) delete files[name];
+  }
   return { files, handwritten: reportHandwritten(root), selection };
 }
 
@@ -232,11 +241,12 @@ export async function receiveGeneratedCaller({ root, repo, token, request, branc
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
   const opt = n => { const i = args.indexOf(n); return i < 0 ? undefined : args[i + 1]; };
-  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--branch', '--verify-commit'];
+  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--branch', '--verify-commit', '--workflows'];
   const root = path.resolve(args.find((a, i) => !a.startsWith('--') && !valueOptions.includes(args[i - 1])) ?? '.');
   const options = {
     parent: opt('--parent'), ref: opt('--ref') ?? REF,
     runsOn: opt('--runs-on') ? JSON.parse(opt('--runs-on')) : undefined,
+    workflows: opt('--workflows') ? JSON.parse(opt('--workflows')) : undefined,
     defaultBranch: opt('--default-branch') ?? 'main', tokenSecret: opt('--token-secret'),
   };
   if (args.includes('--pr') && args.includes('--verify-commit')) throw new Error('select source receiving or build parity, not both');
