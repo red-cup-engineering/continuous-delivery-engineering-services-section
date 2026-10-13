@@ -219,7 +219,7 @@ export function run(cwd, { branch, note = '', head, status, remote }) {
 }
 
 // Live dependencies: ls-remote for heads, the compare API for ancestry.
-function liveDeps(token) {
+export function liveDeps(token) {
   const environment = { ...process.env };
   if (token) {
     const count = Number(environment.GIT_CONFIG_COUNT ?? 0);
@@ -244,10 +244,12 @@ function liveDeps(token) {
       const slug = githubSlug(url);
       if (!slug || !pin) return 'unknown';
       try {
-        return JSON.parse(execFileSync('curl', ['-fsS', '--config', '-', '-H', 'Accept: application/vnd.github+json',
-          `https://api.github.com/repos/${slug}/compare/${pin}...${head}`], {
-          input: `header = ${JSON.stringify(`Authorization: Bearer ${token}`)}\n`, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-        })).status;
+        const relation=execFileSync('gh',['api',
+          'repos/'+slug+'/compare/'+pin+'...'+head,'--jq','.status'],{
+          env:{...process.env,...(token?{GH_TOKEN:token}:{})},encoding:'utf8',timeout:30000,
+          maxBuffer:4096,stdio:['ignore','pipe','pipe'],
+        }).trim();
+        return ['identical','ahead','behind','diverged'].includes(relation)?relation:'unknown';
       } catch { return 'unknown'; }
     },
   };
