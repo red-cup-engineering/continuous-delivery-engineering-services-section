@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { generatedSource, verifyGeneratedSource, openPullRequest, githubRequest } from '../generator/open-pr.mjs';
+import { generatedSource, verifyGeneratedSource, openPullRequest, githubRequest, planGeneratedTree } from '../generator/open-pr.mjs';
 import { generateFromSource } from '../generator/generate-ci.mjs';
 const repo = 'owner/source', branch = 'ci/caller-generator';
 const inputs = [{ repository: 'owner/generator', commit: 'a'.repeat(40) }];
@@ -21,7 +21,7 @@ function provider(t, initial = { 'package.json': '{}\n', 'untouched.txt': 'keep\
   git(['add', '.']); git(['commit', '-qm', 'source']);
   const sourceCommit = git(['rev-parse', 'HEAD']);
   const state = { head: sourceCommit, base: sourceCommit, pulls: [], calls: [], before: null, after: null };
-  const treeResponse = sha => ({ sha, truncated: false, tree: git(['ls-tree', '-r', '-z', sha]).split('\0').filter(Boolean).map(row => {
+  const treeResponse = sha => ({ sha, truncated: false, tree: git(['ls-tree', '-z', sha]).split('\0').filter(Boolean).map(row => {
     const [,mode,type,id,file] = /^(\d+) (\w+) ([a-f0-9]{40})\t([\s\S]+)$/.exec(row); return { path:file, mode, type, sha:id };
   }) });
   const commitResponse = sha => ({ sha, tree:{ sha:git(['rev-parse',`${sha}^{tree}`]) }, parents:git(['show','-s','--format=%P',sha]).split(' ').filter(Boolean).map(sha=>({sha})), message:git(['show','-s','--format=%B',sha]) });
@@ -176,4 +176,86 @@ test('independent: counterfeit manifest outputs cannot excuse altered committed 
  const forged=p.git(['commit-tree',p.git(['write-tree']),'-p',p.sourceCommit],`Forged\n\nGenerated-source identity: ${proposal.id}\n${JSON.stringify(proposal)}`);
  p.git(['checkout','--detach',forged]);
  assert.throws(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:forged}),{code:'output-mismatch'});
+});
+
+for (const [name, generated] of Object.entries({
+  sync: { '.github/workflows/sync.yml': 'name: sync\non: workflow_dispatch\n' },
+  release: { '.github/workflows/release.yml': 'name: release\non: workflow_dispatch\n', '.github/scripts/release.mjs': 'export const release = true;\n' },
+})) test(`${name} caller receives with bounded tree proof and never enumerates unrelated archives`, async t => {
+  const p = provider(t, { 'package.json': '{}\n', '.github/workflows/sync.yml': 'old\n', '.github/scripts/keep.mjs': 'retain\n',
+    'archive/a/large.txt': 'unrelated archived body\n', 'source-binding.json': '{"immutable":"input"}\n' });
+  const archived = p.git(['rev-parse', `${p.sourceCommit}:archive`]);
+  p.state.before = (method, url) => { if (method === 'GET' && (url.includes('?recursive') || url.endsWith(archived))) throw new Error('archive enumeration unavailable'); };
+  const result = await openPullRequest({ ...p.options, files: generated });
+  assert.equal(result.status, 'proposed');
+  assert.equal(p.git(['rev-parse', `${result.commit}:archive`]), archived);
+  assert.equal(p.git(['show', `${result.commit}:.github/scripts/keep.mjs`]), 'retain');
+  assert.equal(p.git(['show', `${result.commit}:source-binding.json`]), '{"immutable":"input"}');
+  const reads = p.state.calls.filter(c => c.method === 'GET' && c.url.includes('/git/trees/'));
+  assert.equal(reads.length, name === 'sync' ? 6 : 8); // source + result ancestors, shared prefixes read once
+});
+
+for (const alteration of ['addition', 'deletion', 'mode', 'subtree']) test(`Merkle receiving rejects undeclared ${alteration} before publishing`, async t => {
+  const p = provider(t, { 'untouched.txt': 'retain\n', 'archive/deep/value': 'original\n' });
+  p.state.after = (method, url, body, result) => {
+    if (method !== 'POST' || !url.endsWith('/git/trees')) return;
+    const index = path.join(p.root, '.git', `altered-index-${alteration}`), env = { GIT_INDEX_FILE: index };
+    try {
+      p.git(['read-tree', result.sha], undefined, env);
+      if (alteration === 'deletion') p.git(['update-index', '--force-remove', 'untouched.txt'], undefined, env);
+      else {
+        const file = alteration === 'addition' ? 'undeclared.txt' : alteration === 'mode' ? 'untouched.txt' : 'archive/deep/value';
+        const blob = p.git(['hash-object', '-w', '--stdin'], alteration === 'mode' ? 'retain\n' : 'altered\n');
+        p.git(['update-index', '--add', '--cacheinfo', `${alteration === 'mode' ? '100755' : '100644'},${blob},${file}`], undefined, env);
+      }
+      result.sha = p.git(['write-tree'], undefined, env);
+    } finally { fs.rmSync(index, { force: true }); }
+  };
+  await assert.rejects(openPullRequest(p.options), { code: 'output-mismatch' });
+  assert.equal(p.state.head, p.sourceCommit); assert.equal(p.state.pulls.length, 0);
+});
+
+for (const fault of ['missing-entry', 'wrong-sha', 'duplicate', 'recursive', 'mode']) test(`immediate tree ${fault} is rejected before source writes`, async t => {
+  const p = provider(t);
+  p.state.after = (method, url, body, result) => {
+    if (method !== 'GET' || !url.includes('/git/trees/')) return;
+    if (fault === 'missing-entry') result.tree.pop();
+    if (fault === 'wrong-sha') result.sha = 'f'.repeat(40);
+    if (fault === 'duplicate') result.tree.push(result.tree[0]);
+    if (fault === 'recursive') result.tree[0].path = 'directory/nested';
+    if (fault === 'mode') result.tree[0].mode = '040000';
+  };
+  await assert.rejects(openPullRequest(p.options), { code: 'invalid-tree' }); assert.equal(writes(p).length, 0);
+});
+
+test('source file, executable, directory and symlink output collisions fail closed', async t => {
+  for (const variant of ['file-prefix', 'directory-output', 'executable', 'symlink', 'symlink-prefix']) {
+    const p = provider(t, { 'package.json': '{}\n', 'source/file.txt': 'original\n' });
+    let generated = { 'source/file.txt/generated': 'new' };
+    if (variant === 'directory-output') generated = { source: 'new' };
+    if (variant === 'executable') { p.git(['update-index', '--chmod=+x', 'source/file.txt']); generated = { 'source/file.txt': 'new' }; }
+    if (variant.startsWith('symlink')) {
+      fs.symlinkSync('source', path.join(p.root, 'linked')); p.git(['add', 'linked']);
+      generated = { [variant === 'symlink' ? 'linked' : 'linked/generated']: 'new' };
+    }
+    const current = p.git(['commit-tree', p.git(['write-tree']), '-p', p.sourceCommit], 'typed source');
+    p.state.head = current; p.state.base = current;
+    await assert.rejects(openPullRequest({ ...p.options, sourceCommit: current, files: generated }), { code: 'unsupported-output' });
+    assert.equal(writes(p).length, 0);
+  }
+});
+
+test('tree reconstruction follows actual Git directory sorting and UTF-8 names', async t => {
+  const p = provider(t, { 'a/file': 'before', 'a.c': 'retain', 'a-b': 'retain', 'é/file': 'retain', 'tree/file': 'before' });
+  const result = await openPullRequest({ ...p.options, files: { 'a/new': 'added', 'tree/file': 'after', '🌲/new': 'unicode' } });
+  assert.equal(result.status, 'proposed');
+  assert.equal(p.git(['show', `${result.commit}:a.c`]), 'retain');
+  assert.equal(p.git(['show', `${result.commit}:🌲/new`]), 'unicode');
+});
+
+test('structural planner rejects ambiguous declared output scope before reading', async () => {
+  const output = path => ({ path, mode: '100644', blob: 'b'.repeat(40) });
+  for (const outputs of [[output('a'), output('a/b')], [output('a/b'), output('a')], [output('a'), output('a')]]) {
+    await assert.rejects(planGeneratedTree({ outputs }, { sourceTree: 'a'.repeat(40), readTree() { throw new Error('must not read'); } }), { code: 'invalid-output' });
+  }
 });

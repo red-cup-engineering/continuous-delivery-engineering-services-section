@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import YAML from 'yaml';
 import { detect, generate, renderCi, renderSync, REUSABLE, REF } from '../generator/generate-ci.mjs';
 
 // Fixture repositories are built from a map of path -> content.
@@ -74,4 +75,30 @@ test('repository with submodules gets a sync caller; a parent adds the upward no
 
 test('current machine-neutral generator does not assign a package to implicit machines',()=>{
   assert.equal(generate(fixture({'package.json':'{}'})).files['.github/workflows/change-test.yml'],undefined);
+});
+
+test('root sync receives reviewed caller changes on its default branch without a review-branch loop', () => {
+  const parsed = YAML.parse(renderSync({ submodules: true, defaultBranch: 'trunk',
+    runsOn: ['self-hosted', 'existing-runner'], tokenSecret: 'EXISTING_TOKEN' }));
+  assert.deepEqual(parsed.on.push, { branches: ['trunk'], paths: ['.github/workflows/sync.yml'] });
+  assert.deepEqual(parsed.on.schedule, [{ cron: '17 6 * * *' }]);
+  assert.deepEqual(parsed.on.repository_dispatch, { types: ['section-advanced'] });
+  assert.ok('workflow_dispatch' in parsed.on);
+  assert.equal(parsed.jobs.advance.if, undefined);
+  assert.equal(parsed.jobs.notify, undefined);
+  assert.deepEqual(parsed.permissions, { contents: 'write', 'pull-requests': 'write' });
+  assert.equal(parsed.jobs.advance.with['runs-on'], '["self-hosted","existing-runner"]');
+  assert.equal(parsed.jobs.advance.secrets.token, '${{ secrets.EXISTING_TOKEN }}');
+  assert.deepEqual(parsed.concurrency, { group: 'submodule-sync', 'cancel-in-progress': false });
+});
+
+test('parented callers retain all default-source notifications and never advance on their own push', () => {
+  for (const submodules of [true, false]) {
+    const parsed = YAML.parse(renderSync({ submodules, parent: 'owner/parent', defaultBranch: 'trunk' }));
+    assert.deepEqual(parsed.on.push, { branches: ['trunk'] });
+    assert.equal(parsed.jobs.notify.if, "github.event_name == 'push'");
+    assert.equal(parsed.jobs.notify.with.parent, 'owner/parent');
+    if (submodules) assert.equal(parsed.jobs.advance.if, "github.event_name != 'push'");
+    else assert.equal(parsed.jobs.advance, undefined);
+  }
 });

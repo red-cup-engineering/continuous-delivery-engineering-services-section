@@ -86,6 +86,89 @@ export function verifyGeneratedTransformation(proposal, sourceTree, receivedTree
   return true;
 }
 
+// Git trees are Merkle objects. A bounded edit needs the complete immediate
+// entries at each changed-path ancestor, not the leaves of every untouched
+// archive. Reconstruct the expected root using Git's actual object encoding;
+// unchanged sibling identities preserve their entire subtrees transitively.
+const treeKinds = new Map([['040000', 'tree'], ['100644', 'blob'], ['100755', 'blob'], ['120000', 'blob'], ['160000', 'commit']]);
+function treeIdentity(values) {
+  const ordered = [...values].sort((a, b) => Buffer.compare(
+    Buffer.from(a.path + (a.type === 'tree' ? '/' : '')),
+    Buffer.from(b.path + (b.type === 'tree' ? '/' : ''))));
+  const body = Buffer.concat(ordered.flatMap(e => [
+    Buffer.from(`${e.mode === '040000' ? '40000' : e.mode} ${e.path}\0`), Buffer.from(e.sha, 'hex'),
+  ]));
+  return hash('sha1', Buffer.concat([Buffer.from(`tree ${body.length}\0`), body]));
+}
+
+/** Plan and receive an exact root-to-root transformation. readTree must return
+ * complete non-recursive Git tree objects at the requested immutable SHA. */
+export async function planGeneratedTree(proposal, { sourceTree, readTree }) {
+  if (!sha(sourceTree) || typeof readTree !== 'function') fail('invalid-tree', 'exact source tree and reader required');
+  const edits = new Map();
+  if (!Array.isArray(proposal.outputs) || !proposal.outputs.length) fail('invalid-output', 'no generated tree outputs');
+  for (const output of proposal.outputs) {
+    if (!sourcePath(output.path) || output.mode !== '100644' || !sha(output.blob)) fail('invalid-output', 'invalid generated tree output');
+    let node = edits;
+    const parts = output.path.split('/');
+    for (const [i, part] of parts.entries()) {
+      if (i === parts.length - 1) {
+        if (node.has(part)) fail('invalid-output', 'duplicate or colliding generated output');
+        node.set(part, output);
+      } else {
+        if (!node.has(part)) node.set(part, new Map());
+        node = node.get(part);
+        if (!(node instanceof Map)) fail('invalid-output', 'generated output file/directory collision');
+      }
+    }
+  }
+  const cache = new Map();
+  const read = async id => {
+    if (cache.has(id)) return cache.get(id);
+    const response = required(await readTree(id), 'source tree object');
+    if (response.truncated !== false || !Array.isArray(response.tree)) fail('incomplete-tree', 'complete immediate source tree required');
+    if (response.sha !== id) fail('invalid-tree', 'source tree identity differs');
+    const values = new Map();
+    for (const e of response.tree) {
+      if (!sourcePath(e.path) || e.path.includes('/') || !sha(e.sha) || treeKinds.get(e.mode) !== e.type || values.has(e.path)) fail('invalid-tree', 'invalid immediate source tree entry');
+      values.set(e.path, { path: e.path, mode: e.mode, type: e.type, sha: e.sha });
+    }
+    if (treeIdentity(values.values()) !== id) fail('invalid-tree', 'source tree bytes do not match its identity');
+    cache.set(id, values);
+    return values;
+  };
+  const project = async (id, node) => {
+    const values = new Map(id ? await read(id) : []);
+    for (const [name, change] of node) {
+      const prior = values.get(name);
+      if (change instanceof Map) {
+        if (prior && prior.type !== 'tree') fail('unsupported-output', 'generated source crosses an existing file or symlink');
+        values.set(name, { path: name, mode: '040000', type: 'tree', sha: await project(prior?.sha, change) });
+      } else {
+        if (prior && (prior.type !== 'blob' || prior.mode !== change.mode)) fail('unsupported-output', `generated source changes file kind or mode: ${change.path}`);
+        values.set(name, { path: name, mode: change.mode, type: 'blob', sha: change.blob });
+      }
+    }
+    return treeIdentity(values.values());
+  };
+  const tree = await project(sourceTree, edits);
+  const inspect = async (id, node) => {
+    const values = await read(id);
+    for (const [name, change] of node) {
+      const value = values.get(name);
+      if (change instanceof Map) {
+        if (value?.type !== 'tree') fail('output-mismatch', 'received generated directory differs');
+        await inspect(value.sha, change);
+      } else if (value?.type !== 'blob' || value.mode !== change.mode || value.sha !== change.blob) fail('output-mismatch', 'received generated output differs');
+    }
+  };
+  return { sourceTree, tree, verify: async receivedTree => {
+    if (receivedTree !== tree) fail('output-mismatch', 'received source root differs from the complete generated transformation');
+    await inspect(receivedTree, edits);
+    return true;
+  } };
+}
+
 /** Publish from the exact generation base into the named review branch. GitHub
  * rejects a non-fast-forward race. Lost mutation replies are reconciled at the
  * original ref/PR. A repeat after restart is identified by its durable commit. */
@@ -106,8 +189,9 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
   };
   const parent = required(await request('GET', `${prefix}/git/commits/${sourceCommit}`), 'generation source commit');
   if (parent.sha !== sourceCommit || !sha(parent.tree?.sha)) fail('wrong-source', 'generation source commit differs');
-  const before = entries(await request('GET', `${prefix}/git/trees/${parent.tree.sha}?recursive=1`));
-  const expected = expectedTree(proposal, before);
+  const transformation = await planGeneratedTree(proposal, {
+    sourceTree: parent.tree.sha, readTree: id => request('GET', `${prefix}/git/trees/${id}`),
+  });
   const head = await readHead();
   if (head === null) {
     const current = required(await request('GET', `${prefix}/git/ref/heads/${base}`), 'default source ref');
@@ -117,19 +201,19 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
   const receiveCommit = async commit => {
     const observed = required(await request('GET', `${prefix}/git/commits/${commit}`), 'proposed commit');
     if (observed.sha !== commit || observed.parents?.length !== 1 || observed.parents[0].sha !== sourceCommit || !observed.message?.split('\n').includes(marker)) fail('stale-head', 'source review branch moved; regenerate from its exact current head');
-    if (!sameTree(expected, entries(await request('GET', `${prefix}/git/trees/${observed.tree.sha}?recursive=1`)))) fail('output-mismatch', 'published source tree differs from the complete generated transformation');
+    await transformation.verify(observed.tree.sha);
     return observed.tree.sha;
   };
   let commit, tree;
   if (head !== null && head !== sourceCommit) {
     commit = head; tree = await receiveCommit(commit);
-  } else if (sameTree(before, expected)) {
+  } else if (transformation.tree === parent.tree.sha) {
     return { status: 'unchanged', proposal, commit: sourceCommit, tree: parent.tree.sha, pullRequest: null };
   } else {
     const createdTree = required(await request('POST', `${prefix}/git/trees`, { base_tree: parent.tree.sha,
       tree: proposal.outputs.map(output => ({ path: output.path, mode: output.mode, type: 'blob', content: files[output.path] })) }), 'generated source tree');
     tree = createdTree.sha;
-    if (!sha(tree) || !sameTree(expected, entries(await request('GET', `${prefix}/git/trees/${tree}?recursive=1`)))) fail('output-mismatch', 'created tree differs from the complete generated transformation');
+    await transformation.verify(tree);
     const created = required(await request('POST', `${prefix}/git/commits`, {
       message: `${title}\n\n${marker}\n${JSON.stringify(proposal)}`, tree, parents: [sourceCommit],
     }), 'generated source commit');
