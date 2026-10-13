@@ -39,9 +39,13 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
-          ref: 33b3bf3564b04f2cb69bfc26466bcbcd9130a418
+          ref: 023516b9bd4806ad1945f007c299eb75d2a6882d
           path: .cds
           persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: keep the engine checkout out of the tree
         run: echo "/.cds" >> .git/info/exclude
       - name: advance gitlinks where the remote head moved
