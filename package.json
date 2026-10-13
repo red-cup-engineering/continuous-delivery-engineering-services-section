@@ -9,11 +9,6 @@
     "yaml": "2.8.3"
   },
   "peerDependencies": {
-    "@red-cup-engineering/git-services-section": ">=4.1.0"
-  },
-  "peerDependenciesMeta": {
-    "@red-cup-engineering/git-services-section": {
-      "optional": true
-    }
+    "@red-cup-engineering/git-services-section": ">=4.1.1"
   }
 }

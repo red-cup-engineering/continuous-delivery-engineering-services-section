@@ -21,12 +21,16 @@ const compareMetadata = (overrides = {}) => ({
 function transport(t, paged, { unpaged = paged, exitCode = 0, pin = A, head = B, url = 'https://github.com/o/s1.git' } = {}) {
   const dir = tmp();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, 'response.json'), JSON.stringify({ paged, unpaged, exitCode }));
-  fs.writeFileSync(path.join(dir, 'curl'), `#!${process.execPath}\n
+  const expectedArgs = ['api', `repos/o/s1/compare/${pin}...${head}?per_page=1&page=2`];
+  fs.writeFileSync(path.join(dir, 'response.json'), JSON.stringify({ paged, unpaged, exitCode, expectedArgs }));
+  // A transport regression must fail locally, never fall through to real curl.
+  fs.writeFileSync(path.join(dir, 'curl'), `#!${process.execPath}\nprocess.exit(91);\n`, {mode:0o755});
+  fs.writeFileSync(path.join(dir, 'gh'), `#!${process.execPath}\n
 const fs = require('node:fs'), path = require('node:path');
-const dir = __dirname, args = process.argv.slice(2), input = fs.readFileSync(0, 'utf8');
-fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify({ args, input }));
+const dir = __dirname, args = process.argv.slice(2);
+fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify({ args, token: process.env.GH_TOKEN }));
 const response = JSON.parse(fs.readFileSync(path.join(dir, 'response.json')));
+if (JSON.stringify(args) !== JSON.stringify(response.expectedArgs) || process.env.GH_TOKEN !== 'fixture-token') process.exit(92);
 if (response.exitCode) process.exit(response.exitCode);
 const body = args.at(-1).endsWith('?per_page=1&page=2') ? response.paged : response.unpaged;
 process.stdout.write(typeof body === 'string' ? body : JSON.stringify(body));
@@ -34,13 +38,14 @@ process.stdout.write(typeof body === 'string' ? body : JSON.stringify(body));
   const engine = new URL('../scripts/advance.mjs', import.meta.url).href;
   const script = `import {liveDeps} from ${JSON.stringify(engine)}; console.log(liveDeps('fixture-token').status(...JSON.parse(process.argv[1])));`;
   const result = execFileSync(process.execPath, ['--input-type=module', '-e', script, JSON.stringify([url, pin, head])], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_COUNT: '0' },
+    encoding: 'utf8', timeout:15000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_COUNT: '0' },
   }).trim();
   const requestFile = path.join(dir, 'request.json');
   const request = fs.existsSync(requestFile) ? JSON.parse(fs.readFileSync(requestFile)) : null;
+  if (typeof pin === 'string' && typeof head === 'string' && /^[a-f0-9]{40}$/.test(pin) && /^[a-f0-9]{40}$/.test(head)) assert.ok(request,'valid comparison must use the intercepted transport');
   if (request) {
-    assert.deepEqual(request.args, ['-fsS', '--config', '-', '-H', 'Accept: application/vnd.github+json', `${compareEndpoint(pin, head)}?per_page=1&page=2`]);
-    assert.equal(request.input, 'header = "Authorization: Bearer fixture-token"\n');
+    assert.deepEqual(request.args, ['api', `repos/o/s1/compare/${pin}...${head}?per_page=1&page=2`]);
+    assert.equal(request.token, 'fixture-token');
   }
   return { result, request };
 }
