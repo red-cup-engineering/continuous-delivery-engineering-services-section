@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { openPullRequest, verifyGeneratedSource, verifyGeneratedTransformation } from './open-pr.mjs';
+import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames } from './open-pr.mjs';
 
 export const REUSABLE = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
 // The generated caller hires this exact source revision, never a moving branch.
@@ -202,7 +202,7 @@ function generatorInputs() {
 /** Build-side parity consumes the proposal already retained in its Git commit;
  * there is no new receipt repository. A different source tree needs fresh
  * generation receiving, even when a subset of its outputs happens to match. */
-export function verifyGeneratedCaller({ root, receiptCommit, ...options }) {
+export async function verifyGeneratedCaller({ root, receiptCommit, ...options }) {
   revision(receiptCommit);
   const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   const message = git(['show', '-s', '--format=%B', receiptCommit]);
@@ -212,16 +212,18 @@ export function verifyGeneratedCaller({ root, receiptCommit, ...options }) {
   if (!lines.includes(`Generated-source identity: ${proposal.id}`)) throw new Error('received generation identity differs');
   if (git(['show', '-s', '--format=%P', receiptCommit]) !== proposal.sourceCommit) throw new Error('received generation parent differs');
   if (git(['rev-parse', 'HEAD^{tree}']) !== git(['rev-parse', `${receiptCommit}^{tree}`])) throw new Error('current source tree differs from received generation');
-  const sourceTree = commit => ({ truncated: false, tree: git(['ls-tree', '-r', '-z', commit]).split('\0').filter(Boolean).map(row => {
-    const match = /^(\d+) (\w+) ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);
-    if (!match) throw new Error('invalid parity source tree');
-    return { mode: match[1], type: match[2], sha: match[3], path: match[4] };
-  }) });
+  const readTree=async sha=>({sha,truncated:false,tree:git(['ls-tree','-z',sha]).split('\0').filter(Boolean).map(row=>{
+    const match=/^(\d+) (\w+) ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);
+    if(!match)throw new Error('invalid parity source tree');
+    return {mode:match[1],type:match[2],sha:match[3],path:match[4]};
+  })});
   const produced = generateFromSource(root, options);
   if (git(['rev-parse', `${produced.sourceCommit}^{tree}`]) !== git(['rev-parse', `${receiptCommit}^{tree}`])) throw new Error('generated source tree differs from received generation');
   const verified = verifyGeneratedSource(proposal, { files: produced.files, inputs: generatorInputs() });
-  verifyGeneratedTransformation(verified, sourceTree(verified.sourceCommit), sourceTree(receiptCommit));
-  return { status: 'verified', receiptCommit, sourceCommit: produced.sourceCommit, proposal: verified };
+  let transformation;
+  try {transformation=await verifyGeneratedTreeFrames(verified,git(['rev-parse',verified.sourceCommit+'^{tree}']),git(['rev-parse',receiptCommit+'^{tree}']),readTree);}
+  catch(error){error.code='output-mismatch';throw error;}
+  return { status: 'verified', receiptCommit, sourceCommit: produced.sourceCommit, proposal: verified, transformation };
 }
 
 // The same producer is used for first receiving and later byte-parity checking.
@@ -252,7 +254,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   };
   if (args.includes('--pr') && args.includes('--verify-commit')) throw new Error('select source receiving or build parity, not both');
   if (args.includes('--verify-commit')) {
-    console.log('source parity:', JSON.stringify(verifyGeneratedCaller({ root, receiptCommit: opt('--verify-commit'), ...options })));
+    console.log('source parity:', JSON.stringify(await verifyGeneratedCaller({ root, receiptCommit: opt('--verify-commit'), ...options })));
     process.exit(0);
   }
   const { files, handwritten, selection } = args.includes('--pr') ? generateFromSource(root, options) : generate(root, options);
