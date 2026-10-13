@@ -55,8 +55,19 @@ jobs:
         if: always() && steps.advance.outputs.advanced == 'true'
         run: |
           set -eu
-          if n=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number') && [ -n "$n" ]; then
-            gh pr edit "$n" --body-file .git/advance-body.md
+          # Use the maintained REST surface; older gh pr edit queries removed
+          # projectCards even when only the body is being changed. A failed
+          # lookup must stop here, never be interpreted as permission to create.
+          n=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+            -f "head=${GITHUB_REPOSITORY%%/*}:$BRANCH" -f "base=$BASE" \
+            -f state=open -f per_page=2 \
+            --jq 'if length > 1 then error("ambiguous sync pull request") else .[0].number // empty end')
+          if [ -n "$n" ]; then
+            case "$n" in *[!0-9]*|0) echo 'Invalid pull request number' >&2; exit 1 ;; esac
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$n" \
+              -F body=@.git/advance-body.md --jq .html_url
           else
-            gh pr create --base "$BASE" --head "$BRANCH" --title "Advance submodules" --body-file .git/advance-body.md
+            gh api --method POST "repos/$GITHUB_REPOSITORY/pulls" \
+              -f "base=$BASE" -f "head=$BRANCH" -f 'title=Advance submodules' \
+              -F body=@.git/advance-body.md --jq .html_url
           fi
