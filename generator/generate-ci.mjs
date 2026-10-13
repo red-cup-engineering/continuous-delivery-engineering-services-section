@@ -141,7 +141,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   for (const h of handwritten) console.log(`handwritten ${h.file}: ${h.coveredBy ?? '-'} (${h.note})`);
   if (args.includes('--pr')) {
     const { openPullRequest } = await import('./open-pr.mjs');
-    const url = await openPullRequest({ repo: opt('--pr'), files, token: process.env.GH_TOKEN });
+    const url = await openPullRequest({ repo: opt('--pr'), files, token: process.env.GH_TOKEN,
+      runsOn: opt('--runs-on') ? JSON.parse(opt('--runs-on')) : undefined });
     console.log('pull request:', url);
   } else {
     for (const [p, c] of Object.entries(files)) {

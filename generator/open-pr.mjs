@@ -13,8 +13,25 @@ export function githubRequest(token, fetchImpl = fetch) {
   };
 }
 
-export async function openPullRequest({ repo, files, token, branch = 'ci/caller-generator', title = 'Call the continuous-delivery services section', request = githubRequest(token) }) {
+/** Receive the actual repository runner binding before proposing callers. */
+export async function receiveRunnerSelection({repo,runsOn,request}) {
+  if(typeof repo!=='string'||!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo)
+      ||!Array.isArray(runsOn)||!runsOn.includes('self-hosted')
+      ||runsOn.some(label=>typeof label!=='string'||!label.trim()))
+    throw new Error('house workflow callers require an explicit repository and self-hosted runner labels');
+  const observation=await request('GET',`/repos/${repo}/actions/runners?per_page=100`);
+  if(!observation||!Number.isSafeInteger(observation.total_count)||!Array.isArray(observation.runners)
+      ||observation.total_count!==observation.runners.length)
+    throw new Error('repository runner observation is unavailable or incomplete');
+  const runners=observation.runners.filter(runner=>runner.status==='online'
+    &&runsOn.every(label=>runner.labels?.some(row=>row.name===label)));
+  if(!runners.length)throw new Error(`no online registered house runner matches ${repo}; caller proposal held`);
+  return {repository:repo,labels:runsOn,runnerIds:runners.map(runner=>runner.id),executed:false};
+}
+
+export async function openPullRequest({ repo, files, token, runsOn, branch = 'ci/caller-generator', title = 'Call the continuous-delivery services section', request = githubRequest(token) }) {
   if (!Object.keys(files).length) throw new Error('no files to commit');
+  await receiveRunnerSelection({repo,runsOn,request});
   const { default_branch: base } = await request('GET', `/repos/${repo}`);
   const existing = await request('GET', `/repos/${repo}/git/ref/heads/${branch}`);
   const parent = (existing ?? await request('GET', `/repos/${repo}/git/ref/heads/${base}`)).object.sha;
