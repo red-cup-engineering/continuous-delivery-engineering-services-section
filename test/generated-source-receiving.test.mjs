@@ -140,13 +140,13 @@ test('later build consumes retained commit proposal, reruns the producer and rej
  const module=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
  const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request});
  p.git(['checkout','--detach',result.commit]);
- const verified=module.verifyGeneratedCaller({root:p.root,receiptCommit:result.commit});
+ const verified=await module.verifyGeneratedCaller({root:p.root,receiptCommit:result.commit});
  assert.equal(verified.status,'verified');assert.equal(verified.proposal.id,result.proposal.id);
  const cli=execFileSync(process.execPath,[path.join(supplier.root,'generator/generate-ci.mjs'),p.root,'--verify-commit',result.commit],{encoding:'utf8'});
  assert.match(cli,/source parity:.*"status":"verified"/);
- assert.throws(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:result.commit,ref:'b'.repeat(40)}),{code:'generation-drift'});
+ await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:result.commit,ref:'b'.repeat(40)}),{code:'generation-drift'});
  fs.writeFileSync(path.join(p.root,'untouched.txt'),'changed source');p.git(['add','.']);p.git(['commit','-qm','later input']);
- assert.throws(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:result.commit}),/source tree differs/);
+ await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:result.commit}),/source tree differs/);
  assert.equal(writes(p).filter(c=>c.url.endsWith('/pulls')).length,1);
 });
 
@@ -160,7 +160,7 @@ for (const forgedPath of ['.github/workflows/ci.yml','untouched.txt']) test(`lat
  p.git(['checkout','--detach',result.commit]);fs.writeFileSync(path.join(p.root,forgedPath),'altered bytes');p.git(['add','.']);
  const counterfeit=p.git(['commit-tree',p.git(['write-tree']),'-p',p.sourceCommit],p.git(['show','-s','--format=%B',result.commit]));
  p.git(['checkout','--detach',counterfeit]);
- assert.throws(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:counterfeit}),{code:'output-mismatch'});
+ await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:counterfeit}),{code:'output-mismatch'});
 });
 
 test('independent: counterfeit manifest outputs cannot excuse altered committed output',async t=>{
@@ -175,7 +175,7 @@ test('independent: counterfeit manifest outputs cannot excuse altered committed 
  const proposal=structuredClone(result.proposal);proposal.outputs[0].blob=p.git(['hash-object','--stdin'],altered);
  const forged=p.git(['commit-tree',p.git(['write-tree']),'-p',p.sourceCommit],`Forged\n\nGenerated-source identity: ${proposal.id}\n${JSON.stringify(proposal)}`);
  p.git(['checkout','--detach',forged]);
- assert.throws(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:forged}),{code:'output-mismatch'});
+ await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,receiptCommit:forged}),{code:'output-mismatch'});
 });
 
 for (const [name, generated] of Object.entries({
