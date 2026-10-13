@@ -28,3 +28,4 @@ jobs:
           node --check src/agent-work.mjs
           node --check generator/generate-ci.mjs
           node --test test/agent-work.test.mjs test/generate-ci.test.mjs
+          node generator/generate-ci.mjs . --audit-runners
