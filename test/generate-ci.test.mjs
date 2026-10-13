@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, REUSABLE, REF } from '../generator/generate-ci.mjs';
+import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, renderAgentWork, REUSABLE, REF } from '../generator/generate-ci.mjs';
 
 
 const runsOn=['self-hosted','existing-runner'];
@@ -26,6 +26,18 @@ test('empty repository selects no fabrication while retaining original-work inta
   const r = generate(fixture({ 'a.txt': 'x' }));
   assert.deepEqual(r.selection, { node: false, lean: [], content: false });
   assert.deepEqual(Object.keys(r.files), ['.github/workflows/agent-work-intake.yml']);
+});
+
+test('agent intake serializes only comparable events and cannot cancel latest push with PR-target receiving', () => {
+  const parsed = YAML.parse(renderAgentWork({ref: REF, runsOn}));
+  assert.deepEqual(parsed.concurrency, {
+    group: 'agent-work-${{ github.event_name }}-${{ github.event.pull_request.head.ref || github.ref_name }}',
+    'cancel-in-progress': false
+  });
+  assert.equal(parsed.jobs.receive.with['runs-on'], '["self-hosted","existing-runner"]');
+  assert.equal(parsed.jobs.receive.if,
+    "github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)");
+  assert.deepEqual(parsed.on.pull_request_target.types, ['opened', 'reopened', 'synchronize', 'closed']);
 });
 
 test('package.json selects node-package, also when nested; node_modules is ignored', () => {
