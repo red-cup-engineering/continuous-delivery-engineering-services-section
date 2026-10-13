@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
-          ref: 023516b9bd4806ad1945f007c299eb75d2a6882d
+          ref: 131900a1a55b8d3d769a389c43cd6236147d69ab
           path: .cds
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
