@@ -5,3 +5,19 @@ jobs:
     uses: ./.github/workflows/node-package.yml
     with:
       runs-on: '["ubuntu-latest"]'
+  agent-work-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+      - name: Check maintained intake contracts
+        run: |
+          node --check src/agent-work.mjs
+          node --test test/agent-work.test.mjs
