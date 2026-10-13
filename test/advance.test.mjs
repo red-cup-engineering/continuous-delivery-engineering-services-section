@@ -10,6 +10,87 @@ const sh = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cds-adv-'));
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
 
+const compareEndpoint = (pin = A, head = B) => `https://api.github.com/repos/o/s1/compare/${pin}...${head}`;
+const compareMetadata = (overrides = {}) => ({
+  url: compareEndpoint(), base_commit: { sha: A }, merge_base_commit: { sha: A },
+  status: 'ahead', ahead_by: 80, behind_by: 0, total_commits: 80, commits: [{ sha: C }], ...overrides,
+});
+
+// Exercise the real child-process transport without a network or credential.
+// An unpaged response includes the large patches that caused the live refusal.
+function transport(t, paged, { unpaged = paged, exitCode = 0, pin = A, head = B, url = 'https://github.com/o/s1.git' } = {}) {
+  const dir = tmp();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'response.json'), JSON.stringify({ paged, unpaged, exitCode }));
+  fs.writeFileSync(path.join(dir, 'curl'), `#!${process.execPath}\n
+const fs = require('node:fs'), path = require('node:path');
+const dir = __dirname, args = process.argv.slice(2), input = fs.readFileSync(0, 'utf8');
+fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify({ args, input }));
+const response = JSON.parse(fs.readFileSync(path.join(dir, 'response.json')));
+if (response.exitCode) process.exit(response.exitCode);
+const body = args.at(-1).endsWith('?per_page=1&page=2') ? response.paged : response.unpaged;
+process.stdout.write(typeof body === 'string' ? body : JSON.stringify(body));
+`, { mode: 0o755 });
+  const engine = new URL('../scripts/advance.mjs', import.meta.url).href;
+  const script = `import {liveDeps} from ${JSON.stringify(engine)}; console.log(liveDeps('fixture-token').status(...JSON.parse(process.argv[1])));`;
+  const result = execFileSync(process.execPath, ['--input-type=module', '-e', script, JSON.stringify([url, pin, head])], {
+    encoding: 'utf8', env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, GIT_CONFIG_COUNT: '0' },
+  }).trim();
+  const requestFile = path.join(dir, 'request.json');
+  const request = fs.existsSync(requestFile) ? JSON.parse(fs.readFileSync(requestFile)) : null;
+  if (request) {
+    assert.deepEqual(request.args, ['-fsS', '--config', '-', '-H', 'Accept: application/vnd.github+json', `${compareEndpoint(pin, head)}?per_page=1&page=2`]);
+    assert.equal(request.input, 'header = "Authorization: Bearer fixture-token"\n');
+  }
+  return { result, request };
+}
+
+test('live ancestry reads bounded aggregate metadata instead of overflowing on comparison patches', t => {
+  const paged = compareMetadata();
+  const unpaged = { ...paged, files: [{ filename: 'large.txt', patch: 'x'.repeat(2 * 1024 * 1024) }] };
+  assert.equal(transport(t, paged, { unpaged }).result, 'ahead');
+});
+
+for (const [name, pin, head, value] of [
+  ['single descendant with empty second page', A, B, compareMetadata({ ahead_by: 1, total_commits: 1, commits: [] })],
+  ['identical with empty second page', A, A, compareMetadata({ url: compareEndpoint(A, A), status: 'identical', ahead_by: 0, total_commits: 0, commits: [] })],
+  ['behind with empty second page', A, B, compareMetadata({ status: 'behind', merge_base_commit: { sha: B }, ahead_by: 0, behind_by: 80, total_commits: 0, commits: [] })],
+  ['diverged', A, B, compareMetadata({ status: 'diverged', merge_base_commit: { sha: C }, behind_by: 3 })],
+]) test(`live ancestry preserves aggregate ${name}`, t => {
+  assert.equal(transport(t, value, { pin, head }).result, value.status);
+});
+
+for (const [name, changes] of [
+  ['foreign repository', { url: compareEndpoint().replace('/o/s1/', '/other/s1/') }],
+  ['different head', { url: compareEndpoint(A, C) }],
+  ['foreign base', { base_commit: { sha: C } }],
+  ['unproven ancestor', { merge_base_commit: { sha: C } }],
+  ['missing ancestor', { merge_base_commit: null }],
+  ['non-string ancestor', { merge_base_commit: { sha: [A] } }],
+  ['contradictory counts', { behind_by: 1 }],
+  ['fractional count', { ahead_by: 1.5, total_commits: 1.5 }],
+  ['missing totals', { total_commits: null }],
+  ['page-local totals', { total_commits: 1 }],
+  ['unexpected status', { status: 'unavailable' }],
+  ['unexpected file page', { files: [] }],
+  ['unbounded commit page', { commits: [{ sha: B }, { sha: C }] }],
+]) test(`live ancestry refuses ${name}`, t => {
+  assert.equal(transport(t, compareMetadata(changes)).result, 'unknown');
+});
+
+test('live ancestry refuses malformed, failed and oversized metadata without a fallback request', t => {
+  assert.equal(transport(t, '{').result, 'unknown');
+  assert.equal(transport(t, compareMetadata(), { exitCode: 22 }).result, 'unknown');
+  assert.equal(transport(t, compareMetadata({ extra: 'x'.repeat(2 * 1024 * 1024) })).result, 'unknown');
+});
+
+test('live ancestry requires exact input SHAs before requesting comparison', t => {
+  for (const value of ['main', 'a'.repeat(39), `${A}?page=1`, '', [A], null]) for (const field of ['pin', 'head']) {
+    const { result, request } = transport(t, compareMetadata(), { [field]: value });
+    assert.equal(result, 'unknown'); assert.equal(request, null);
+  }
+});
+
 test('plan advances only where the remote head differs and descends from the pin', () => {
   const p = plan([
     { path: 'x', pin: A, head: A, status: 'identical' },

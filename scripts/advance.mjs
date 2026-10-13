@@ -218,8 +218,27 @@ export function run(cwd, { branch, note = '', head, status, remote }) {
   return { result: 'advanced', ...publish(cwd, { branch, advance: p.advance, remote, prepared }), diverged: p.diverged, unread: p.unread, body, bodyFile };
 }
 
+// The second, single-commit page excludes changed files/patches. Its comparison
+// metadata still describes BASE...HEAD, even when that commit page is empty.
+// https://docs.github.com/en/rest/commits/commits#compare-two-commits
+function comparisonStatus(value, endpoint, pin, head) {
+  const sha = value => typeof value === 'string' && /^[0-9a-f]{40}$/.test(value);
+  if (!value || value.url !== endpoint || value.base_commit?.sha !== pin ||
+      !sha(value.merge_base_commit?.sha) ||
+      !Array.isArray(value.commits) || value.commits.length > 1 || Object.hasOwn(value, 'files') ||
+      ![value.ahead_by, value.behind_by, value.total_commits].every(n => Number.isSafeInteger(n) && n >= 0) ||
+      value.total_commits !== value.ahead_by) return 'unknown';
+  const ancestor = value.merge_base_commit.sha, ahead = value.ahead_by, behind = value.behind_by;
+  if (value.status === 'identical' && pin === head && ancestor === pin && ahead === 0 && behind === 0) return 'identical';
+  if (pin === head) return 'unknown';
+  if (value.status === 'ahead' && ancestor === pin && ahead > 0 && behind === 0) return 'ahead';
+  if (value.status === 'behind' && ancestor === head && ahead === 0 && behind > 0) return 'behind';
+  if (value.status === 'diverged' && ancestor !== pin && ancestor !== head && ahead > 0 && behind > 0) return 'diverged';
+  return 'unknown';
+}
+
 // Live dependencies: ls-remote for heads, the compare API for ancestry.
-function liveDeps(token) {
+export function liveDeps(token) {
   const environment = { ...process.env };
   if (token) {
     const count = Number(environment.GIT_CONFIG_COUNT ?? 0);
@@ -242,12 +261,16 @@ function liveDeps(token) {
     },
     status: (url, pin, head) => {
       const slug = githubSlug(url);
-      if (!slug || !pin) return 'unknown';
+      if (!slug || typeof pin !== 'string' || typeof head !== 'string' ||
+          !/^[0-9a-f]{40}$/.test(pin) || !/^[0-9a-f]{40}$/.test(head)) return 'unknown';
+      const endpoint = `https://api.github.com/repos/${slug}/compare/${pin}...${head}`;
       try {
-        return JSON.parse(execFileSync('curl', ['-fsS', '--config', '-', '-H', 'Accept: application/vnd.github+json',
-          `https://api.github.com/repos/${slug}/compare/${pin}...${head}`], {
+        const value = JSON.parse(execFileSync('curl', ['-fsS', '--config', '-', '-H', 'Accept: application/vnd.github+json',
+          `${endpoint}?per_page=1&page=2`], {
           input: `header = ${JSON.stringify(`Authorization: Bearer ${token}`)}\n`, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-        })).status;
+          maxBuffer: 1024 * 1024,
+        }));
+        return comparisonStatus(value, endpoint, pin, head);
       } catch { return 'unknown'; }
     },
   };
