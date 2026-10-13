@@ -19,20 +19,23 @@ test('Cloud Build receives the existing CD tests in the eligible default pool',(
   assert.equal(config.steps[0].id,'source-and-test');
   assert.equal(config.steps[0].name,'${_NODE_IMAGE}');
   assert.equal(config.steps[0].entrypoint,'bash');
+  assert.deepEqual(config.steps[0].env,['BUILDER_IMAGE=${_NODE_IMAGE}']);
 });
 test('provider source revision is checked before any dependency or test execution',()=>{
   const command=config.steps[0].args[1];
   assert.equal(config.steps[0].args[0],'-euc');
   const checkCommit=command.indexOf('test "$$revision" = "$COMMIT_SHA"');
+  const imageCheck=command.indexOf('[[ "$BUILDER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]');
   const install=command.indexOf('npm ci');
   const check=command.indexOf('npm test');
   assert.ok(command.includes('revision="$$(git rev-parse --verify HEAD)"'));
   assert.ok(command.includes('test -n "$COMMIT_SHA"'));
-  assert.ok(checkCommit>=0&&checkCommit<install&&install<check);
-  assert.match(command,/npm ci --ignore-scripts --no-audit --no-fund/);
+  assert.ok(imageCheck>=0&&imageCheck<checkCommit&&checkCommit<install&&install<check);
+  assert.match(command,/npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund/);
 });
 test('no unconditional privilege, mutable image, artifact publication, or deploy is implicit',()=>{
   assert.equal(config.substitutions,undefined,'the trigger must explicitly bind a digest-pinned image');
+  assert.match(config.steps[0].args[1],/unpinned builder/);
   assert.equal(config.serviceAccount,undefined,'the authenticated provider trigger binds the runtime principal');
   for(const field of ['availableSecrets','secrets','secretEnv','artifacts','images']) assert.equal(config[field],undefined);
   assert.deepEqual(Object.keys(config),['timeout','options','steps']);
