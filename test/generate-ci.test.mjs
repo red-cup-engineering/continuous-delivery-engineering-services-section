@@ -120,3 +120,17 @@ test('parented callers retain all default-source notifications and never advance
     else assert.equal(parsed.jobs.advance, undefined);
   }
 });
+
+test('generated workflows refuse exhausted GitHub-hosted capacity and anonymous runners', () => {
+  const selection = {node:true,lean:[],content:false};
+  for (const labels of [undefined, [], ['ubuntu-latest'], ['ubuntu-24.04'],
+    ['self-hosted'], ['self-hosted','Linux','X64'],
+    ['self-hosted','Linux','X64','Linux'], ['self-hosted','Linux','X64','bad label']]) {
+    assert.throws(() => renderCiSource(selection,{ref:REF,runsOn:labels}),
+      /runner labels|self-hosted runner|fallback/, JSON.stringify(labels));
+  }
+  const y=renderCiSource(selection,{ref:REF,runsOn:['self-hosted','Linux','X64','bare-cedar-fog']});
+  assert.match(y, /self-hosted/);
+  assert.match(y, /bare-cedar-fog/);
+  assert.doesNotMatch(y, /ubuntu-latest/);
+});
