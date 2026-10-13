@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { openPullRequest, verifyGeneratedSource, verifyGeneratedTransformation } from './open-pr.mjs';
 
 export const REUSABLE = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
 // The generated caller hires this exact source revision, never a moving branch.
@@ -113,22 +115,102 @@ export function generate(root, options = {}) {
   return { files, handwritten: reportHandwritten(root), selection };
 }
 
+// The review consumer generates from Git's immutable source, not a dirty or
+// ignored working-tree file. The temporary tree contains only this owner's
+// tracked regular files, never another submodule's working copy or a symlink.
+export function generateFromSource(root, options = {}) {
+  const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  const sourceCommit = revision(git(['rev-parse', '--verify', 'HEAD^{commit}']).trim());
+  const rows = git(['ls-tree', '-r', '-z', '--full-tree', sourceCommit]).split('\0').filter(Boolean);
+  const temporary = fs.mkdtempSync(path.join(tmpdir(), 'cd-generated-source-'));
+  try {
+    for (const row of rows) {
+      const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);
+      if (!match) throw new Error('invalid generation source tree');
+      const [, mode, type, blob, file] = match;
+      if (type === 'commit') continue;
+      if (file.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git') || file.includes('\\')) throw new Error('invalid generation source path');
+      if (mode === '120000') throw new Error('caller generation needs regular source files; symlink source is unsupported');
+      const target = path.join(temporary, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, execFileSync('git', ['cat-file', 'blob', blob], { cwd: root, maxBuffer: 32 * 1024 * 1024 }));
+    }
+    return { ...generate(temporary, options), sourceCommit };
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
+function generatorInputs() {
+  const supplier = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  for (const file of ['generator/generate-ci.mjs', 'generator/open-pr.mjs']) {
+    const committed = execFileSync('git', ['show', `${REF}:${file}`], { cwd: supplier });
+    if (!committed.equals(fs.readFileSync(path.join(supplier, file)))) throw new Error('generator implementation differs from its supplier commit');
+  }
+  return [{ repository: 'red-cup-engineering/continuous-delivery-services-section', commit: REF }];
+}
+
+/** Build-side parity consumes the proposal already retained in its Git commit;
+ * there is no new receipt repository. A different source tree needs fresh
+ * generation receiving, even when a subset of its outputs happens to match. */
+export function verifyGeneratedCaller({ root, receiptCommit, ...options }) {
+  revision(receiptCommit);
+  const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const message = git(['show', '-s', '--format=%B', receiptCommit]);
+  const lines = message.split('\n');
+  let proposal;
+  try { proposal = JSON.parse(lines.at(-1)); } catch { throw new Error('received commit has no generated-source proposal'); }
+  if (!lines.includes(`Generated-source identity: ${proposal.id}`)) throw new Error('received generation identity differs');
+  if (git(['show', '-s', '--format=%P', receiptCommit]) !== proposal.sourceCommit) throw new Error('received generation parent differs');
+  if (git(['rev-parse', 'HEAD^{tree}']) !== git(['rev-parse', `${receiptCommit}^{tree}`])) throw new Error('current source tree differs from received generation');
+  const sourceTree = commit => ({ truncated: false, tree: git(['ls-tree', '-r', '-z', commit]).split('\0').filter(Boolean).map(row => {
+    const match = /^(\d+) (\w+) ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);
+    if (!match) throw new Error('invalid parity source tree');
+    return { mode: match[1], type: match[2], sha: match[3], path: match[4] };
+  }) });
+  const produced = generateFromSource(root, options);
+  if (git(['rev-parse', `${produced.sourceCommit}^{tree}`]) !== git(['rev-parse', `${receiptCommit}^{tree}`])) throw new Error('generated source tree differs from received generation');
+  const verified = verifyGeneratedSource(proposal, { files: produced.files, inputs: generatorInputs() });
+  verifyGeneratedTransformation(verified, sourceTree(verified.sourceCommit), sourceTree(receiptCommit));
+  return { status: 'verified', receiptCommit, sourceCommit: produced.sourceCommit, proposal: verified };
+}
+
+// The same producer is used for first receiving and later byte-parity checking.
+// It does not need a model, a workflow permission change or a new service.
+export async function receiveGeneratedCaller({ root, repo, token, request, branch, ...options }) {
+  const produced = generateFromSource(root, options);
+  if (!Object.keys(produced.files).length) return { status: 'empty', ...produced };
+  const inputs = generatorInputs();
+  const result = await openPullRequest({ repo, branch, files: produced.files, sourceCommit: produced.sourceCommit, inputs, token, request,
+    title: 'Call the continuous-delivery services section' });
+  // Exercise the receiving contract on the actual producer, not an unused helper.
+  const regenerated = generateFromSource(root, options);
+  if (regenerated.sourceCommit !== produced.sourceCommit) throw new Error('source checkout moved during generation receiving');
+  verifyGeneratedSource(result.proposal, { files: regenerated.files, inputs });
+  return result;
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
   const opt = n => { const i = args.indexOf(n); return i < 0 ? undefined : args[i + 1]; };
-  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret'];
+  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--branch', '--verify-commit'];
   const root = path.resolve(args.find((a, i) => !a.startsWith('--') && !valueOptions.includes(args[i - 1])) ?? '.');
-  const { files, handwritten, selection } = generate(root, {
+  const options = {
     parent: opt('--parent'), ref: opt('--ref') ?? REF,
     runsOn: opt('--runs-on') ? JSON.parse(opt('--runs-on')) : ['ubuntu-latest'],
     defaultBranch: opt('--default-branch') ?? 'main', tokenSecret: opt('--token-secret'),
-  });
+  };
+  if (args.includes('--pr') && args.includes('--verify-commit')) throw new Error('select source receiving or build parity, not both');
+  if (args.includes('--verify-commit')) {
+    console.log('source parity:', JSON.stringify(verifyGeneratedCaller({ root, receiptCommit: opt('--verify-commit'), ...options })));
+    process.exit(0);
+  }
+  const { files, handwritten, selection } = args.includes('--pr') ? generateFromSource(root, options) : generate(root, options);
   console.log('selected:', JSON.stringify(selection));
   for (const h of handwritten) console.log(`handwritten ${h.file}: ${h.coveredBy ?? '-'} (${h.note})`);
   if (args.includes('--pr')) {
-    const { openPullRequest } = await import('./open-pr.mjs');
-    const url = await openPullRequest({ repo: opt('--pr'), files, token: process.env.GH_TOKEN });
-    console.log('pull request:', url);
+    const result = await receiveGeneratedCaller({ root, repo: opt('--pr'), branch: opt('--branch'), token: process.env.GH_TOKEN, ...options });
+    console.log('source receiving:', JSON.stringify(result));
   } else {
     for (const [p, c] of Object.entries(files)) {
       fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true });
