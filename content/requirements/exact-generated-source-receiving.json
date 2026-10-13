@@ -1,0 +1,16 @@
+{
+  "id": "exact-generated-source-receiving",
+  "statement": "Deterministic generated source MUST be received through its owning review branch with exact input/output identity and no silent rebase, unrelated source mutation or model-mediated byte reconstruction.",
+  "because": "Leader, 2026-10-13: move repeated deterministic work into existing responsible software and keep useful operation independent of the current conversation or model.",
+  "owner": "red-cup-engineering/continuous-delivery-services-section",
+  "consumer": "generator/generate-ci.mjs --pr and its later --verify-commit build consumer",
+  "specification": {
+    "inputs": ["target repository", "exact generation source commit", "owning review branch", "immutable supplier commits", "complete regular UTF-8 generated files"],
+    "output": "a verified source commit and owning draft review, or explicit unchanged/stale/unavailable result",
+    "refusals": ["missing source-write actuator", "stale source or review head", "incomplete source tree", "unexpected tree transformation", "unsupported output kind", "unknown publication outcome", "closed exact review", "later source/supplier/output parity mismatch"],
+    "publication": "non-forced Git ref update followed by authoritative ref and review readback; exact commit identity provides restart reconciliation",
+    "treeReceiving": "Bind exact base and result root identities by reconstructing Git tree objects along every declared output path. Verify complete immediate ancestor entries, Git mode/type/name/object identity and canonical tree encoding. Preserve every untouched sibling subtree by its identical object identity; do not enumerate its leaves. Refuse truncated or malformed objects, missing ancestors, undeclared changes, path/prefix collisions and symlink or file-kind changes. Read back the result's changed-path ancestors and exact output identities. This is complete transformation verification, not permission to accept a partial inventory."
+  },
+  "design": "Strengthen the existing generator/open-pr.mjs operation and migrate its actual caller. Preserve the generated proposal in its source commit and review. Re-run the same producer for later full-tree and byte parity. Do not create a separate controller, receipt repository, credential or deployment path.",
+  "receiving": "Git-backed tests exercise the actual producer and receiver, stale/concurrent publication, lost replies, restart idempotence, counterfeit receipt trees and later CLI parity. A production descriptor generator needs its own qualified artifact-to-writer binding; the read-only machine build and PR-metadata intake do not confer source-writing authority. Source qualification does not close runtime recovery."
+}

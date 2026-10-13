@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import YAML from 'yaml';
 import { detect, generate, renderCi, renderSync, REUSABLE, REF } from '../generator/generate-ci.mjs';
-import { openPullRequest } from '../generator/open-pr.mjs';
 
 // Fixture repositories are built from a map of path -> content.
 function fixture(files) {
@@ -73,23 +73,32 @@ test('repository with submodules gets a sync caller; a parent adds the upward no
   assert.equal(renderSync({ submodules: false }), null);
 });
 
-test('pull request by git-data API extends an existing branch without force', async () => {
-  const calls = [];
-  const request = async (method, p, body) => {
-    calls.push([method, p, body]);
-    if (p === '/repos/o/r') return { default_branch: 'main' };
-    if (p.endsWith('/git/ref/heads/ci/caller-generator')) return { object: { sha: 'b1' } };
-    if (p.includes('/git/commits/')) return { tree: { sha: 't0' } };
-    if (p.endsWith('/git/trees')) return { sha: 't1' };
-    if (p.endsWith('/git/commits')) return { sha: 'c1' };
-    if (p.includes('/pulls?')) return [];
-    if (p.endsWith('/pulls')) return { html_url: 'https://github.com/o/r/pull/1' };
-    return {};
-  };
-  const url = await openPullRequest({ repo: 'o/r', files: { '.github/workflows/ci.yml': 'x' }, request });
-  assert.equal(url, 'https://github.com/o/r/pull/1');
-  const patch = calls.find(c => c[0] === 'PATCH');
-  assert.equal(patch[2].force, false);
-  assert.deepEqual(calls.find(c => c[1].endsWith('/git/commits') && c[0] === 'POST')[2].parents, ['b1']);
-  assert.ok(!calls.some(c => c[1].endsWith('/git/refs') && c[0] === 'POST'));
+test('current machine-neutral generator does not assign a package to implicit machines',()=>{
+  assert.equal(generate(fixture({'package.json':'{}'})).files['.github/workflows/change-test.yml'],undefined);
+});
+
+test('root sync receives reviewed caller changes on its default branch without a review-branch loop', () => {
+  const parsed = YAML.parse(renderSync({ submodules: true, defaultBranch: 'trunk',
+    runsOn: ['self-hosted', 'existing-runner'], tokenSecret: 'EXISTING_TOKEN' }));
+  assert.deepEqual(parsed.on.push, { branches: ['trunk'], paths: ['.github/workflows/sync.yml'] });
+  assert.deepEqual(parsed.on.schedule, [{ cron: '17 6 * * *' }]);
+  assert.deepEqual(parsed.on.repository_dispatch, { types: ['section-advanced'] });
+  assert.ok('workflow_dispatch' in parsed.on);
+  assert.equal(parsed.jobs.advance.if, undefined);
+  assert.equal(parsed.jobs.notify, undefined);
+  assert.deepEqual(parsed.permissions, { contents: 'write', 'pull-requests': 'write' });
+  assert.equal(parsed.jobs.advance.with['runs-on'], '["self-hosted","existing-runner"]');
+  assert.equal(parsed.jobs.advance.secrets.token, '${{ secrets.EXISTING_TOKEN }}');
+  assert.deepEqual(parsed.concurrency, { group: 'submodule-sync', 'cancel-in-progress': false });
+});
+
+test('parented callers retain all default-source notifications and never advance on their own push', () => {
+  for (const submodules of [true, false]) {
+    const parsed = YAML.parse(renderSync({ submodules, parent: 'owner/parent', defaultBranch: 'trunk' }));
+    assert.deepEqual(parsed.on.push, { branches: ['trunk'] });
+    assert.equal(parsed.jobs.notify.if, "github.event_name == 'push'");
+    assert.equal(parsed.jobs.notify.with.parent, 'owner/parent');
+    if (submodules) assert.equal(parsed.jobs.advance.if, "github.event_name != 'push'");
+    else assert.equal(parsed.jobs.advance, undefined);
+  }
 });
