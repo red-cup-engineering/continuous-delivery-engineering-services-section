@@ -14,12 +14,15 @@ steps:
   - id: source-and-test
     name: '${_NODE_IMAGE}'
     entrypoint: bash
+    env:
+      - 'BUILDER_IMAGE=${_NODE_IMAGE}'
     args:
       - -euc
       - |
         # The provider's GitHub source trigger must supply an exact revision.
         # '$$' escapes a shell '$' from Cloud Build substitution processing.
         test -n "$COMMIT_SHA"
+        [[ "$BUILDER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "unpinned builder" >&2; exit 78; }
         revision="$$(git rev-parse --verify HEAD)"
         test "$$revision" = "$COMMIT_SHA"
         test -s package-lock.json
