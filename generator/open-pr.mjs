@@ -121,6 +121,17 @@ export async function receiveRunnerSelection({repo,runsOn,request,repositoryReco
   return {repository:repo,labels:runsOn,runnerIds:runners.map(runner=>runner.id),billingActivation:false,executed:false};
 }
 
+/** Shared Git owns canonical object encoding and full transformation proof. */
+export async function planGeneratedTree(proposal,{sourceTree,readTree}) {
+  const {deriveSourceTreePatch,proveSourceTreePatch}=await import('@red-cup-engineering/git-services-section/source-tree-patch');
+  const request={sourceTree,readTree,changes:proposal.outputs.map(output=>({path:output.path,mode:output.mode,type:'blob',sha:output.blob}))};
+  const plan=await deriveSourceTreePatch(request);
+  return {sourceTree,tree:plan.targetTree,verify:async targetTree=>{
+    try {await proveSourceTreePatch({...request,targetTree});return true;}
+    catch {fail('output-mismatch','received source tree differs from the complete generated transformation');}
+  }};
+}
+
 /** Publish from the exact generation base into the named review branch. GitHub
  * rejects a non-fast-forward race. Lost mutation replies are reconciled at the
  * original ref/PR. A repeat after restart is identified by its durable commit. */

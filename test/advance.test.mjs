@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { plan, renderBody, run, githubSlug, BOT_EMAIL } from '../scripts/advance.mjs';
+import { plan, renderBody, readEntries, run, githubSlug, BOT_EMAIL } from '../scripts/advance.mjs';
 
 const sh = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim();
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cds-adv-'));
@@ -57,6 +57,251 @@ function parent() {
 }
 const deps = { head: (url) => url.endsWith('s1') ? B : C, status: (url) => url.endsWith('s1') ? 'ahead' : 'diverged' };
 const pin = (cwd, ref, p) => sh(cwd, 'ls-tree', ref, p).split(/\s+/)[2];
+
+// Two parent histories advance the same unmaterialized gitlink. This is the
+// ordinary later-run failure: Git lacks supplier objects, while the supplier's
+// compare operation can prove the chain without checking out its worktree.
+function conflictingParent({ ours = B, theirs = C, ours2 = A, theirs2 = A, edit, editReview, initialEdit } = {}) {
+  const result = parent(), { origin, work } = result;
+  if (initialEdit) {
+    initialEdit(work); sh(work, 'add', '.gitmodules'); sh(work, 'commit', '-q', '-m', 'original supplier definitions'); sh(work, 'push', '-q', 'origin', 'main');
+  }
+  run(work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? ours : ours2, status: () => 'ahead' });
+  fs.writeFileSync(path.join(work, 'reviewer.txt'), 'retain reviewer source\n');
+  editReview?.(work);
+  sh(work, 'config', 'user.email', 'reviewer@example.com');
+  sh(work, 'add', 'reviewer.txt'); sh(work, 'commit', '-q', '-m', 'reviewer source');
+  sh(work, 'push', '-q', 'origin', 'ci/submodule-advance');
+  result.review = sh(work, 'rev-parse', 'HEAD');
+  sh(work, 'checkout', '-q', 'main');
+  sh(work, 'update-index', '--cacheinfo', `160000,${theirs},s1`);
+  sh(work, 'update-index', '--cacheinfo', `160000,${theirs2},s2`);
+  fs.writeFileSync(path.join(work, 'base.txt'), 'retain default source\n');
+  sh(work, 'add', 'base.txt');
+  edit?.(work);
+  sh(work, 'commit', '-q', '-m', 'default source advances independently');
+  sh(work, 'push', '-q', 'origin', 'main');
+  result.base = sh(work, 'rev-parse', 'HEAD');
+  return result;
+}
+
+const chainStatus = (_url, pin, head) => {
+  const order = [A, B, C, 'd'.repeat(40)];
+  return pin === head ? 'identical' : order.indexOf(pin) < order.indexOf(head) ? 'ahead' : 'behind';
+};
+const assertNotPublished = ({ origin, work, review }) => {
+  assert.equal(sh(origin, 'rev-parse', 'ci/submodule-advance'), review);
+  assert.equal(sh(work, 'rev-parse', 'HEAD'), review);
+  assert.equal(sh(work, 'ls-files', '--unmerged'), '');
+  assert.equal(sh(work, 'status', '--porcelain', '--ignore-submodules=all'), '');
+};
+
+for (const [name, ours, theirs] of [['default ahead', B, C], ['review ahead', C, B]]) {
+  test(`later run joins comparable gitlink conflict (${name}), retains both histories, and is idempotent`, () => {
+    const { origin, work, review, base } = conflictingParent({ ours, theirs });
+    const options = { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? C : A, status: chainStatus };
+    const r = run(work, options);
+    assert.equal(r.result, 'advanced'); assert.equal(r.pushed, true); assert.equal(r.foreign, true);
+    assert.equal(pin(origin, 'ci/submodule-advance', 's1'), C);
+    const joined = sh(origin, 'rev-parse', 'ci/submodule-advance');
+    assert.deepEqual(sh(origin, 'show', '-s', '--format=%P', joined).split(' '), [review, base]);
+    for (const source of [review, base]) sh(origin, 'merge-base', '--is-ancestor', source, joined);
+    assert.equal(sh(origin, 'show', `${joined}:reviewer.txt`), 'retain reviewer source');
+    assert.equal(sh(origin, 'show', `${joined}:base.txt`), 'retain default source');
+    sh(work, 'checkout', '-q', 'main');
+    assert.equal(run(work, options).result, 'nothing to advance');
+    assert.equal(sh(origin, 'rev-parse', 'ci/submodule-advance'), joined);
+  });
+}
+
+test('after receiving a comparable conflict, fresh observation can advance farther', () => {
+  const { origin, work, review, base } = conflictingParent();
+  const D = 'd'.repeat(40);
+  const r = run(work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? D : A, status: chainStatus });
+  assert.equal(r.pushed, true);
+  assert.equal(pin(origin, 'ci/submodule-advance', 's1'), D);
+  for (const source of [review, base]) sh(origin, 'merge-base', '--is-ancestor', source, 'ci/submodule-advance');
+  assert.match(r.body, /s1: ccccccccc -> ddddddddd/);
+});
+
+for (const relation of ['diverged', 'unknown', 'identical', undefined]) {
+  test(`conflicting supplier heads with ${relation} comparison stay unpublished and abort cleanly`, () => {
+    const fixture = conflictingParent();
+    assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C,
+      status: (url, pin, head) => pin === A ? 'ahead' : relation }), /unresolved base gitlink ancestry/);
+    assertNotPublished(fixture);
+  });
+}
+
+test('a backwards side relative to the common gitlink is not healed by choosing the other side', () => {
+  const fixture = conflictingParent();
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C,
+    status: (url, pin, head) => pin === A && head === B ? 'behind' : chainStatus(url, pin, head) }), /unproven base gitlink ancestry/);
+  assertNotPublished(fixture);
+});
+
+test('changed supplier definitions refuse automatic conflict resolution', () => {
+  const fixture = conflictingParent({ edit(work) {
+    sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.url', 'https://github.com/another/s1');
+    sh(work, 'add', '.gitmodules');
+  } });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /supplier definitions changed/);
+  assertNotPublished(fixture);
+});
+
+test('an unrelated clean supplier addition does not block unchanged conflicting supplier ancestry', () => {
+  const fixture = conflictingParent({ edit(work) {
+    fs.appendFileSync(path.join(work, '.gitmodules'), '[submodule "group-computer-engineering"]\n\tpath = group-computer-engineering\n\turl = https://github.com/561-group/computer-engineering-services-section.git\n');
+    sh(work, 'add', '.gitmodules');
+    sh(work, 'update-index', '--add', '--cacheinfo', `160000,${A},group-computer-engineering`);
+  } });
+  const { origin, work, review, base } = fixture;
+  const result = run(work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? C : A, status: chainStatus });
+  assert.equal(result.result, 'advanced');
+  assert.equal(pin(origin, 'ci/submodule-advance', 's1'), C);
+  assert.equal(pin(origin, 'ci/submodule-advance', 'group-computer-engineering'), A);
+  assert.equal(sh(origin, 'show', 'ci/submodule-advance:.gitmodules'), sh(origin, 'show', `${base}:.gitmodules`));
+  const joined = sh(origin, 'rev-parse', 'ci/submodule-advance');
+  assert.deepEqual(sh(origin, 'show', '-s', '--format=%P', joined).split(' '), [review, base]);
+  for (const source of [review, base]) sh(origin, 'merge-base', '--is-ancestor', source, joined);
+  sh(work, 'checkout', '-q', 'main');
+  assert.equal(run(work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? C : A, status: chainStatus }).result, 'nothing to advance');
+  assert.equal(sh(origin, 'rev-parse', 'ci/submodule-advance'), joined);
+});
+
+for (const [name, edit] of [
+  ['branch', work => sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.branch', 'other')],
+  ['ref metadata', work => sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.ref', 'refs/heads/other')],
+  ['path', work => sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.path', 'relocated')],
+  ['section rename', work => sh(work, 'config', '-f', '.gitmodules', '--rename-section', 'submodule.s1', 'submodule.renamed')],
+  ['definition removal', work => sh(work, 'config', '-f', '.gitmodules', '--remove-section', 'submodule.s1')],
+  ['duplicate URL', work => sh(work, 'config', '-f', '.gitmodules', '--add', 'submodule.s1.url', 'https://github.com/o/s1')],
+  ['duplicate path', work => sh(work, 'config', '-f', '.gitmodules', '--add', 'submodule.s1.path', 's1')],
+  ['alias path', work => {
+    sh(work, 'config', '-f', '.gitmodules', 'submodule.alias.path', 's1');
+    sh(work, 'config', '-f', '.gitmodules', 'submodule.alias.url', 'https://github.com/o/s1');
+  }],
+]) {
+  test(`conflicting supplier ${name} change remains refused before ancestry lookup or publication`, () => {
+    const fixture = conflictingParent({ edit(work) { edit(work); sh(work, 'add', '.gitmodules'); } });
+    let observations = 0;
+    assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C,
+      status: () => { observations++; return 'ahead'; } }), /supplier definitions changed|ambiguous supplier path|ambiguous conflicting supplier/);
+    assert.equal(observations, 0);
+    assertNotPublished(fixture);
+  });
+}
+
+for (const field of ['url', 'branch', 'ref', 'ignore']) {
+  test(`unchanged duplicate ${field} values remain ambiguous across all four conflicting snapshots`, () => {
+    const fixture = conflictingParent({ initialEdit(work) {
+      const value = field === 'url' ? 'https://github.com/o/s1' : field === 'ignore' ? 'none' : 'main';
+      sh(work, 'config', '-f', '.gitmodules', `submodule.s1.${field}`, value);
+      sh(work, 'config', '-f', '.gitmodules', '--add', `submodule.s1.${field}`, value);
+    } });
+    let observations = 0;
+    assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C,
+      status: () => { observations++; return 'ahead'; } }), /ambiguous conflicting supplier values/);
+    assert.equal(observations, 0); assertNotPublished(fixture);
+  });
+}
+
+test('normal supplier reads and conflict qualification both ignore external include directives', () => {
+  const { work } = parent();
+  const external = path.join(work, 'external-config');
+  fs.writeFileSync(external, '[submodule "s1"]\nurl = https://github.com/another/s1\nbranch = other\n');
+  fs.appendFileSync(path.join(work, '.gitmodules'), `[include]\npath = ${external}\n`);
+  // Git's explicitly selected file defaults to includes disabled. Pin that
+  // behavior in both consumers rather than letting ambient configuration win.
+  assert.equal(sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.url'), sh(work, 'config', '--no-includes', '-f', '.gitmodules', 'submodule.s1.url'));
+  const entries = readEntries(work, { head: () => A, status: () => 'identical' });
+  assert.deepEqual(entries.map(e => e.path), ['s1', 's2']);
+  assert.equal(entries.find(e => e.path === 's1').url, 'https://github.com/o/s1');
+  assert.equal(entries.find(e => e.path === 's1').branch, '');
+  const fixture = conflictingParent({ initialEdit(work) {
+    fs.writeFileSync(path.join(work, 'external-config'), '[submodule "s1"]\nurl = https://github.com/another/s1\n');
+    fs.appendFileSync(path.join(work, '.gitmodules'), '[include]\npath = external-config\n');
+  } });
+  const observed = [];
+  const result = run(fixture.work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? C : A,
+    status: (url, pin, head) => { observed.push(url); return chainStatus(url, pin, head); } });
+  assert.equal(result.result, 'advanced'); assert.deepEqual(result.unread, []);
+  assert.equal(pin(fixture.origin, 'ci/submodule-advance', 's1'), C);
+  assert.ok(observed.length > 0 && observed.every(url => url === 'https://github.com/o/s1'));
+});
+
+test('an actual conflicting supplier definition stays a text conflict', () => {
+  const fixture = conflictingParent({
+    editReview(work) { sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.url', 'https://github.com/reviewer/s1'); sh(work, 'add', '.gitmodules'); },
+    edit(work) { sh(work, 'config', '-f', '.gitmodules', 'submodule.s1.url', 'https://github.com/base/s1'); sh(work, 'add', '.gitmodules'); },
+  });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /non-gitlink base merge conflict: .gitmodules/);
+  assertNotPublished(fixture);
+});
+
+test('supplier definition file mode changes cannot be excused by matching values', () => {
+  const fixture = conflictingParent({ edit(work) { fs.chmodSync(path.join(work, '.gitmodules'), 0o755); sh(work, 'add', '.gitmodules'); } });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /supplier definitions changed file mode/);
+  assertNotPublished(fixture);
+});
+
+test('supplier definition symlink replacement remains refused', () => {
+  const fixture = conflictingParent({ edit(work) {
+    fs.unlinkSync(path.join(work, '.gitmodules')); fs.symlinkSync('not-a-supplier-definition', path.join(work, '.gitmodules'));
+    sh(work, 'add', '.gitmodules');
+  } });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /supplier definitions.*file kind|non-gitlink base merge conflict/);
+  assert.equal(sh(fixture.origin, 'rev-parse', 'ci/submodule-advance'), fixture.review);
+  assert.equal(sh(fixture.work, 'rev-parse', 'HEAD'), fixture.base);
+  assert.equal(sh(fixture.work, 'status', '--porcelain', '--ignore-submodules=all'), '');
+});
+
+test('a text conflict alongside the comparable gitlink remains a refusal', () => {
+  const fixture = conflictingParent({ edit(work) {
+    fs.writeFileSync(path.join(work, 'reviewer.txt'), 'conflicting default source\n');
+    sh(work, 'add', 'reviewer.txt');
+  } });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /non-gitlink base merge conflict/);
+  assertNotPublished(fixture);
+});
+
+test('a deleted conflicting gitlink is not restored by ancestry selection', () => {
+  const fixture = conflictingParent({ edit(work) { sh(work, 'update-index', '--force-remove', 's1'); } });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status: chainStatus }), /non-gitlink base merge conflict/);
+  assertNotPublished(fixture);
+});
+
+test('unknown original ancestry and thrown supplier reads abort without publication', () => {
+  for (const status of [() => 'unknown', () => { throw new Error('supplier unavailable'); }]) {
+    const fixture = conflictingParent();
+    assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C, status }), /unproven base gitlink ancestry|supplier unavailable/);
+    assertNotPublished(fixture);
+  }
+});
+
+test('all conflicting suppliers must qualify before any resolution is retained', () => {
+  const fixture = conflictingParent({ ours2: B, theirs2: C });
+  assert.throws(() => run(fixture.work, { branch: 'ci/submodule-advance', head: () => C,
+    status: (url, pin, head) => url.endsWith('s2') && pin === B ? 'diverged' : chainStatus(url, pin, head) }), /unresolved base gitlink ancestry: s2/);
+  assertNotPublished(fixture);
+});
+
+test('a concurrent sync branch contribution rejects publication without losing that contribution', () => {
+  const { origin, work, review } = conflictingParent();
+  let concurrent;
+  const status = (url, pin, head) => {
+    if (!concurrent) {
+      const tree = sh(origin, 'rev-parse', `${review}^{tree}`);
+      concurrent = execFileSync('git', ['-c', 'user.name=reviewer', '-c', 'user.email=reviewer@example.com',
+        'commit-tree', tree, '-p', review, '-m', 'concurrent reviewer contribution'], { cwd: origin, encoding: 'utf8' }).trim();
+      sh(origin, 'update-ref', 'refs/heads/ci/submodule-advance', concurrent, review);
+    }
+    return chainStatus(url, pin, head);
+  };
+  assert.throws(() => run(work, { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? C : A, status }), /git push/);
+  assert.equal(sh(origin, 'rev-parse', 'ci/submodule-advance'), concurrent);
+  sh(origin, 'merge-base', '--is-ancestor', review, concurrent);
+});
 
 test('run pushes one branch advancing s1 and leaving diverged s2 pinned; writes body inside .git', () => {
   const { origin, work } = parent();
