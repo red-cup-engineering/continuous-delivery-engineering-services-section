@@ -43,9 +43,11 @@ export function renderBody({ advance, diverged, unread = [] }, note) {
   return lines.join('\n');
 }
 
-export function readEntries(cwd, { head, status }) {
+export function readEntries(cwd, { head, status, paths }) {
   const cfg = git(cwd, 'config', '--no-includes', '-f', '.gitmodules', '--get-regexp', '^submodule\\..*\\.path$');
-  return cfg.split('\n').filter(Boolean).map(line => {
+  const rows=cfg.split('\n').filter(Boolean);
+  if(paths!==undefined&&(!Array.isArray(paths)||!paths.length||new Set(paths).size!==paths.length||paths.some(p=>!rows.some(row=>row.slice(row.search(/\s/)).trim()===p))))throw new Error('explicit recorded supplier paths required');
+  return rows.filter(line=>paths===undefined||paths.includes(line.slice(line.search(/\s/)).trim())).map(line => {
     const [key, p] = line.split(/\s+/);
     const name = key.slice('submodule.'.length, -'.path'.length);
     const get = k => { try { return git(cwd, 'config', '--no-includes', '-f', '.gitmodules', `submodule.${name}.${k}`); } catch { return ''; } };
@@ -199,12 +201,12 @@ export function publish(cwd, { branch, advance, message = 'Advance submodules', 
   return { pushed: true, foreign: !!foreign };
 }
 
-export function run(cwd, { branch, note = '', head, status, remote }) {
+export function run(cwd, { branch, note = '', head, status, remote, paths }) {
   const definitions = fs.lstatSync(path.join(cwd, '.gitmodules'), { throwIfNoEntry: false });
   if (!definitions) return { result: 'no submodules' };
   if (!definitions.isFile()) throw new Error('supplier definitions changed file kind; regular source required');
   const prepared = prepare(cwd, { branch, remote, status });
-  const p = plan(readEntries(cwd, { head, status }));
+  const p = plan(readEntries(cwd, { head, status, paths }));
   const body = renderBody(p, note);
   const bodyFile = path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'advance-body.md'));
   fs.writeFileSync(bodyFile, body);
