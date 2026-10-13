@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, renderAgentWork, REUSABLE, REF } from '../generator/generate-ci.mjs';
+import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, renderAgentWork, auditRunnerRouting, REUSABLE, REF } from '../generator/generate-ci.mjs';
 
 
 const runsOn=['self-hosted','existing-runner'];
@@ -133,4 +133,33 @@ test('generated workflows refuse exhausted GitHub-hosted capacity and anonymous 
   assert.match(y, /self-hosted/);
   assert.match(y, /bare-cedar-fog/);
   assert.doesNotMatch(y, /ubuntu-latest/);
+});
+
+test('runner auditor finds direct GitHub-hosted drift and missing reusable caller identity', () => {
+  const root = fixture({
+    '.github/workflows/handwritten.yml': 'name: handwritten\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n',
+    '.github/workflows/agent-work-intake.yml': 'on: [push]\njobs:\n  receive:\n    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@' + REF + '\n',
+    '.github/workflows/good.yml': 'on: [push]\njobs:\n  test:\n    runs-on: [self-hosted, Linux, X64, bare-cedar-fog]\n    steps:\n      - run: true\n',
+  });
+  const findings = auditRunnerRouting(root);
+  assert.equal(findings.length, 2);
+  assert.deepEqual(findings.map(x=>x.file), [
+    '.github/workflows/agent-work-intake.yml',
+    '.github/workflows/handwritten.yml'
+  ]);
+  assert.equal(auditRunnerRouting(root,{publicRepository:true}).length,1,
+    'only an explicitly public repository may exempt free isolated GitHub-hosted jobs');
+});
+test('runner auditor recognizes required inherited selectors and refuses unbound ones', () => {
+  const valid = 'on:\n  workflow_call:\n    inputs:\n      runs-on:\n        type: string\n        required: true\njobs:\n  test:\n    runs-on: ${{ fromJSON(inputs.runs-on) }}\n    steps:\n      - run: true\n';
+  const bad = valid.replace('required: true','required: false');
+  assert.deepEqual(auditRunnerRouting(fixture({'.github/workflows/valid.yml':valid})),[]);
+  assert.equal(auditRunnerRouting(fixture({'.github/workflows/bad.yml':bad})).length,1);
+});
+test('runner auditor refuses duplicate workflow keys and anonymous direct runners', () => {
+  const root=fixture({
+    '.github/workflows/malformed.yml': 'on: [push]\non: [pull_request]\njobs: {}\n',
+    '.github/workflows/anonymous.yml': 'on: [push]\njobs:\n  test:\n    runs-on: [self-hosted, Linux, X64]\n    steps:\n      - run: true\n'
+  });
+  assert.equal(auditRunnerRouting(root).length,2);
 });
