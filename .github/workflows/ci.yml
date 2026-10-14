@@ -28,9 +28,8 @@ jobs:
           node-version: '24'
       - name: Install pinned generator parser
         run: npm ci --no-audit --no-fund
-      - name: Check maintained intake and generated caller contracts
+      - name: Check generated caller and immutable source contracts
         run: |
-          node --check src/agent-work.mjs
           node --check generator/generate-ci.mjs
-          node --test test/agent-work.test.mjs test/generate-ci.test.mjs
+          node --test test/generate-ci.test.mjs test/generated-source-receiving.test.mjs
           node generator/generate-ci.mjs . --audit-runners

@@ -139,32 +139,23 @@ jobs:
     secrets: { house-read-token: "${{ secrets.HOUSE_READ_TOKEN }}" }
 ```
 
-## Agent branch intake
+## Intentional branch and pull-request work
 
-`agent-work.yml` receives same-repository branch pushes into draft pull requests and adds `agent:work`, `agent:blocked` and `agent:received` metadata. Its implementation is pinned to an immutable source commit and both external actions are pinned. It checks out only that maintained implementation; branch code, issue bodies and artifacts are never executed with its write token. The ordinary build/release workflows keep responsibility for source and operating qualification.
+Automatic branch-to-PR intake is retired. The reusable `agent-work.yml` workflow,
+its generated `agent-work-intake.yml` caller, and their old acceptance suite are
+no longer installed or generated. Existing branches remain in GitHub; create or
+update an intentional review on the owning branch when the work is ready.
 
-Install the caller below on the repository default branch. Existing branch work is reconciled separately because a push workflow is read from the pushed branch. Enable Issues and automatic merged-branch deletion in repository settings. To let `GITHUB_TOKEN` create draft pulls, the repository/org Actions policy must permit Actions to create pulls; without that permission the original branch is preserved and the intake fails visibly without creating an unowned duplicate issue. Later branch pushes refresh only the generated head/base and ahead/behind lines of an intake-owned PR, preserving human review and receiver notes; unrelated PR bodies are left alone. Keep default token permission read-only; the metadata job declares only its required issue and pull permissions. An Actions-created pull can require workflow approval; observe the actual checks rather than assuming a draft created by a workflow triggers every build.
+The caller generator defaults to CI and synchronization only. Explicit selection
+of the retired intake is refused. Generated source still uses the existing
+`open-pr.mjs` receiver for an intentional, exact-source draft review, preserving
+concurrent owner changes and later regeneration parity. CI exercises those
+current generator and immutable-source contracts. The retained
+`agent-work-contract` job identifier is a compatibility name, not an active
+branch-intake operation.
 
-```yaml
-name: Agent work
-on:
-  push:
-    branches: ['**']
-  pull_request_target:
-    types: [opened, reopened, synchronize, closed]
-permissions:
-  contents: read
-  issues: write
-  pull-requests: write
-jobs:
-  receive:
-    if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
-    with:
-      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
-```
-
-The example pins a retained source commit and a concrete authorized house-runner selector; the current repository's runner access must still be independently received. Only source receiving is marked; operating, deployment, and customer acceptance still require their actual evidence. This pipeline does not change ChatGPT tool annotations or override a host's tool-decision policy.
+This retirement does not relax source review, the machine no-regression merge
+gate, runner admission, or separate deployment and customer receiving.
 
 ## Publication
 

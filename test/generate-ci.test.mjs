@@ -218,3 +218,20 @@ test('runner access audit requires explicit recipient identity', async () => {
   await assert.rejects(() => auditRunnerAccess(fixture({}),{repo:'unspecified',request:async()=>{}}),
     /explicit owner\/repository/);
 });
+
+test('section CI exercises current caller contracts without retired intake files', () => {
+  const workflow = YAML.parse(fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
+  const job = workflow.jobs['agent-work-contract'];
+  assert.deepEqual(job['runs-on'], ['self-hosted', 'Linux', 'X64', 'bare-cedar-fog']);
+  assert.deepEqual(job.permissions, {contents: 'read'});
+  const step = job.steps.find(step => step.name === 'Check generated caller and immutable source contracts');
+  assert.ok(step);
+  assert.match(step.run, /node --test test\/generate-ci\.test\.mjs test\/generated-source-receiving\.test\.mjs/);
+  assert.doesNotMatch(step.run, /agent-work/);
+  for (const file of step.run.matchAll(/(?:node --check |test\/)([^\s]+\.mjs)/g)) {
+    const name = file[0].startsWith('test/') ? 'test/' + file[1] : file[1];
+    assert.ok(fs.statSync(new URL('../' + name, import.meta.url)).isFile(), name);
+  }
+  assert.equal(fs.existsSync(new URL('../.github/workflows/agent-work.yml', import.meta.url)), false);
+  assert.equal(fs.existsSync(new URL('../.github/workflows/agent-work-intake.yml', import.meta.url)), false);
+});
