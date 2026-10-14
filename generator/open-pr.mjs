@@ -245,3 +245,125 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
   if (!pr || !Number.isSafeInteger(pr.number) || pr.html_url !== `https://github.com/${repo}/pull/${pr.number}` || await readHead() !== commit) fail('review-unresolved', 'exact source review receiving not established');
   return { status: 'proposed', proposal, commit, tree, pullRequest: pr.html_url, ...(runnerReceiving ? {runnerReceiving} : {}) };
 }
+
+/**
+ * Fleet receiver for a retired, pinned Continuous Delivery workflow.
+ * Pinned callers survive the producer's mainline retirement; remove them
+ * with bounded inventory, exact blob custody and independent readback.
+ * Reuses the existing githubRequest(token) port and owns no credentials.
+ */
+export const RETIRED_BRANCH_INTAKE_PATH = '.github/workflows/agent-work-intake.yml';
+const retiredIntakeBlobs = new Set([
+  'ee077700dcdde1e71be3da2f8982c2ceae15b21e',
+  '1acb8b98d60959a7a42260b24f5aa946741a3c54',
+  '1788f2c08b0fe190bcd41770d85cef54171cd837',
+]);
+const fleetOrgs = new Set(['red-cup-engineering','lenticule-science','561-group','coesite-operations']);
+const fleetConcurrency = 4;
+const legacyIntake = text =>
+  typeof text === 'string'
+  && text.includes('name: Agent work\n')
+  && text.includes('pull_request_target:')
+  && text.includes("branches: ['**']")
+  && /^    uses: red-cup-engineering\/continuous-delivery-services-section\/\.github\/workflows\/agent-work\.yml@[a-f0-9]{40}$/mu.test(text);
+
+async function boundedFleetMap(items, worker) {
+  let next = 0;
+  const result = Array(items.length);
+  await Promise.all(Array.from({length:Math.min(fleetConcurrency,items.length)}, async()=>{
+    for(;;) {
+      const i = next++;
+      if(i>=items.length)break;
+      result[i] = await worker(items[i]);
+    }
+  }));
+  return result;
+}
+
+/** apply=false reads a complete token-visible census, apply=true deletes
+ * only qualified legacy callers. Never retries an uncertain mutation. */
+export async function reconcileRetiredIntakeFleet({organizations,apply=false,maxChanges=400}={}, {request}={}) {
+  if(!Array.isArray(organizations)||organizations.length<1||organizations.length>4
+    ||new Set(organizations).size!==organizations.length
+    ||organizations.some(org=>!fleetOrgs.has(org))
+    ||typeof apply!=='boolean'
+    ||!Number.isSafeInteger(maxChanges)||maxChanges<1||maxChanges>400
+    ||typeof request!=='function')throw new TypeError('exact fleet scope, bounded effect budget and authorized GitHub port required');
+  const population=[];
+  // Exhaust token-accessible org listings before any repository mutation.
+  for(const org of organizations) {
+    let completed=false;
+    for(let page=1;page<=6;page++) {
+      let rows;
+      try {rows=await request('GET', '/orgs/'+org+'/repos?type=all&per_page=100&page='+page);}
+      catch {throw new Error('fleet repository census unavailable: no mutations admitted');}
+      if(!Array.isArray(rows)||rows.length>100)throw new Error('fleet repository enumeration malformed');
+      if(page===6&&rows.length)throw new RangeError('fleet organization population exceeds complete 500-repository bound');
+      for(const row of rows) {
+        if(!row||row.owner?.login!==org||row.full_name!==org+'/'+row.name
+          ||!repoName(row.full_name)||!branchName(row.default_branch)
+          ||!Number.isSafeInteger(row.id)||row.id<1)
+          throw new Error('fleet repository identity or default branch unreadable');
+        if(row.archived===true||row.disabled===true||row.fork===true)continue;
+        population.push({repository:row.full_name,id:row.id,branch:row.default_branch});
+      }
+      if(rows.length<100){completed=true;break;}
+    }
+    if(!completed)throw new Error('fleet organization pagination incomplete');
+  }
+  const path=RETIRED_BRANCH_INTAKE_PATH;
+  const observe=async item=>{
+    const prefix='/repos/'+item.repository;
+    const object=await request('GET',prefix+'/contents/'+path+'?ref='+encodeURIComponent(item.branch));
+    if(object===null)return {...item,status:'absent'};
+    if(object?.type!=='file'||object.path!==path||!sha(object.sha)
+      ||object.encoding!=='base64'||typeof object.content!=='string')
+      return {...item,status:'unrecognized'};
+    if(!retiredIntakeBlobs.has(object.sha))return {...item,status:'unrecognized'};
+    const bytes=Buffer.from(object.content.replace(/\s/g,''),'base64');
+    const blob=hash('sha1',Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes]));
+    if(blob!==object.sha||!legacyIntake(bytes.toString('utf8')))
+      return {...item,status:'unrecognized'};
+    const ref=await request('GET',prefix+'/git/ref/heads/'+encodeURIComponent(item.branch));
+    if(ref?.ref!=='refs/heads/'+item.branch||!sha(ref.object?.sha))
+      return {...item,status:'unread'};
+    return {...item,status:'eligible',blob:object.sha,head:ref.object.sha};
+  };
+  const inspected=await boundedFleetMap(population,async item=>{
+    try{return await observe(item);}
+    catch{return {...item,status:'unread'};}
+  });
+  const eligible=inspected.filter(row=>row.status==='eligible');
+  const counts={repositories:population.length,eligible:eligible.length,
+    absent:inspected.filter(row=>row.status==='absent').length,
+    unrecognized:inspected.filter(row=>row.status==='unrecognized').length,
+    unread:inspected.filter(row=>row.status==='unread').length};
+  if(eligible.length>maxChanges)throw new RangeError('fleet change count exceeds authorized batch bound');
+  if(apply&&counts.unread)throw new Error('fleet preflight incomplete: no mutations admitted');
+  if(!apply)return {kind:'cd.retired-intake-fleet',mode:'plan',credentialVisible:true,...counts,removed:0,refused:0,indeterminate:0};
+  const results=await boundedFleetMap(eligible,async row=>{
+    const prefix='/repos/'+row.repository;
+    const refPath=prefix+'/git/ref/heads/'+encodeURIComponent(row.branch);
+    const filePath=prefix+'/contents/'+path+'?ref='+encodeURIComponent(row.branch);
+    let mutation;
+    try {
+      const before=await request('GET',refPath);
+      if(before?.ref!=='refs/heads/'+row.branch||before.object?.sha!==row.head)
+        return 'refused';
+      mutation=await request('DELETE',prefix+'/contents/'+path,{
+        message:'chore(forge): retire obsolete pinned automatic branch-to-PR intake',
+        sha:row.blob,branch:row.branch,
+      });
+    } catch {return 'refused';}
+    let received;
+    try {received=await request('GET',filePath);}
+    catch {return 'indeterminate';}
+    if(received!==null)return 'refused';
+    if(!sha(mutation?.commit?.sha))return 'indeterminate';
+    return 'removed';
+  });
+  return {kind:'cd.retired-intake-fleet',mode:'apply',credentialVisible:true,...counts,
+    removed:results.filter(x=>x==='removed').length,
+    refused:results.filter(x=>x==='refused').length,
+    indeterminate:results.filter(x=>x==='indeterminate').length};
+}
