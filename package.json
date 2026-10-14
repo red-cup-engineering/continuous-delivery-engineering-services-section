@@ -10,5 +10,8 @@
   },
   "peerDependencies": {
     "@red-cup-engineering/git-services-section": ">=4.1.1"
+  },
+  "bin": {
+    "retire-source-runs": "./scripts/retire-source-runs.mjs"
   }
 }
