@@ -1,0 +1,49 @@
+name: Reconcile retired branch-intake fleet
+on:
+  workflow_dispatch:
+    inputs:
+      organizations:
+        description: 'Exact admitted GitHub organization list, comma-separated'
+        required: true
+        type: string
+        default: '561-group,red-cup-engineering,lenticule-science,coesite-operations'
+      apply:
+        description: 'Delete only positively identified retired caller blobs, after complete read-only preflight'
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: retained-fleet-reconciliation
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+      - name: Receive exact fleet source before any remote effect
+        run: |
+          npm ci --legacy-peer-deps --no-audit --no-fund
+          node --check generator/open-pr.mjs
+          node --check generator/generate-ci.mjs
+          node --test test/retired-intake-fleet.test.mjs
+      - name: Reconcile existing GitHub repository consumers
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_GITHUB_TOKEN }}
+          FLEET_ORGANIZATIONS: ${{ inputs.organizations }}
+          FLEET_APPLY: ${{ inputs.apply }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Existing fleet write/read credential not connected; no repository changes attempted." >&2
+            exit 1
+          fi
+          args=(--retire-obsolete-intake-fleet --organizations "$FLEET_ORGANIZATIONS")
+          if [ "$FLEET_APPLY" = 'true' ]; then args+=(--apply); fi
+          node generator/generate-ci.mjs "${args[@]}"

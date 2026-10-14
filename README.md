@@ -190,6 +190,53 @@ branch-intake operation.
 This retirement does not relax source review, the machine no-regression merge
 gate, runner admission, or separate deployment and customer receiving.
 
+## Reconcile retired branch-intake callers across actual GitHub repositories
+
+The old reusable `agent-work.yml` was retired, but repositories may still
+pin immutable *historical* revisions in `.github/workflows/agent-work-intake.yml`.
+Changing the current reusable workflow cannot remove those callers.
+
+Use the **existing** generator and GitHub source-receiving API as one fleet
+operation rather than opening hundreds of independent chat/tool transactions.
+With an already authorized, appropriately scoped `GH_TOKEN`, run:
+
+```sh
+node generator/generate-ci.mjs --retire-obsolete-intake-fleet \
+  --organizations 561-group,red-cup-engineering,lenticule-science,coesite-operations
+# After reviewing the source owner's plan and the token's reachable scope:
+node generator/generate-ci.mjs --retire-obsolete-intake-fleet \
+  --organizations 561-group,red-cup-engineering,lenticule-science,coesite-operations --apply
+```
+
+The same operation is exposed through the public source owner's manually
+dispatched [cloud workflow](../.github/workflows/retire-obsolete-intake-fleet.yml).
+That hosted job needs a **preexisting** `FLEET_GITHUB_TOKEN` secret, with repository
+metadata read, contents read/write, and access to each selected organization.
+The GitHub-hosted default `GITHUB_TOKEN` does not grant cross-org private
+repository writes; the connector credential from a ChatGPT session is not
+transferred to Actions. If that secret does not exist, the workflow refuses
+before any remote effect. No additional runner on Cold Red Gate/Bare Cedar Fog
+is required for this bounded GitHub-only maintenance.
+
+The provider first exhausts paginated, credential-visible repository lists
+(up to 500 records per organization), then checks default branches and native
+Git blob identities. The only eligible source is the exact *known* retired
+caller file: three previously observed Git blob versions with the original
+pinned reusable workflow, branch-push and PR-target triggers. Custom workflows,
+archives, forks, inactive repositories, unknown contents, unrelated releases,
+and unique open source branches are not touched. No invented `sources.json`,
+machine registry or replacement SLC store is written.
+
+Plan mode makes **no** changes. Apply mode refuses any incomplete readable
+preflight, bounds effects to 400 eligible source leaves, checks each default
+branch HEAD before its exact-SHA GitHub Contents deletion, and reads the file
+back independently. A denied/uncertain write is never retried through another
+actuator or reported as received. Cloud logs contain aggregate numbers only:
+reachable repositories, absent, eligible, unrecognized, unread, removed,
+refused and indeterminate. Credential-visible coverage does not establish
+organization-global visibility, and workflow removal does not prove all CI,
+source-history receiving or application deployment succeeded.
+
 ## Publication
 
 `publish-package.yml` owns registry publication for hiring repositories. The caller supplies runner labels and a registry token or registry user/password; authentication configuration contains environment placeholders. Tags are `publish/<organization>/<package>/v<declared version>`; a legacy `publish/<package>/v<declared version>` remains valid only when it selects exactly one manifest. The declared manifest supplies the scope. The tag source must already be in the default branch's history; private packages and the existing SQLite refusal remain intact.

@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
-import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames, receiveRunnerSelection, githubRequest } from './open-pr.mjs';
+import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames, receiveRunnerSelection, githubRequest, reconcileRetiredIntakeFleet } from './open-pr.mjs';
 
 export const REUSABLE = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
 // The generated caller hires this exact source revision, never a moving branch.
@@ -454,6 +454,17 @@ export async function receiveGeneratedCaller({ root, repo, token, request, branc
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
   const opt = n => { const i = args.indexOf(n); return i < 0 ? undefined : args[i + 1]; };
+  if (args.includes('--retire-obsolete-intake-fleet')) {
+    if (!process.env.GH_TOKEN) throw new Error('fleet reconciliation requires an already authorized GitHub token; no effect attempted');
+    const organizations=(opt('--organizations')??'').split(',').filter(Boolean);
+    const maxChanges=opt('--max-changes')===undefined?400:Number(opt('--max-changes'));
+    const reading=await reconcileRetiredIntakeFleet({
+      organizations,apply:args.includes('--apply'),maxChanges,
+    },{request:githubRequest(process.env.GH_TOKEN)});
+    // Counts only. Never publish private organization inventory into public CI logs.
+    console.log(JSON.stringify(reading));
+    process.exit(reading.unread||reading.refused||reading.indeterminate?1:0);
+  }
   const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--source-token-secret', '--branch', '--verify-commit', '--workflows', '--retained-runner-evidence', '--repo', '--tool-workspace'];
   const root = path.resolve(args.find((a, i) => !a.startsWith('--') && !valueOptions.includes(args[i - 1])) ?? '.');
   const options = {
