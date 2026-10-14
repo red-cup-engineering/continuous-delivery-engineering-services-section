@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { generatedSource, verifyGeneratedSource, openPullRequest, githubRequest, planGeneratedTree } from '../generator/open-pr.mjs';
 import { generateFromSource } from '../generator/generate-ci.mjs';
 const repo = 'owner/source', branch = 'ci/caller-generator';
+const houseRunsOn = ['self-hosted', 'Linux', 'X64', 'bare-cedar-fog'];
 const inputs = [{ repository: 'owner/generator', commit: 'a'.repeat(40) }];
 const files = { 'src/generated.mjs': 'export const generated = "exact 🌲 bytes";\n' };
 // Real Git supplies object identities. No network, credentials or hosted effects.
@@ -32,6 +33,7 @@ function provider(t, initial = { 'package.json': '{}\n', 'untouched.txt': 'keep\
   const request = async (method,url,body) => {
     state.calls.push({method,url,body}); await state.before?.(method,url,body); let result;
     if (method==='GET' && url===`/repos/${repo}`) result=state.repository??{id:1,visibility:'public',full_name:repo,default_branch:'main'};
+    else if (method==='GET' && url===`/repos/${repo}/actions/runners?per_page=100`) result={total_count:1,runners:[{id:91,status:'online',labels:houseRunsOn.map(name=>({name}))}]};
     else if (method==='GET' && url===`/repos/${repo}/actions/runs/81`) result=structuredClone(state.historicalRun);
     else if (method==='GET' && url===`/repos/${repo}/actions/runs/81/jobs?per_page=100`) result=structuredClone(state.historicalJobs);
     else if (method==='GET' && url.includes('/git/blobs/')) {
@@ -62,6 +64,105 @@ function provider(t, initial = { 'package.json': '{}\n', 'untouched.txt': 'keep\
   return {root,git,state,request,sourceCommit,options:{repo,branch,sourceCommit,inputs,files,request,runsOn:['ubuntu-latest']}};
 }
 const writes=p=>p.state.calls.filter(c=>c.method!=='GET');
+
+const lockfilePath = '.github/workflows/lockfile-fresh.yml';
+const lockfileSource = fs.readFileSync(new URL('./fixtures/lockfile-caller.yml', import.meta.url), 'utf8');
+async function lockfileProvider(t) {
+  const p = provider(t, { [lockfilePath]: lockfileSource, 'untouched.txt': 'keep\n' });
+  p.state.repository = { id: 1, visibility: 'private', full_name: repo, default_branch: 'main' };
+  const supplier = provider(t, Object.fromEntries(['generator/generate-ci.mjs', 'generator/open-pr.mjs',
+    'generator/retained-runner.mjs'].map(file => [file, fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8')])));
+  const module = await import(pathToFileURL(path.join(supplier.root, 'generator/generate-ci.mjs')).href);
+  return { p, supplier, module, options: { root: p.root, repo, request: p.request, runsOn: houseRunsOn, workflows: ['lockfile-fresh'] } };
+}
+
+test('actual lockfile caller receives immutable source, exact supplier, restart identity and later parity', async t => {
+  const { p, supplier, module, options } = await lockfileProvider(t);
+  fs.writeFileSync(path.join(p.root, lockfilePath), 'uncommitted malformed workflow\n');
+  fs.writeFileSync(path.join(p.root, 'package.json'), '{}\n');
+  const first = await module.receiveGeneratedCaller(options);
+  assert.equal(first.status, 'proposed');
+  assert.equal(first.proposal.sourceCommit, p.sourceCommit);
+  assert.deepEqual(first.proposal.inputs, [{ repository: 'red-cup-engineering/continuous-delivery-services-section', commit: supplier.sourceCommit }]);
+  assert.deepEqual(first.proposal.outputs.map(row => row.path), [lockfilePath]);
+  assert.deepEqual(first.runnerReceiving.runnerIds, [91]);
+  assert.equal(first.runnerReceiving.executed, false);
+  const output = module.renderLockfileFreshCaller(lockfileSource, { runsOn: houseRunsOn });
+  assert.equal(p.git(['show', `${first.commit}:${lockfilePath}`]), output.trimEnd());
+  assert.equal(p.git(['show', `${first.commit}:untouched.txt`]), 'keep');
+  assert.ok(p.state.calls.some(call => call.url.endsWith('/actions/runners?per_page=100')));
+  const n = writes(p).length;
+  assert.deepEqual(await module.receiveGeneratedCaller(options), first);
+  assert.equal(writes(p).length, n);
+  p.git(['checkout', '--', lockfilePath]);
+  p.git(['checkout', '--detach', first.commit]);
+  const parity = await module.verifyGeneratedCaller({ ...options, receiptCommit: first.commit });
+  assert.equal(parity.status, 'verified');
+  assert.equal(parity.proposal.id, first.proposal.id);
+  assert.equal(parity.generationSourceCommit, p.sourceCommit);
+  assert.equal(parity.sourceCommit, first.commit);
+  await assert.rejects(() => module.verifyGeneratedCaller({ ...options, receiptCommit: first.commit, ref: 'b'.repeat(40) }), /generator source commit/);
+});
+
+test('lockfile caller lost publication reply reconciles its existing exact proposal', async t => {
+  const { p, module, options } = await lockfileProvider(t);
+  let lost = false;
+  p.state.after = method => { if (method === 'PATCH' && !lost) { lost = true; throw new Error('lost response'); } };
+  const result = await module.receiveGeneratedCaller(options);
+  assert.equal(result.status, 'proposed');
+  assert.equal(p.state.pulls.length, 1);
+  assert.equal(writes(p).filter(call => call.method === 'PATCH').length, 1);
+});
+
+test('later parity reports only its verified source snapshot when HEAD moves during proof', async t => {
+  const { p, module, options } = await lockfileProvider(t);
+  const first = await module.receiveGeneratedCaller(options);
+  p.git(['checkout', '--detach', first.commit]);
+  fs.writeFileSync(path.join(p.root, 'untouched.txt'), 'a later unrelated source\n');
+  p.git(['add', 'untouched.txt']);
+  const moved = p.git(['commit-tree', p.git(['write-tree']), '-p', first.commit], 'later source');
+  const pending = module.verifyGeneratedCaller({ ...options, receiptCommit: first.commit });
+  p.git(['checkout', '--detach', moved]);
+  const result = await pending;
+  assert.equal(p.git(['rev-parse', 'HEAD']), moved);
+  assert.equal(result.sourceCommit, first.commit);
+  assert.equal(result.generationSourceCommit, p.sourceCommit);
+});
+
+test('lockfile caller preserves a concurrent branch change and requires fresh generation', async t => {
+  const { p, module, options } = await lockfileProvider(t);
+  const moved = p.git(['commit-tree', p.git(['rev-parse', 'HEAD^{tree}']), '-p', p.sourceCommit], 'concurrent owner change');
+  p.state.head = moved;
+  await assert.rejects(() => module.receiveGeneratedCaller(options), { code: 'stale-head' });
+  assert.equal(p.state.head, moved);
+  assert.equal(writes(p).length, 0);
+});
+
+test('lockfile caller cannot turn unavailable runner inventory into historical admission', async t => {
+  const { p, module, options } = await lockfileProvider(t);
+  p.state.before = (_method, url) => { if (url.includes('/actions/runners')) throw new Error('inventory unavailable'); };
+  await assert.rejects(() => module.receiveGeneratedCaller(options), /inventory unavailable/);
+  assert.equal(writes(p).length, 0);
+  assert.equal(p.state.head, p.sourceCommit);
+});
+
+for (const [name, change] of [
+  ['permissions', source => source.replace('jobs:', 'permissions: {contents: write}\njobs:')],
+  ['trigger', source => source.replace('  pull_request:', '  pull_request_target:')],
+]) test(`recomputed lockfile ${name} manifest cannot replace the original committed consumer policy`, async t => {
+  const { p, module, options } = await lockfileProvider(t);
+  const first = await module.receiveGeneratedCaller(options);
+  p.git(['checkout', '--detach', first.commit]);
+  const altered = change(fs.readFileSync(path.join(p.root, lockfilePath), 'utf8'));
+  fs.writeFileSync(path.join(p.root, lockfilePath), altered);
+  p.git(['add', lockfilePath]);
+  const forgedProposal = generatedSource({ ...first.proposal, files: { [lockfilePath]: altered } });
+  assert.notEqual(forgedProposal.id, first.proposal.id);
+  const counterfeit = p.git(['commit-tree', p.git(['write-tree']), '-p', p.sourceCommit],
+    `Forged\n\nGenerated-source identity: ${forgedProposal.id}\n${JSON.stringify(forgedProposal)}`);
+  p.git(['checkout', '--detach', counterfeit]);
+  await assert.rejects(() => module.verifyGeneratedCaller({ ...options, receiptCommit: counterfeit }), { code: 'generation-drift' });
+});
 
 test('exact source, unrelated files, draft review, restart idempotence and regeneration parity',async t=>{
  const p=provider(t), first=await openPullRequest(p.options);
@@ -127,8 +228,8 @@ test('transport distinguishes absent GET from failed write; missing actuator is 
 });
 test('generation uses immutable source despite dirty/untracked working bytes and refuses symlinks',t=>{
  const p=provider(t,{'README.md':'plain text\n'});fs.writeFileSync(path.join(p.root,'README.md'),'[dirty](link.md)');fs.writeFileSync(path.join(p.root,'package.json'),'{}');
- const produced=generateFromSource(p.root,{runsOn:['ubuntu-latest']});assert.equal(produced.sourceCommit,p.sourceCommit);assert.deepEqual(Object.keys(produced.files),['.github/workflows/agent-work-intake.yml']);
- fs.symlinkSync('/does-not-exist',path.join(p.root,'linked.md'));p.git(['add','linked.md']);p.git(['commit','-qm','symlink']);assert.throws(()=>generateFromSource(p.root,{runsOn:['ubuntu-latest']}),/symlink/);
+ const produced=generateFromSource(p.root,{runsOn:houseRunsOn});assert.equal(produced.sourceCommit,p.sourceCommit);assert.deepEqual(Object.keys(produced.files),['.github/workflows/agent-work-intake.yml']);
+ fs.symlinkSync('/does-not-exist',path.join(p.root,'linked.md'));p.git(['add','linked.md']);p.git(['commit','-qm','symlink']);assert.throws(()=>generateFromSource(p.root,{runsOn:houseRunsOn}),/symlink/);
 });
 test('actual caller binds source and supplier, receives and verifies its regenerated bytes',async t=>{
  const p=provider(t),supplier=provider(t,{
@@ -137,10 +238,10 @@ test('actual caller binds source and supplier, receives and verifies its regener
   'generator/retained-runner.mjs':fs.readFileSync(new URL('../generator/retained-runner.mjs',import.meta.url),'utf8'),
  });
  const {receiveGeneratedCaller}=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
- const result=await receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:['ubuntu-latest'],workflows:['ci']});assert.equal(result.status,'proposed');
+ const result=await receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']});assert.equal(result.status,'proposed');
  assert.equal(result.proposal.sourceCommit,p.sourceCommit);assert.equal(result.proposal.inputs[0].commit,supplier.sourceCommit);
  assert.match(p.git(['show',`${result.commit}:.github/workflows/ci.yml`]),new RegExp(supplier.sourceCommit));assert.equal(result.proposal.outputs.length,1);
- const n=writes(p).length;assert.deepEqual(await receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:['ubuntu-latest'],workflows:['ci']}),result);assert.equal(writes(p).length,n);
+ const n=writes(p).length;assert.deepEqual(await receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']}),result);assert.equal(writes(p).length,n);
 });
 
 test('later build consumes retained commit proposal, reruns the producer and rejects drift',async t=>{
@@ -150,15 +251,15 @@ test('later build consumes retained commit proposal, reruns the producer and rej
   'generator/retained-runner.mjs':fs.readFileSync(new URL('../generator/retained-runner.mjs',import.meta.url),'utf8'),
  });
  const module=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
- const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:['ubuntu-latest'],workflows:['ci']});
+ const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']});
  p.git(['checkout','--detach',result.commit]);
- const verified=await module.verifyGeneratedCaller({root:p.root,runsOn:['ubuntu-latest'],workflows:['ci'],receiptCommit:result.commit});
+ const verified=await module.verifyGeneratedCaller({root:p.root,runsOn:houseRunsOn,workflows:['ci'],receiptCommit:result.commit});
  assert.equal(verified.status,'verified');assert.equal(verified.proposal.id,result.proposal.id);
- const cli=execFileSync(process.execPath,[path.join(supplier.root,'generator/generate-ci.mjs'),p.root,'--verify-commit',result.commit,'--runs-on','["ubuntu-latest"]','--workflows','["ci"]'],{encoding:'utf8'});
+ const cli=execFileSync(process.execPath,[path.join(supplier.root,'generator/generate-ci.mjs'),p.root,'--verify-commit',result.commit,'--runs-on',JSON.stringify(houseRunsOn),'--workflows','["ci"]'],{encoding:'utf8'});
  assert.match(cli,/source parity:.*"status":"verified"/);
- await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,runsOn:['ubuntu-latest'],workflows:['ci'],receiptCommit:result.commit,ref:'b'.repeat(40)}),{code:'generation-drift'});
+ await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,runsOn:houseRunsOn,workflows:['ci'],receiptCommit:result.commit,ref:'b'.repeat(40)}),{code:'generation-drift'});
  fs.writeFileSync(path.join(p.root,'untouched.txt'),'changed source');p.git(['add','.']);p.git(['commit','-qm','later input']);
- await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,runsOn:['ubuntu-latest'],workflows:['ci'],receiptCommit:result.commit}),/source tree differs/);
+ await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,runsOn:houseRunsOn,workflows:['ci'],receiptCommit:result.commit}),/source tree differs/);
  assert.equal(writes(p).filter(c=>c.url.endsWith('/pulls')).length,1);
 });
 
@@ -169,11 +270,11 @@ for (const forgedPath of ['.github/workflows/ci.yml','untouched.txt']) test(`lat
   'generator/retained-runner.mjs':fs.readFileSync(new URL('../generator/retained-runner.mjs',import.meta.url),'utf8'),
  });
  const module=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
- const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:['ubuntu-latest'],workflows:['ci']});
+ const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']});
  p.git(['checkout','--detach',result.commit]);fs.writeFileSync(path.join(p.root,forgedPath),'altered bytes');p.git(['add','.']);
  const counterfeit=p.git(['commit-tree',p.git(['write-tree']),'-p',p.sourceCommit],p.git(['show','-s','--format=%B',result.commit]));
  p.git(['checkout','--detach',counterfeit]);
- await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,runsOn:['ubuntu-latest'],workflows:['ci'],receiptCommit:counterfeit}),{code:'output-mismatch'});
+ await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,runsOn:houseRunsOn,workflows:['ci'],receiptCommit:counterfeit}),{code:'output-mismatch'});
 });
 
 test('independent: counterfeit manifest outputs cannot excuse altered committed output',async t=>{
@@ -183,13 +284,13 @@ test('independent: counterfeit manifest outputs cannot excuse altered committed 
   'generator/retained-runner.mjs':fs.readFileSync(new URL('../generator/retained-runner.mjs',import.meta.url),'utf8'),
  });
  const module=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
- const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:['ubuntu-latest'],workflows:['ci']});
+ const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']});
  p.git(['checkout','--detach',result.commit]);
  const altered='name: counterfeit\njobs: {}\n';fs.writeFileSync(path.join(p.root,'.github/workflows/ci.yml'),altered);p.git(['add','.']);
  const proposal=structuredClone(result.proposal);proposal.outputs[0].blob=p.git(['hash-object','--stdin'],altered);
  const forged=p.git(['commit-tree',p.git(['write-tree']),'-p',p.sourceCommit],`Forged\n\nGenerated-source identity: ${proposal.id}\n${JSON.stringify(proposal)}`);
  p.git(['checkout','--detach',forged]);
- await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,runsOn:['ubuntu-latest'],workflows:['ci'],receiptCommit:forged}),{code:'output-mismatch'});
+ await assert.rejects(()=>module.verifyGeneratedCaller({root:p.root,runsOn:houseRunsOn,workflows:['ci'],receiptCommit:forged}),{code:'output-mismatch'});
 });
 
 for (const [name, generated] of Object.entries({
