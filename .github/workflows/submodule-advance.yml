@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
-          ref: 131900a1a55b8d3d769a389c43cd6236147d69ab
+          ref: e141a4445864895631aa4f775a9ad6397e1772c8
           path: .cds
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
@@ -52,22 +52,5 @@ jobs:
         id: advance
         run: node .cds/scripts/advance.mjs --branch "$BRANCH" --note "$NOTE"
       - name: open or update the one pull request
-        if: always() && steps.advance.outputs.advanced == 'true'
-        run: |
-          set -eu
-          # Use the maintained REST surface; older gh pr edit queries removed
-          # projectCards even when only the body is being changed. A failed
-          # lookup must stop here, never be interpreted as permission to create.
-          n=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
-            -f "head=${GITHUB_REPOSITORY%%/*}:$BRANCH" -f "base=$BASE" \
-            -f state=open -f per_page=2 \
-            --jq 'if length > 1 then error("ambiguous sync pull request") else .[0].number // empty end')
-          if [ -n "$n" ]; then
-            case "$n" in *[!0-9]*|0) echo 'Invalid pull request number' >&2; exit 1 ;; esac
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$n" \
-              -F body=@.git/advance-body.md --jq .html_url
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/pulls" \
-              -f "base=$BASE" -f "head=$BRANCH" -f 'title=Advance submodules' \
-              -F body=@.git/advance-body.md --jq .html_url
-          fi
+        if: always() && steps.advance.outputs.pending == 'true'
+        run: node .cds/scripts/submodule-pr.mjs
