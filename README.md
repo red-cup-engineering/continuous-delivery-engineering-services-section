@@ -8,6 +8,14 @@ instead of requiring the development laptop. The project-local `.npmrc` selects
 `legacy-peer-deps=true` for the pinned standalone npm lock, as the existing
 Cloud Build source self-check already does; it does **not** erase the required
 Git-services peer from `package.json` or qualify a downstream composition.
+The public `agent-work-contract` job now executes only the full owner-selected
+standalone, dependency-closed source-contract suite: generator/rendering,
+retained-runner graph analysis, node-package interface, and provider-native
+Cloud Build configuration. The full `node-package` job remains on the existing
+self-hosted/composed-source selection because Git-services 4.1.1 is a genuinely
+required private dependency of immutable-source receiving proofs. An isolated
+public checkout never substitutes a weakened local implementation or reports
+those private integration proofs as passed.
 Use `node generator/generate-ci.mjs . --audit-runners --public-repo` to audit
 this source owner's exceptional runner route. This exception does not change
 private consumers' own self-hosted runner requirements, the exact-source

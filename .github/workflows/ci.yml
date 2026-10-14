@@ -10,7 +10,9 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/node-package.yml
     with:
-      runs-on: '["ubuntu-24.04"]'
+      # Full source/release verification requires the composed private Git-services
+      # supplier; it is not an isolated public CI test.
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
   agent-work-contract:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Source-only tests in this public repository use an isolated standard
@@ -28,8 +30,8 @@ jobs:
           node-version: '24'
       - name: Install pinned generator parser
         run: npm ci --no-audit --no-fund
-      - name: Check generated caller and immutable source contracts
+      - name: Check standalone public source contracts
         run: |
           node --check generator/generate-ci.mjs
-          node --test test/generate-ci.test.mjs test/generated-source-receiving.test.mjs
+          node --test test/generate-ci.test.mjs test/retained-runner.test.mjs test/node-package-options.test.mjs test/cloudbuild-native.test.mjs
           node generator/generate-ci.mjs . --audit-runners --public-repo
