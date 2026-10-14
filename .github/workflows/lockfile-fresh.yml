@@ -89,6 +89,7 @@ jobs:
           ref: ${{ inputs.tool-workspace-revision }}
           path: tool-workspace
           token: ${{ secrets.source-read-token }}
+          persist-credentials: false
           submodules: recursive
           fetch-depth: 1
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
