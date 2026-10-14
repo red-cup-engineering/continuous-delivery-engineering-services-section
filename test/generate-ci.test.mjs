@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, renderAgentWork, auditRunnerRouting, REUSABLE, REF } from '../generator/generate-ci.mjs';
+import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, renderAgentWork, auditRunnerRouting, auditRunnerAccess, REUSABLE, REF } from '../generator/generate-ci.mjs';
 
 
 const runsOn=['self-hosted','existing-runner'];
@@ -176,4 +176,50 @@ test('runner auditor follows local reusable selectors and does not trust unknown
     '.github/workflows/external.yml',
     '.github/workflows/local.yml'
   ]);
+});
+
+test('actual runner audit tests consumer access rather than supplier labels', async () => {
+  const root = fixture({'.github/workflows/civic.yml':
+    'name: civic\non: [push]\njobs:\n  check:\n    runs-on: [self-hosted, Linux, X64, bare-cedar-fog]\n    steps:\n      - run: true\n'});
+  const repo = 'causeway-services/turntide-islands-services-section';
+  const calls = [];
+  const request = async (method, path) => {
+    calls.push(method + ' ' + path);
+    if (path === '/repos/' + repo)
+      return {full_name:repo,id:1410773163,visibility:'private'};
+    if (path === '/repos/' + repo + '/actions/runners?per_page=100')
+      return {total_count:1,runners:[{id:64,status:'online',labels:
+        ['self-hosted','Linux','X64','bare-cedar-fog'].map(name=>({name}))}]};
+    throw new Error('unrecognized read');
+  };
+  const report = await auditRunnerAccess(root,{repo,request});
+  assert.equal(report.ok,true);
+  assert.deepEqual(report.findings,[]);
+  assert.equal(report.executionReceived,false);
+  assert.equal(report.access[0].state,'registered-online');
+  assert.deepEqual(report.access[0].runnerIds,[64]);
+  assert.deepEqual(calls,['GET /repos/' + repo,'GET /repos/' + repo + '/actions/runners?per_page=100']);
+});
+test('unavailable runner observation is not misreported as absent runner or completed tests', async () => {
+  const root = fixture({'.github/workflows/civic.yml':
+    'on: [push]\njobs:\n  check:\n    runs-on: [self-hosted, Linux, X64, bare-cedar-fog]\n    steps: [{run: true}]\n'});
+  const repo='causeway-services/turntide-islands-services-section';
+  const noAccess=await auditRunnerAccess(root,{repo,request:async (method,path)=>{
+    if(path==='/repos/'+repo) return {full_name:repo,id:1410773163,visibility:'private'};
+    throw new Error('403: insufficient runner administration access');
+  }});
+  assert.equal(noAccess.ok,false);
+  assert.equal(noAccess.executionReceived,false);
+  assert.equal(noAccess.access[0].state,'access-unverified');
+  assert.match(noAccess.access[0].reason,/403/);
+  const empty=await auditRunnerAccess(root,{repo,request:async (method,path)=>{
+    if(path==='/repos/'+repo) return {full_name:repo,id:1410773163,visibility:'private'};
+    return {total_count:0,runners:[]};
+  }});
+  assert.equal(empty.ok,false);
+  assert.match(empty.access[0].reason,/no online registered house runner/);
+});
+test('runner access audit requires explicit recipient identity', async () => {
+  await assert.rejects(() => auditRunnerAccess(fixture({}),{repo:'unspecified',request:async()=>{}}),
+    /explicit owner\/repository/);
 });
