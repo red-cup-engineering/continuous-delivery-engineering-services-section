@@ -100,16 +100,15 @@ jobs:
           [[ "$(git -C "$workspace" rev-parse HEAD)" == "$TOOL_WORKSPACE_REVISION" ]] || { echo 'composed workspace differs from its admitted revision' >&2; exit 1; }
           checker="$workspace/$TOOL_WORKSPACE_CHECKER_PATH"
           [[ -d "$checker" ]] || { echo 'selected checker Gitlink was not received' >&2; exit 1; }
-          checker_root=$(git -C "$checker" rev-parse --show-toplevel)
+          checker=$(realpath "$checker")
+          checker_root=$(realpath "$(git -C "$checker" rev-parse --show-toplevel)")
+          [[ "$checker_root" == "$checker" ]] || { echo 'checker path must identify the selected Gitlink root' >&2; exit 1; }
           [[ "$(git -C "$checker_root" rev-parse HEAD)" == "$SUPPLIER_REVISION" ]] || { echo 'checker source differs from its exact supplier revision' >&2; exit 1; }
-          checker_root=$(realpath "$checker_root")
           [[ "$checker_root" == "$workspace/"* ]] || { echo 'checker source escaped the composed workspace' >&2; exit 1; }
           package_manager=$(node -e 'const p=require(process.argv[1]);process.stdout.write(p.packageManager??"")' "$workspace/package.json")
           [[ "$package_manager" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'composed workspace must declare an exact pnpm version' >&2; exit 1; }
-          checker_name=$(node -e 'process.stdout.write(require(process.argv[1]).name??"")' "$checker_root/package.json")
-          [[ -n "$checker_name" ]] || { echo 'selected checker has no package name' >&2; exit 1; }
           cd "$workspace"
-          npm exec --yes --package="$package_manager" -- pnpm install --frozen-lockfile --filter "$checker_name"...
+          npm exec --yes --package="$package_manager" -- pnpm install --frozen-lockfile --filter "./$TOOL_WORKSPACE_CHECKER_PATH"...
       - name: Lockfile freshness
         env:
           DIRECTORY: ${{ inputs.directory }}
@@ -121,11 +120,17 @@ jobs:
           base_args=()
           if [ -d "$GITHUB_WORKSPACE/base" ]; then base_args=(--base "$GITHUB_WORKSPACE/base/$DIRECTORY"); fi
           export FRESHNESS_FILE="$RUNNER_TEMP/lockfile-freshness.json"
-          checker_root=$(git -C "$checker" rev-parse --show-toplevel)
+          checker=$(realpath "$checker")
+          checker_root=$(realpath "$(git -C "$checker" rev-parse --show-toplevel)")
+          [[ "$checker_root" == "$checker" ]] || { echo 'checker path must identify the selected Gitlink root' >&2; exit 1; }
           package_manager=$(node -e 'process.stdout.write(require(process.argv[1]).packageManager)' "$workspace/package.json")
           status=0
-          (cd "$workspace" && npm exec --yes --package="$package_manager" -- pnpm --filter "$(node -e 'process.stdout.write(require(process.argv[1]).name)' "$checker_root/package.json")" exec node "$checker_root/scripts/lockfile-fresh.mjs" "$head_directory" "${base_args[@]}") > "$FRESHNESS_FILE" || status=$?
-          [[ -s "$FRESHNESS_FILE" ]] || { echo 'native lockfile checker produced no freshness result' >&2; exit "${status:-1}"; }
+          (cd "$workspace" && npm exec --yes --package="$package_manager" -- pnpm --filter "./$TOOL_WORKSPACE_CHECKER_PATH" exec node scripts/lockfile-fresh.mjs "$head_directory" "${base_args[@]}") > "$FRESHNESS_FILE" || status=$?
+          if [[ ! -s "$FRESHNESS_FILE" ]]; then
+            echo 'native lockfile checker produced no freshness result' >&2
+            if (( status != 0 )); then exit "$status"; fi
+            exit 1
+          fi
           node -e '
             const r=require(process.env.FRESHNESS_FILE);
             const lines=[`### Lockfile freshness: ${r.added.length?"`stale`":"`fresh`"} (${r.mismatches} known mismatches)`,""];
