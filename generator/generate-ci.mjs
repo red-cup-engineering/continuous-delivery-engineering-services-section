@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames } from './open-pr.mjs';
+import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames, receiveRunnerSelection, githubRequest } from './open-pr.mjs';
 
 export const REUSABLE = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
 // The generated caller hires this exact source revision, never a moving branch.
@@ -169,6 +169,53 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
   return findings;
 }
 
+// An optional online audit reuses the existing consumer-repo runner admission.
+// Unlike the static YAML audit it tests registered/online eligibility, not
+// merely labels. It neither creates runners nor claims a completed CI job.
+export async function auditRunnerAccess(root, { repo, request } = {}) {
+  if (typeof repo !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo))
+    throw new TypeError('runner access audit requires an explicit owner/repository');
+  if (typeof request !== 'function') throw new TypeError('runner access audit requires an authenticated GitHub reader');
+  const findings = auditRunnerRouting(root);
+  const dir = path.join(root, '.github/workflows');
+  const selectors = new Map();
+  if (fs.existsSync(dir)) for (const name of fs.readdirSync(dir).filter(f => /\.ya?ml$/.test(f)).sort()) {
+    let doc;
+    try { doc = YAML.parse(fs.readFileSync(path.join(dir,name),'utf8'), {uniqueKeys:true}); }
+    catch { continue; }
+    if (!doc?.jobs || typeof doc.jobs !== 'object') continue;
+    for (const [jobId, job] of Object.entries(doc.jobs)) {
+      if (!job || typeof job !== 'object') continue;
+      let labels = job['runs-on'];
+      if (labels === undefined && typeof job.uses === 'string' &&
+          (job.uses.startsWith(REUSABLE + '/') || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
+        const raw = job.with?.['runs-on'];
+        try { labels = JSON.parse(raw); } catch { continue; }
+      }
+      if (typeof labels === 'string' && labels.includes('${{')) continue;
+      if (typeof labels === 'string') labels = [labels];
+      if (!Array.isArray(labels) || !labels.length || labels.some(s => typeof s !== 'string')) continue;
+      const key = JSON.stringify(labels);
+      if (!selectors.has(key)) selectors.set(key,{labels,usedBy:[]});
+      selectors.get(key).usedBy.push('.github/workflows/' + name + ':' + jobId);
+    }
+  }
+  const access = [];
+  for (const selector of selectors.values()) {
+    try {
+      const receipt = await receiveRunnerSelection({repo,runsOn:selector.labels,request});
+      access.push({ ...selector, state:receipt.execution === 'public-standard'
+        ? 'public-standard-no-private-minutes' : 'registered-online',
+        runnerIds:receipt.runnerIds ?? [], executed:false });
+    } catch (error) {
+      access.push({ ...selector, state:'access-unverified', reason:String(error?.message || error), executed:false });
+    }
+  }
+  return {repo,findings,access,
+    ok:findings.length === 0 && access.length > 0 && access.every(x=>x.state !== 'access-unverified'),
+    executionReceived:false};
+}
+
 // Handwritten workflows other than the generated ones, each against the reusable
 // workflow that covers it (requirement 17). Removal waits on the receiving office.
 export function reportHandwritten(root) {
@@ -311,7 +358,7 @@ export async function receiveGeneratedCaller({ root, repo, token, request, branc
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
   const opt = n => { const i = args.indexOf(n); return i < 0 ? undefined : args[i + 1]; };
-  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--branch', '--verify-commit', '--workflows', '--retained-runner-evidence'];
+  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--branch', '--verify-commit', '--workflows', '--retained-runner-evidence', '--repo'];
   const root = path.resolve(args.find((a, i) => !a.startsWith('--') && !valueOptions.includes(args[i - 1])) ?? '.');
   const options = {
     parent: opt('--parent'), ref: opt('--ref') ?? REF,
@@ -320,6 +367,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     defaultBranch: opt('--default-branch') ?? 'main', tokenSecret: opt('--token-secret'),
     publicRepository: args.includes('--public-repo'),
   };
+  if (args.includes('--audit-runner-access')) {
+    const reading = await auditRunnerAccess(root, {repo:opt('--repo'),
+      request:githubRequest(process.env.GH_TOKEN)});
+    console.log(JSON.stringify(reading,null,2));
+    process.exit(reading.ok ? 0 : 1);
+  }
   if (args.includes('--audit-runners')) {
     const findings = auditRunnerRouting(root, {publicRepository:args.includes('--public-repo')});
     console.log(JSON.stringify({root,findings},null,2));
