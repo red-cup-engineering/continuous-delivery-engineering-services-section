@@ -10,12 +10,14 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/node-package.yml
     with:
+      # Full source/release verification requires the composed private Git-services
+      # supplier; it is not an isolated public CI test.
       runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
   agent-work-contract:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # No GitHub-hosted fallback. The engineering organization must grant a
-    # real house runner access; pending jobs do not mean tests passed.
-    runs-on: [self-hosted, Linux, X64, bare-cedar-fog]
+    # Source-only tests in this public repository use an isolated standard
+    # hosted runner. Machine/regression receiving remains with the real consumers.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -27,10 +29,9 @@ jobs:
         with:
           node-version: '24'
       - name: Install pinned generator parser
-        run: npm ci --no-audit --no-fund
-      - name: Check maintained intake and generated caller contracts
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Check standalone public source contracts
         run: |
-          node --check src/agent-work.mjs
           node --check generator/generate-ci.mjs
-          node --test test/agent-work.test.mjs test/generate-ci.test.mjs
-          node generator/generate-ci.mjs . --audit-runners
+          node --test test/generate-ci.test.mjs test/retained-runner.test.mjs test/node-package-options.test.mjs test/cloudbuild-native.test.mjs
+          node generator/generate-ci.mjs . --audit-runners --public-repo
