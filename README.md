@@ -45,7 +45,16 @@ Workflows (swap the file name):
   (`scripts/lockfile-fresh.mjs`, which lists every stale importer where pnpm's frozen install stops at the first).
   Mounted submodules are read at the commits the superproject records; a mount the runner cannot reach is
   reported as unread rather than judged.
-  Inputs: `directory`, `runs-on` (JSON runner labels, for a repository without GitHub-hosted runners).
+  Inputs: `directory`, `runs-on` (JSON runner labels), and required `supplier-revision` (lowercase 40-hex commit).
+  The generated caller must hire `lockfile-fresh.yml@<commit>` and supply that same commit as
+  `supplier-revision`; it equals the actual generator revision. The workflow admits the commit grammar before
+  checkout and executes that selected supplier. Equality is held by the existing generator/source receiver
+  contract, not a separate cryptographic workflow attestation. Existing callers without the binding can be
+  migrated; an existing binding that differs from its hired revision is refused. Older pinned workflows
+  remain unchanged. Source identity alone does not receive the supplier installation: the required genuine
+  Git peer `>=4.1.1` remains in force. Standalone CI materialization is unresolved until an exact composed
+  workspace, committed full lock, selected CD/Git source, and native installed receipt receive that closure;
+  do not publish private source or suppress the peer to make this check run.
 - `absolute-symlinks.yml` - no committed symbolic link has an absolute target: it resolves only on the machine
   that wrote it, and where the path exists a workspace tool follows it into the live tree
   (`scripts/absolute-symlinks.mjs`, reading links from the index). Inputs: `exclude` (globs reported, not failed;

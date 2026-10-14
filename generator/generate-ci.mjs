@@ -143,14 +143,16 @@ export function renderLockfileFreshCaller(source, { ref = REF, runsOn } = {}) {
   runnerLabels(labels);
   if (!isDeepStrictEqual(labels, runsOn)) throw new Error('lockfile caller must retain its exact runner selection');
   const selected = supplier + ref;
-  if (caller.uses === selected) return source;
-  const scalar = document.getIn(['jobs', id, 'uses'], true);
-  if (!YAML.isScalar(scalar) || scalar.value !== caller.uses || !Array.isArray(scalar.range)) refuse();
-  const [start, end] = scalar.range;
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > source.length) refuse();
-  const rendered = source.slice(0, start) + JSON.stringify(selected) + source.slice(end);
+  const binding = caller.with['supplier-revision'];
+  if (binding !== undefined && binding !== caller.uses.slice(supplier.length))
+    throw new Error('lockfile supplier checkout differs from its reusable workflow revision');
+  if (caller.uses === selected && binding === ref) return source;
+  document.setIn(['jobs', id, 'uses'], selected);
+  document.setIn(['jobs', id, 'with', 'supplier-revision'], ref);
+  const rendered = document.toString();
   const expected = structuredClone(value);
   expected.jobs[id].uses = selected;
+  expected.jobs[id].with['supplier-revision'] = ref;
   if (!isDeepStrictEqual(parse(rendered).value, expected)) throw new Error('lockfile caller transformation changed consumer policy');
   return rendered;
 }

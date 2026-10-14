@@ -7,6 +7,10 @@ name: lockfile-fresh
 on:
   workflow_call:
     inputs:
+      supplier-revision:
+        description: 'Exact generator revision that supplies this reusable workflow and its executing source'
+        type: string
+        required: true
       directory:
         description: 'Workspace root inside the repository'
         type: string
@@ -53,10 +57,15 @@ jobs:
             **/package.json
             **/pnpm-lock.yaml
             **/pnpm-workspace.yaml
+      - name: Admit exact supplier revision
+        env:
+          SUPPLIER_REVISION: ${{ inputs.supplier-revision }}
+        run: |
+          [[ "$SUPPLIER_REVISION" =~ ^[a-f0-9]{40}$ ]] || { echo 'supplier revision must be an exact source commit' >&2; exit 1; }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: red-cup-engineering/continuous-delivery-services-section
-          ref: e186963c8a4b9cfe5a90e5e33c3e6e30f56cc282
+          ref: ${{ inputs.supplier-revision }}
           path: section
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
