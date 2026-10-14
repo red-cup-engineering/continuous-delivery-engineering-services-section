@@ -45,13 +45,15 @@ Workflows (swap the file name):
   (`scripts/lockfile-fresh.mjs`, which lists every stale importer where pnpm's frozen install stops at the first).
   Mounted submodules are read at the commits the superproject records; a mount the runner cannot reach is
   reported as unread rather than judged.
-  Inputs: `directory`, `runs-on` (JSON runner labels), required `supplier-revision` (lowercase 40-hex commit), and the exact composed `tool-workspace-repository`, `tool-workspace-revision`, and workspace-relative `tool-workspace-checker-path`.
+  Inputs: `directory`, `runs-on` (JSON runner labels), required `supplier-revision` (lowercase 40-hex commit), and the exact composed `tool-workspace-repository`, `tool-workspace-revision`, and workspace-relative `tool-workspace-checker-path`. Required secret: `source-read-token`, an existing read credential for the composed workspace and its recursively selected private source repositories.
   The generated caller must hire `lockfile-fresh.yml@<commit>` and supply that same commit as
   `supplier-revision`; it equals the actual generator revision. The workflow admits the commit grammar before
   checkout and checks that the composed workspace and selected checker Gitlink match their exact revisions. It
   receives the recursively recorded source tree, installs the checker and its declared workspace dependency
   closure with that root's exact PNPM and frozen full lock, then runs the checker against the pull request's
-  head/base manifests. The genuine private Git peer remains required at `>=4.1.1`; CD declares its workspace
+  head/base manifests. Only the composed workspace checkout receives `source-read-token`; head/base metadata
+  checkouts use the caller's default token. The caller generator takes the existing secret name through
+  `--source-token-secret` and binds it to this workflow secret. The genuine private Git peer remains required at `>=4.1.1`; CD declares its workspace
   source as a development dependency so the checker and source generators resolve the actual mounted owner.
   No package is published to make this source closure installable.
 - `absolute-symlinks.yml` - no committed symbolic link has an absolute target: it resolves only on the machine
@@ -82,11 +84,12 @@ jobs:
 ```
 node generator/generate-ci.mjs <repo-dir> [--parent owner/repo] [--pr owner/repo]
   [--ref <40-character supplier commit>] [--runs-on '["self-hosted","Linux","X64","bare-cedar-fog"]']
-  [--default-branch main] [--token-secret LMT_SUBMODULE_PAT] [--branch ci/caller-generator]
+  [--default-branch main] [--token-secret LMT_SUBMODULE_PAT] [--source-token-secret LMT_SUBMODULE_PAT]
+  [--tool-workspace <json-file>] [--branch ci/caller-generator]
   [--verify-commit <40-character received source commit>]
 ```
 
-Generated callers pin the generator checkout's exact commit (or an explicitly selected commit). Sync callers serialize runs and take the hiring repository's actual runner labels and token secret; the nested reusable workflow comes from the same supplier revision, and its engine checkout is immutable.
+Generated callers pin the generator checkout's exact commit (or an explicitly selected commit). Sync callers serialize runs and take the hiring repository's actual runner labels and token secret; the nested reusable workflow comes from the same supplier revision, and its engine checkout is immutable. For an existing lockfile-fresh caller, `--tool-workspace` reads `{ "repository": "OWNER/REPO", "revision": "<40-hex-commit>", "checkerPath": "path/to/checker-gitlink" }`; `--source-token-secret` names the hiring repository's existing read credential and is emitted only as the reusable workflow's `source-read-token` secret binding.
 
 Selects `node-package` (any `package.json`), `lean` (a `lakefile.lean`/`lakefile.toml`, one job per directory) and `content` (JSON with a relative `$schema`, or Markdown with relative links), and writes `.github/workflows/ci.yml`. A repository with `.gitmodules` also gets `sync.yml` (advance on dispatch/schedule); `--parent` adds the push-to-main notify. Handwritten workflows are reported against the reusable workflow that covers them and are never removed. With `--pr`, the working tree is not edited: the generator reads the exact committed source into a temporary directory, then receives its output through the Git data API (`GH_TOKEN`) into a draft pull request. The default review branch is `ci/caller-generator`; `--branch` names an existing owning review branch. Symlinks are refused, and submodule working copies, ignored files and uncommitted edits cannot affect generation. Existing handwritten workflows remain untouched.
 

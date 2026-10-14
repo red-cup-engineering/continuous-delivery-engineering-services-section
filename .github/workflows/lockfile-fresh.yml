@@ -28,6 +28,10 @@ on:
         description: 'JSON runner labels, for repositories without GitHub-hosted runners (e.g. ["self-hosted","Linux","X64","bare-cedar-fog"])'
         type: string
         required: true
+    secrets:
+      source-read-token:
+        description: 'Existing read credential for the composed workspace and every recursively selected private source repository'
+        required: true
 jobs:
   lockfile-fresh:
     concurrency:
@@ -84,6 +88,7 @@ jobs:
           repository: ${{ inputs.tool-workspace-repository }}
           ref: ${{ inputs.tool-workspace-revision }}
           path: tool-workspace
+          token: ${{ secrets.source-read-token }}
           submodules: recursive
           fetch-depth: 1
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
