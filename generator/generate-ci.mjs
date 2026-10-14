@@ -110,9 +110,18 @@ export function renderSync({ submodules, parent, ref = REF, runsOn, defaultBranc
 /** Adopt only an existing lockfile caller. Its committed YAML is the complete
  * consumer declaration; changing its supplier must not reconstruct that policy.
  * This producer and the hired workflow share one exact supplier input. */
-export function renderLockfileFreshCaller(source, { ref = REF, runsOn } = {}) {
+export function renderLockfileFreshCaller(source, { ref = REF, runsOn, toolWorkspace, sourceTokenSecret } = {}) {
   if (revision(ref) !== REF) throw new Error('lockfile caller supplier must equal the generator source commit');
   runnerLabels(runsOn);
+  if (!toolWorkspace || typeof toolWorkspace.repository !== 'string'
+      || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(toolWorkspace.repository)
+      || !/^[a-f0-9]{40}$/.test(toolWorkspace.revision ?? '')
+      || typeof toolWorkspace.checkerPath !== 'string' || !toolWorkspace.checkerPath
+      || toolWorkspace.checkerPath.startsWith('/') || toolWorkspace.checkerPath.includes('\\')
+      || toolWorkspace.checkerPath.split('/').some(part => !part || part === '.' || part === '..'))
+    throw new Error('exact composed workspace repository, revision and checker path required');
+  if (typeof sourceTokenSecret !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(sourceTokenSecret))
+    throw new Error('existing source-read secret name required');
   const refuse = () => { throw new Error('unambiguous existing lockfile-fresh caller required'); };
   const parse = text => {
     if (typeof text !== 'string' || !text.isWellFormed() || Buffer.byteLength(text) > 1024 * 1024) refuse();
@@ -143,14 +152,38 @@ export function renderLockfileFreshCaller(source, { ref = REF, runsOn } = {}) {
   runnerLabels(labels);
   if (!isDeepStrictEqual(labels, runsOn)) throw new Error('lockfile caller must retain its exact runner selection');
   const selected = supplier + ref;
-  if (caller.uses === selected) return source;
-  const scalar = document.getIn(['jobs', id, 'uses'], true);
-  if (!YAML.isScalar(scalar) || scalar.value !== caller.uses || !Array.isArray(scalar.range)) refuse();
-  const [start, end] = scalar.range;
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > source.length) refuse();
-  const rendered = source.slice(0, start) + JSON.stringify(selected) + source.slice(end);
+  const binding = caller.with['supplier-revision'];
+  if (binding !== undefined && binding !== caller.uses.slice(supplier.length))
+    throw new Error('lockfile supplier checkout differs from its reusable workflow revision');
+  const toolInputs = {
+    'tool-workspace-repository': toolWorkspace.repository,
+    'tool-workspace-revision': toolWorkspace.revision,
+    'tool-workspace-checker-path': toolWorkspace.checkerPath,
+  };
+  const sourceSecret = `\${{ secrets.${sourceTokenSecret} }}`;
+  if (caller.secrets !== undefined && caller.secrets !== 'inherit' && !object(caller.secrets)) refuse();
+  if (object(caller.secrets) && caller.secrets['source-read-token'] !== undefined
+      && caller.secrets['source-read-token'] !== sourceSecret)
+    throw new Error('lockfile caller source-read token differs from its selected existing secret');
+  const callerSecrets = object(caller.secrets) ? structuredClone(caller.secrets) : {};
+  callerSecrets['source-read-token'] = sourceSecret;
+  for (const [name, value] of Object.entries(toolInputs)) {
+    if (caller.with[name] !== undefined && caller.with[name] !== value)
+      throw new Error('lockfile caller tool workspace differs from its committed selection: ' + name);
+  }
+  if (caller.uses === selected && binding === ref
+      && Object.entries(toolInputs).every(([name, value]) => caller.with[name] === value)
+      && isDeepStrictEqual(caller.secrets, callerSecrets)) return source;
+  document.setIn(['jobs', id, 'uses'], selected);
+  document.setIn(['jobs', id, 'with', 'supplier-revision'], ref);
+  for (const [name, value] of Object.entries(toolInputs)) document.setIn(['jobs', id, 'with', name], value);
+  document.setIn(['jobs', id, 'secrets'], callerSecrets);
+  const rendered = document.toString();
   const expected = structuredClone(value);
   expected.jobs[id].uses = selected;
+  expected.jobs[id].with['supplier-revision'] = ref;
+  Object.assign(expected.jobs[id].with, toolInputs);
+  expected.jobs[id].secrets = callerSecrets;
   if (!isDeepStrictEqual(parse(rendered).value, expected)) throw new Error('lockfile caller transformation changed consumer policy');
   return rendered;
 }
@@ -421,12 +454,14 @@ export async function receiveGeneratedCaller({ root, repo, token, request, branc
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
   const opt = n => { const i = args.indexOf(n); return i < 0 ? undefined : args[i + 1]; };
-  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--branch', '--verify-commit', '--workflows', '--retained-runner-evidence', '--repo'];
+  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--source-token-secret', '--branch', '--verify-commit', '--workflows', '--retained-runner-evidence', '--repo', '--tool-workspace'];
   const root = path.resolve(args.find((a, i) => !a.startsWith('--') && !valueOptions.includes(args[i - 1])) ?? '.');
   const options = {
     parent: opt('--parent'), ref: opt('--ref') ?? REF,
     runsOn: opt('--runs-on') ? JSON.parse(opt('--runs-on')) : undefined,
     workflows: opt('--workflows') ? JSON.parse(opt('--workflows')) : undefined,
+    toolWorkspace: opt('--tool-workspace') ? JSON.parse(fs.readFileSync(path.resolve(opt('--tool-workspace')), 'utf8')) : undefined,
+    sourceTokenSecret: opt('--source-token-secret'),
     defaultBranch: opt('--default-branch') ?? 'main', tokenSecret: opt('--token-secret'),
     publicRepository: args.includes('--public-repo'),
   };

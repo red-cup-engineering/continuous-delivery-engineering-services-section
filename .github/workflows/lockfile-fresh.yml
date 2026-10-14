@@ -1,12 +1,25 @@
 name: lockfile-fresh
-# Is the pnpm lock fresh? Every workspace package must have an importer whose specifiers are exactly its declared
-# dependencies (overrides applied), and every workspace:* dependency must name a workspace package. Run as a
-# ratchet: the pull request's base is read too, and only mismatches the pull request adds fail. A mounted
-# submodule is read at the commit the superproject records (its .gitmodules URL, fetched blobless with the
-# runner's own git access); a mount the runner cannot reach is listed as unread, never judged.
+# Read the pull request's manifests and lock with the same checker and native
+# source tree selected by the admitted composed workspace.
 on:
   workflow_call:
     inputs:
+      supplier-revision:
+        description: 'Exact generator revision that supplies this reusable workflow and its executing source'
+        type: string
+        required: true
+      tool-workspace-repository:
+        description: 'Repository containing the committed recursive source workspace and full native lock'
+        type: string
+        required: true
+      tool-workspace-revision:
+        description: 'Exact composed workspace commit, separate from the pull request source under inspection'
+        type: string
+        required: true
+      tool-workspace-checker-path:
+        description: 'Workspace-relative Gitlink path to the selected lockfile checker source'
+        type: string
+        required: true
       directory:
         description: 'Workspace root inside the repository'
         type: string
@@ -15,9 +28,12 @@ on:
         description: 'JSON runner labels, for repositories without GitHub-hosted runners (e.g. ["self-hosted","Linux","X64","bare-cedar-fog"])'
         type: string
         required: true
+    secrets:
+      source-read-token:
+        description: 'Existing read credential for the composed workspace and every recursively selected private source repository'
+        required: true
 jobs:
   lockfile-fresh:
-    # A newer push to the same pull request or branch supersedes this run: cancel it rather than queue every push.
     concurrency:
       group: lockfile-fresh-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
@@ -36,6 +52,7 @@ jobs:
             /pnpm-lock.yaml
             /pnpm-workspace.yaml
             /.gitmodules
+            **/.gitmodules
             **/package.json
             **/pnpm-lock.yaml
             **/pnpm-workspace.yaml
@@ -50,35 +67,82 @@ jobs:
             /pnpm-lock.yaml
             /pnpm-workspace.yaml
             /.gitmodules
+            **/.gitmodules
             **/package.json
             **/pnpm-lock.yaml
             **/pnpm-workspace.yaml
+      - name: Admit exact source bindings
+        env:
+          SUPPLIER_REVISION: ${{ inputs.supplier-revision }}
+          TOOL_WORKSPACE_REPOSITORY: ${{ inputs.tool-workspace-repository }}
+          TOOL_WORKSPACE_REVISION: ${{ inputs.tool-workspace-revision }}
+          TOOL_WORKSPACE_CHECKER_PATH: ${{ inputs.tool-workspace-checker-path }}
+        run: |
+          [[ "$SUPPLIER_REVISION" =~ ^[a-f0-9]{40}$ ]] || { echo 'supplier revision must be an exact source commit' >&2; exit 1; }
+          [[ "$TOOL_WORKSPACE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo 'tool workspace repository must be owner/name' >&2; exit 1; }
+          [[ "$TOOL_WORKSPACE_REVISION" =~ ^[a-f0-9]{40}$ ]] || { echo 'tool workspace revision must be an exact source commit' >&2; exit 1; }
+          [[ -n "$TOOL_WORKSPACE_CHECKER_PATH" && "$TOOL_WORKSPACE_CHECKER_PATH" != /* && "$TOOL_WORKSPACE_CHECKER_PATH" != *\\* ]] || { echo 'canonical workspace-relative checker path required' >&2; exit 1; }
+          node -e 'const p=process.env.TOOL_WORKSPACE_CHECKER_PATH.split("/");if(p.some(x=>!x||x==="."||x===".."))throw Error("canonical workspace-relative checker path required")'
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          repository: red-cup-engineering/continuous-delivery-services-section
-          ref: e186963c8a4b9cfe5a90e5e33c3e6e30f56cc282
-          path: section
+          repository: ${{ inputs.tool-workspace-repository }}
+          ref: ${{ inputs.tool-workspace-revision }}
+          path: tool-workspace
+          token: ${{ secrets.source-read-token }}
+          persist-credentials: false
+          submodules: recursive
+          fetch-depth: 1
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
-          # No package-manager cache: the reading needs only the section's own npm install, and setup-node's
-          # automatic pnpm detection fails on runners without pnpm (the bare-cedar-fog runner has none).
           package-manager-cache: false
+      - name: Install the committed checker workspace
+        env:
+          TOOL_WORKSPACE_REVISION: ${{ inputs.tool-workspace-revision }}
+          TOOL_WORKSPACE_CHECKER_PATH: ${{ inputs.tool-workspace-checker-path }}
+          SUPPLIER_REVISION: ${{ inputs.supplier-revision }}
+        run: |
+          workspace="$GITHUB_WORKSPACE/tool-workspace"
+          [[ "$(git -C "$workspace" rev-parse HEAD)" == "$TOOL_WORKSPACE_REVISION" ]] || { echo 'composed workspace differs from its admitted revision' >&2; exit 1; }
+          checker="$workspace/$TOOL_WORKSPACE_CHECKER_PATH"
+          [[ -d "$checker" ]] || { echo 'selected checker Gitlink was not received' >&2; exit 1; }
+          checker=$(realpath "$checker")
+          checker_root=$(realpath "$(git -C "$checker" rev-parse --show-toplevel)")
+          [[ "$checker_root" == "$checker" ]] || { echo 'checker path must identify the selected Gitlink root' >&2; exit 1; }
+          [[ "$(git -C "$checker_root" rev-parse HEAD)" == "$SUPPLIER_REVISION" ]] || { echo 'checker source differs from its exact supplier revision' >&2; exit 1; }
+          [[ "$checker_root" == "$workspace/"* ]] || { echo 'checker source escaped the composed workspace' >&2; exit 1; }
+          package_manager=$(node -e 'const p=require(process.argv[1]);process.stdout.write(p.packageManager??"")' "$workspace/package.json")
+          [[ "$package_manager" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'composed workspace must declare an exact pnpm version' >&2; exit 1; }
+          cd "$workspace"
+          npm exec --yes --package="$package_manager" -- pnpm install --frozen-lockfile --filter "./$TOOL_WORKSPACE_CHECKER_PATH"...
       - name: Lockfile freshness
         env:
           DIRECTORY: ${{ inputs.directory }}
+          TOOL_WORKSPACE_CHECKER_PATH: ${{ inputs.tool-workspace-checker-path }}
         run: |
-          (cd section && npm install --no-audit --no-fund --silent)
+          workspace="$GITHUB_WORKSPACE/tool-workspace"
+          checker="$workspace/$TOOL_WORKSPACE_CHECKER_PATH"
+          head_directory="$GITHUB_WORKSPACE/head/$DIRECTORY"
           base_args=()
-          if [ -d base ]; then base_args=(--base "base/$DIRECTORY"); fi
+          if [ -d "$GITHUB_WORKSPACE/base" ]; then base_args=(--base "$GITHUB_WORKSPACE/base/$DIRECTORY"); fi
+          export FRESHNESS_FILE="$RUNNER_TEMP/lockfile-freshness.json"
+          checker=$(realpath "$checker")
+          checker_root=$(realpath "$(git -C "$checker" rev-parse --show-toplevel)")
+          [[ "$checker_root" == "$checker" ]] || { echo 'checker path must identify the selected Gitlink root' >&2; exit 1; }
+          package_manager=$(node -e 'process.stdout.write(require(process.argv[1]).packageManager)' "$workspace/package.json")
           status=0
-          node section/scripts/lockfile-fresh.mjs "head/$DIRECTORY" "${base_args[@]}" > freshness.json || status=$?
+          (cd "$workspace" && npm exec --yes --package="$package_manager" -- pnpm --filter "./$TOOL_WORKSPACE_CHECKER_PATH" exec node scripts/lockfile-fresh.mjs "$head_directory" "${base_args[@]}") > "$FRESHNESS_FILE" || status=$?
+          if [[ ! -s "$FRESHNESS_FILE" ]]; then
+            echo 'native lockfile checker produced no freshness result' >&2
+            if (( status != 0 )); then exit "$status"; fi
+            exit 1
+          fi
           node -e '
-            const r=require("./freshness.json");
+            const r=require(process.env.FRESHNESS_FILE);
             const lines=[`### Lockfile freshness: ${r.added.length?"`stale`":"`fresh`"} (${r.mismatches} known mismatches)`,""];
             for(const m of r.added)lines.push(`- added: \`${m.key}\``+(m.declared!==undefined?` (declared ${m.declared}, locked ${m.locked})`:""));
             if(r.removed.length)lines.push(`- removed: ${r.removed.length}`);
             if(r.unreadSubmodules?.length)lines.push(`- unread (mount not reachable from this runner): ${r.unreadSubmodules.map(p=>`\`${p}\``).join(", ")}`);
             require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join("\n")+"\n");'
-          cat freshness.json
+          cat "$FRESHNESS_FILE"
           exit $status
