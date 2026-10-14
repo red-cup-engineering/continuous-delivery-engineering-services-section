@@ -2,6 +2,18 @@
 
 The one hired CI/CD section. Repos consume its reusable workflows instead of duplicating CI implementations. This source is public so that private repositories in the Group's different GitHub organizations can reference exact commits.
 
+**CI receiving for this public source owner:** Its own trusted-branch source checks use the
+standard `ubuntu-24.04` GitHub-hosted runner, free for public repositories,
+instead of requiring the development laptop. The project-local `.npmrc` selects
+`legacy-peer-deps=true` for the pinned standalone npm lock, as the existing
+Cloud Build source self-check already does; it does **not** erase the required
+Git-services peer from `package.json` or qualify a downstream composition.
+Use `node generator/generate-ci.mjs . --audit-runners --public-repo` to audit
+this source owner's exceptional runner route. This exception does not change
+private consumers' own self-hosted runner requirements, the exact-source
+build receiver, the Guix/LAGOON release path, or installed customer acceptance.
+No CI result is implied by a runner selector alone.
+
 ## Runner custody: normative Group default (2026-10-13)
 
 **Use our own machines for ordinary Group CI, change receiving, branch intake, and releases. Do not select GitHub-hosted runners as an implicit fallback.** The existing caller generator requires a `self-hosted` label and an explicit machine or pool identity. For example, `["self-hosted","Linux","X64","bare-cedar-fog"]` names a machine observed completing jobs for `561-group`. A different organization or repository may not have permission to use it.

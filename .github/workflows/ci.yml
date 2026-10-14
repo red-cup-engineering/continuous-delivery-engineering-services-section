@@ -10,12 +10,12 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/node-package.yml
     with:
-      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
+      runs-on: '["ubuntu-24.04"]'
   agent-work-contract:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # No GitHub-hosted fallback. The engineering organization must grant a
-    # real house runner access; pending jobs do not mean tests passed.
-    runs-on: [self-hosted, Linux, X64, bare-cedar-fog]
+    # Source-only tests in this public repository use an isolated standard
+    # hosted runner. Machine/regression receiving remains with the real consumers.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -32,4 +32,4 @@ jobs:
         run: |
           node --check generator/generate-ci.mjs
           node --test test/generate-ci.test.mjs test/generated-source-receiving.test.mjs
-          node generator/generate-ci.mjs . --audit-runners
+          node generator/generate-ci.mjs . --audit-runners --public-repo

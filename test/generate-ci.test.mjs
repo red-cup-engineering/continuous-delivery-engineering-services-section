@@ -222,7 +222,14 @@ test('runner access audit requires explicit recipient identity', async () => {
 test('section CI exercises current caller contracts without retired intake files', () => {
   const workflow = YAML.parse(fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
   const job = workflow.jobs['agent-work-contract'];
-  assert.deepEqual(job['runs-on'], ['self-hosted', 'Linux', 'X64', 'bare-cedar-fog']);
+  assert.equal(job['runs-on'], 'ubuntu-24.04');
+  assert.equal(workflow.jobs['node-package'].with['runs-on'], '["ubuntu-24.04"]');
+  assert.deepEqual(workflow.permissions, {contents: 'read'});
+  assert.match(job.steps.at(-1).run, /--audit-runners --public-repo/);
+  // Standalone source checks deliberately omit the private Git peer;
+  // the actual composed source and release must still receive that peer.
+  assert.equal(fs.readFileSync(new URL('../.npmrc', import.meta.url), 'utf8').trim(), 'legacy-peer-deps=true');
+  assert.deepEqual(auditRunnerRouting(new URL('..', import.meta.url).pathname, {publicRepository: true}), []);
   assert.deepEqual(job.permissions, {contents: 'read'});
   const step = job.steps.find(step => step.name === 'Check generated caller and immutable source contracts');
   assert.ok(step);
