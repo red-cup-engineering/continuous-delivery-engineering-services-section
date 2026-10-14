@@ -12,11 +12,25 @@ import { generate, renderLockfileFreshCaller, REF, REUSABLE } from '../generator
 const source = fs.readFileSync(new URL('./fixtures/lockfile-caller.yml', import.meta.url), 'utf8');
 const oldRef = 'e186963c8a4b9cfe5a90e5e33c3e6e30f56cc282';
 const runsOn = ['self-hosted', 'Linux', 'X64', 'bare-cedar-fog'];
-const options = { runsOn, workflows: ['lockfile-fresh'] };
+const toolWorkspace = { repository: '561-group/source-fixture', revision: 'b'.repeat(40), checkerPath: 'services/continuous-delivery' };
+const sourceTokenSecret = 'EXISTING_SOURCE_READ';
+const bindingOptions = { runsOn, toolWorkspace, sourceTokenSecret };
+const options = { ...bindingOptions, workflows: ['lockfile-fresh'] };
 const file = '.github/workflows/lockfile-fresh.yml';
 const oldUse = `${REUSABLE}/lockfile-fresh.yml@${oldRef}`;
 const newUse = `${REUSABLE}/lockfile-fresh.yml@${REF}`;
-const render = text => renderLockfileFreshCaller(text, { runsOn });
+const render = text => renderLockfileFreshCaller(text, bindingOptions);
+function bindExpected(job) {
+  job.uses = newUse;
+  Object.assign(job.with, {
+    'supplier-revision': REF,
+    'tool-workspace-repository': toolWorkspace.repository,
+    'tool-workspace-revision': toolWorkspace.revision,
+    'tool-workspace-checker-path': toolWorkspace.checkerPath,
+  });
+  job.secrets = { ...(typeof job.secrets === 'object' ? job.secrets : {}),
+    'source-read-token': '${{ secrets.EXISTING_SOURCE_READ }}' };
+}
 function fixture(t, files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cd-lockfile-caller-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -27,21 +41,20 @@ function fixture(t, files) {
   return root;
 }
 
-test('real BCF source changes only its supplier scalar and repeats byte-identically', () => {
+test('real BCF source binds exact supplier and workspace, then repeats byte-identically', () => {
   const bytes = Buffer.from(source);
   assert.equal(createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${bytes.length}\0`), bytes])).digest('hex'),
     '209567aac073ab1cee8b10d81f77829e0f41c06e');
   const output = render(source);
-  assert.equal(output, source.replace(oldUse, JSON.stringify(newUse)));
   assert.equal(render(output), output);
   const before = YAML.parse(source), after = YAML.parse(output);
-  before.jobs['lockfile-fresh'].uses = newUse;
+  bindExpected(before.jobs['lockfile-fresh']);
   assert.deepEqual(after, before);
   assert.equal(after.jobs['lockfile-fresh'].with.directory, undefined);
   assert.equal(after.concurrency, undefined);
 });
 
-test('different caller retains directory, grants, filters, conditions, concurrency and every other byte', () => {
+test('different caller retains unrelated policy while binding its selected source secret', () => {
   const input = source.replace('  pull_request:', '  pull_request:\n    paths: ["workspace/**"]\n  workflow_dispatch:')
     .replace('jobs:', `# This occurrence is inert: ${oldUse}\npermissions: {contents: read}\nconcurrency: {group: checker-existing, cancel-in-progress: false}\njobs:`)
     .replace('  lockfile-fresh:', '  check_workspace:')
@@ -49,17 +62,26 @@ test('different caller retains directory, grants, filters, conditions, concurren
     .replace('    with:', '    with:\n      directory: "nested workspace"')
     + '  untouched:\n    runs-on: [self-hosted, existing-other]\n    steps: [{run: "true"}]\n';
   for (const text of [input, input.replaceAll('\n', '\r\n')]) {
-    const expected = text.replace(`    uses: ${oldUse}`, `    uses: ${JSON.stringify(newUse)}`);
-    assert.equal(render(text), expected);
-    assert.equal(render(expected), expected);
+    const output = render(text), expected = YAML.parse(text);
+    bindExpected(expected.jobs.check_workspace);
+    assert.deepEqual(YAML.parse(output), expected);
+    assert.ok(output.includes(`# This occurrence is inert: ${oldUse}`));
+    assert.equal(render(output), output);
   }
 });
 
 test('quoted and flow-style supplier scalars preserve adjacent comments and Unicode source', () => {
   const quoted = source.replace(`uses: ${oldUse}`, `uses: '${oldUse}' # preserve 🌲 ${oldUse}`);
-  assert.equal(render(quoted), quoted.replace(`'${oldUse}'`, JSON.stringify(newUse)));
+  const quotedOutput = render(quoted);
+  assert.ok(quotedOutput.includes(`# preserve 🌲 ${oldUse}`));
+  assert.equal(YAML.parse(quotedOutput).jobs['lockfile-fresh'].uses, newUse);
+  assert.equal(render(quotedOutput), quotedOutput);
   const flow = `# preserve 🌲\nname: checker\non: [pull_request]\njobs: {check: {uses: '${oldUse}', with: {runs-on: '${JSON.stringify(runsOn)}'}}}\n`;
-  assert.equal(render(flow), flow.replace(`'${oldUse}'`, JSON.stringify(newUse)));
+  const flowOutput = render(flow), expected = YAML.parse(flow);
+  bindExpected(expected.jobs.check);
+  assert.deepEqual(YAML.parse(flowOutput), expected);
+  assert.ok(flowOutput.includes('# preserve 🌲'));
+  assert.equal(render(flowOutput), flowOutput);
 });
 
 for (const [name, change] of [
@@ -125,4 +147,33 @@ test('source byte decoding and direct string inputs must be lossless and bounded
   assert.throws(() => generate(root, options), /lossless UTF-8/);
   assert.throws(() => render(source + '\ud800'), /existing lockfile-fresh caller/);
   assert.throws(() => render(source + '#'.repeat(1024 * 1024)), /existing lockfile-fresh caller/);
+});
+
+test('explicit unrelated caller secrets survive source token binding', () => {
+  const input = source.replace('    with:', '    secrets:\n      retained: ${{ secrets.RETAINED }}\n    with:');
+  const output = render(input);
+  assert.deepEqual(YAML.parse(output).jobs['lockfile-fresh'].secrets, {
+    retained: '${{ secrets.RETAINED }}', 'source-read-token': '${{ secrets.EXISTING_SOURCE_READ }}',
+  });
+  assert.equal(render(output), output);
+});
+
+test('existing source associations cannot silently change', () => {
+  const output = render(source);
+  assert.throws(() => render(output.replace(`supplier-revision: ${REF}`, `supplier-revision: ${oldRef}`)), /supplier checkout differs/);
+  for (const value of [toolWorkspace.repository, toolWorkspace.revision, toolWorkspace.checkerPath]) {
+    assert.throws(() => render(output.replace(value, 'different')), /workspace differs/);
+  }
+  assert.throws(() => render(output.replace('secrets.EXISTING_SOURCE_READ', 'secrets.OTHER')), /source-read token differs/);
+});
+
+test('exact composed source and existing secret name are required', () => {
+  for (const toolWorkspace of [undefined, {}, { ...bindingOptions.toolWorkspace, revision: 'main' },
+    { ...bindingOptions.toolWorkspace, checkerPath: '../outside' },
+    { ...bindingOptions.toolWorkspace, checkerPath: '/outside' }]) {
+    assert.throws(() => renderLockfileFreshCaller(source, { ...bindingOptions, toolWorkspace }), /exact composed workspace/);
+  }
+  for (const sourceTokenSecret of [undefined, '', 'secret-name', '${{ secrets.NAME }}']) {
+    assert.throws(() => renderLockfileFreshCaller(source, { ...bindingOptions, sourceTokenSecret }), /existing source-read secret name/);
+  }
 });

@@ -66,6 +66,10 @@ function provider(t, initial = { 'package.json': '{}\n', 'untouched.txt': 'keep\
 const writes=p=>p.state.calls.filter(c=>c.method!=='GET');
 
 const lockfilePath = '.github/workflows/lockfile-fresh.yml';
+const lockfileBindings = {
+  toolWorkspace: { repository: '561-group/source-fixture', revision: 'b'.repeat(40), checkerPath: 'services/continuous-delivery' },
+  sourceTokenSecret: 'EXISTING_SOURCE_READ',
+};
 const lockfileSource = fs.readFileSync(new URL('./fixtures/lockfile-caller.yml', import.meta.url), 'utf8');
 async function lockfileProvider(t) {
   const p = provider(t, { [lockfilePath]: lockfileSource, 'untouched.txt': 'keep\n' });
@@ -73,7 +77,7 @@ async function lockfileProvider(t) {
   const supplier = provider(t, Object.fromEntries(['generator/generate-ci.mjs', 'generator/open-pr.mjs',
     'generator/retained-runner.mjs'].map(file => [file, fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8')])));
   const module = await import(pathToFileURL(path.join(supplier.root, 'generator/generate-ci.mjs')).href);
-  return { p, supplier, module, options: { root: p.root, repo, request: p.request, runsOn: houseRunsOn, workflows: ['lockfile-fresh'] } };
+  return { p, supplier, module, options: { root: p.root, repo, request: p.request, runsOn: houseRunsOn, ...lockfileBindings, workflows: ['lockfile-fresh'] } };
 }
 
 test('actual lockfile caller receives immutable source, exact supplier, restart identity and later parity', async t => {
@@ -87,7 +91,7 @@ test('actual lockfile caller receives immutable source, exact supplier, restart 
   assert.deepEqual(first.proposal.outputs.map(row => row.path), [lockfilePath]);
   assert.deepEqual(first.runnerReceiving.runnerIds, [91]);
   assert.equal(first.runnerReceiving.executed, false);
-  const output = module.renderLockfileFreshCaller(lockfileSource, { runsOn: houseRunsOn });
+  const output = module.renderLockfileFreshCaller(lockfileSource, { runsOn: houseRunsOn, ...lockfileBindings });
   assert.equal(p.git(['show', `${first.commit}:${lockfilePath}`]), output.trimEnd());
   assert.equal(p.git(['show', `${first.commit}:untouched.txt`]), 'keep');
   assert.ok(p.state.calls.some(call => call.url.endsWith('/actions/runners?per_page=100')));
