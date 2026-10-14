@@ -21,10 +21,21 @@ steps:
       - |
         # The provider's GitHub source trigger must supply an exact revision.
         # '$$' escapes a shell '$' from Cloud Build substitution processing.
-        test -n "$COMMIT_SHA"
-        [[ "$BUILDER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "unpinned builder" >&2; exit 78; }
-        revision="$$(git rev-parse --verify HEAD)"
-        test "$$revision" = "$COMMIT_SHA"
+        # Build triggers and explicit submissions supply COMMIT_SHA. Cloud
+        # Build workspace snapshots need not contain .git: fetch the exact
+        # public owning revision rather than trusting a synthetic checkout.
+        source_commit="$COMMIT_SHA"
+        [[ "$$source_commit" =~ ^[a-f0-9]{40}$$ ]] || { echo "exact source commit required" >&2; exit 78; }
+        [[ "$$BUILDER_IMAGE" =~ @sha256:[0-9a-f]{64}$$ ]] || { echo "unpinned builder" >&2; exit 78; }
+        source_root="$$(mktemp -d)"
+        trap 'rm -rf "$$source_root"' EXIT
+        git -C "$$source_root" init -q
+        git -C "$$source_root" -c credential.helper= fetch --quiet --depth=1 \
+          https://github.com/red-cup-engineering/continuous-delivery-services-section.git "$$source_commit"
+        revision="$$(git -C "$$source_root" rev-parse --verify FETCH_HEAD)"
+        test "$$revision" = "$$source_commit"
+        git -C "$$source_root" checkout --quiet --detach "$$revision"
+        cd "$$source_root"
         test -s package-lock.json
         npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund
         npm test
