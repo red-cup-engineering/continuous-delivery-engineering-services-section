@@ -177,7 +177,7 @@ function prepare(cwd, { branch, remote = 'origin', status }) {
   const foreign = remoteSha && git(cwd, 'log', '--format=%ae', `HEAD..${remoteSha}`).split('\n').some(a => a && a !== BOT_EMAIL);
   git(cwd, 'checkout', '-q', '-B', branch, remoteSha || base);
   if (remoteSha) receiveBase(cwd, base, status);
-  return { foreign: !!foreign, remoteSha };
+  return { foreign: !!foreign, remoteSha, base };
 }
 
 function pushAndReceive(cwd, branch, remote) {
@@ -201,23 +201,72 @@ export function publish(cwd, { branch, advance, message = 'Advance submodules', 
   return { pushed: true, foreign: !!foreign };
 }
 
-export function run(cwd, { branch, note = '', head, status, remote, paths }) {
+// Describe the complete pending tree, not just this invocation's new advances.
+// Keep contributor history in source; unrelated/manual tree differences require
+// their own review and cannot be received as automated pin-only metadata.
+export function pendingGitlinks(cwd, base, head, status) {
+  for (const ref of [base, head]) if (!/^[a-f0-9]{40}$/.test(ref)) throw new Error('exact pending source identities required');
+  git(cwd, 'merge-base', '--is-ancestor', base, head);
+  const records = gitRaw(cwd, 'diff-tree', '--no-commit-id', '-r', '--raw', '-z', '--no-renames', base, head, '--').split('\0');
+  const advance = [];
+  let definitions;
+  for (let i = 0; i < records.length - 1; i += 2) {
+    const match = /^:160000 160000 ([a-f0-9]{40}) ([a-f0-9]{40}) M$/.exec(records[i]);
+    const file = records[i + 1];
+    if (!match || !file) throw new Error(`unrelated or unsupported pending source change: ${file || records[i]}`);
+    definitions ??= [base, head].map(ref => {
+      const record = gitRaw(cwd, 'ls-tree', '-z', ref, '--', '.gitmodules');
+      const found = /^(100644|100755) blob ([a-f0-9]{40})\t\.gitmodules\0$/.exec(record);
+      if (!found) throw new Error('pending supplier definitions unavailable');
+      return supplierDefinitions(cwd, found[2]);
+    });
+    const suppliers = definitions.map(paths => paths.get(file));
+    if (suppliers.some(s => !s || s.ambiguous) || suppliers[0].identity !== suppliers[1].identity ||
+        suppliers[0].urls?.length !== 1 || !githubSlug(suppliers[0].urls[0])) throw new Error(`pending supplier definition differs: ${file}`);
+    const [, pin, next] = match;
+    const url = suppliers[0].urls[0];
+    if (status(url, pin, next) !== 'ahead') throw new Error(`unproven pending supplier ancestry: ${file}`);
+    advance.push({ path: file, pin, head: next, url, status: 'ahead' });
+  }
+  return advance;
+}
+
+export function run(cwd, { branch, note = '', head, status, remote = 'origin', paths }) {
+  const bodyFile = path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'advance-body.md'));
+  const proposalFile = path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'advance-proposal.json'));
+  // A failed or empty later run must never publish a previous run's metadata.
+  for (const file of [bodyFile, proposalFile]) fs.rmSync(file, { force: true });
   const definitions = fs.lstatSync(path.join(cwd, '.gitmodules'), { throwIfNoEntry: false });
   if (!definitions) return { result: 'no submodules' };
   if (!definitions.isFile()) throw new Error('supplier definitions changed file kind; regular source required');
   const prepared = prepare(cwd, { branch, remote, status });
   const p = plan(readEntries(cwd, { head, status, paths }));
-  const body = renderBody(p, note);
-  const bodyFile = path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'advance-body.md'));
-  fs.writeFileSync(bodyFile, body);
-  if (!p.advance.length) {
-    if (prepared.remoteSha && git(cwd, 'rev-parse', 'HEAD') !== prepared.remoteSha) {
-      pushAndReceive(cwd, branch, remote || 'origin');
-      return { result: 'advanced', pushed: true, foreign: prepared.foreign, diverged: p.diverged, unread: p.unread, body, bodyFile };
-    }
-    return { result: 'nothing to advance', diverged: p.diverged, unread: p.unread, body };
+  let publication = { pushed: false, foreign: prepared.foreign };
+  if (p.advance.length) publication = publish(cwd, { branch, advance: p.advance, remote, prepared });
+  else if (prepared.remoteSha && git(cwd, 'rev-parse', 'HEAD') !== prepared.remoteSha) {
+    pushAndReceive(cwd, branch, remote);
+    publication.pushed = true;
   }
-  return { result: 'advanced', ...publish(cwd, { branch, advance: p.advance, remote, prepared }), diverged: p.diverged, unread: p.unread, body, bodyFile };
+  const baseSha = prepared.base, headSha = git(cwd, 'rev-parse', 'HEAD');
+  let pending, metadataError;
+  try { pending = pendingGitlinks(cwd, baseSha, headSha, status); }
+  catch (error) { metadataError = error.message; }
+  const body = pending ? renderBody({ ...p, advance: pending }, note) +
+    `\nObserved base: ${baseSha}\nObserved head: ${headSha}\n` :
+    `Pending source metadata not received: ${metadataError}\n`;
+  const metadataReady = !!pending?.length;
+  if (metadataReady) {
+    // Even an unchanged head must still be the published review head. This
+    // readback grants metadata reconciliation only; it never replays a push.
+    const observed = git(cwd, 'ls-remote', '--heads', remote, `refs/heads/${branch}`).split(/\s/)[0];
+    if (observed !== headSha) throw new Error('sync branch moved before metadata receiving');
+    fs.writeFileSync(bodyFile, body);
+    fs.writeFileSync(proposalFile, JSON.stringify({ branch, baseSha, headSha, note, advance: pending,
+      diverged: p.diverged, unread: p.unread, body }) + '\n');
+  }
+  return { result: publication.pushed ? 'advanced' : 'nothing to advance', ...publication,
+    diverged: p.diverged, unread: p.unread, body, bodyFile, proposalFile, baseSha, headSha,
+    metadataReady, ...(metadataError ? { metadataError } : {}) };
 }
 
 // The second, single-commit page excludes changed files/patches. Its comparison
@@ -284,7 +333,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const r = run(process.cwd(), { branch: opt('--branch', 'ci/submodule-advance'), note: opt('--note'), ...liveDeps(process.env.GH_TOKEN) });
   console.log(r.result);
   if (r.body && process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, r.body + '\n');
-  if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `advanced=${r.result === 'advanced' && r.pushed}\n`);
+  if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `advanced=${!!r.pushed}\npending=${!!r.metadataReady}\n`);
+  if (r.metadataError) { console.error(r.metadataError); process.exitCode = 1; }
   const unresolved = (r.diverged?.length ?? 0) + (r.unread?.length ?? 0);
   if (unresolved) {
     console.error(`${unresolved} supplier pins remain unresolved (${r.unread?.length ?? 0} unread); sync receiving is incomplete`);

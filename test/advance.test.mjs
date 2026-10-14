@@ -207,7 +207,8 @@ test('after receiving a comparable conflict, fresh observation can advance farth
   assert.equal(r.pushed, true);
   assert.equal(pin(origin, 'ci/submodule-advance', 's1'), D);
   for (const source of [review, base]) sh(origin, 'merge-base', '--is-ancestor', source, 'ci/submodule-advance');
-  assert.match(r.body, /s1: ccccccccc -> ddddddddd/);
+  assert.equal(r.metadataReady, false);
+  assert.match(r.metadataError, /unrelated.*reviewer.txt/);
 });
 
 for (const relation of ['diverged', 'unknown', 'identical', undefined]) {
@@ -442,4 +443,114 @@ test('workflows hold no /tmp writes and no force-push flag', () => {
     assert.ok(!/\/tmp\//.test(t) || f === 'content.yml', `${f} writes /tmp`);
     assert.ok(!/push (-f|--force)\b/.test(t), `${f} force-pushes`);
   }
+});
+
+// The first failure was a lost body update after a successful push. A later
+// unchanged-head run must derive the same full pending diff and do no push.
+test('unchanged pending head still qualifies metadata without replaying publication', () => {
+  const { origin, work } = parent();
+  const base = sh(work, 'rev-parse', 'HEAD');
+  const options = { branch: 'ci/submodule-advance', head: u => u.endsWith('s1') ? B : A, status: chainStatus };
+  const first = run(work, options), published = sh(origin, 'rev-parse', options.branch);
+  sh(work, 'checkout', '-q', 'main');
+  const again = run(work, options);
+  assert.equal(again.pushed, false);
+  assert.equal(again.metadataReady, true);
+  assert.equal(again.body, first.body);
+  assert.match(again.body, /s1: aaaaaaaaa -> bbbbbbbbb/);
+  assert.equal(again.baseSha, base); assert.equal(again.headSha, published);
+  assert.equal(sh(origin, 'rev-parse', options.branch), published);
+  assert.equal(sh(origin, 'rev-list', '--count', `main..${options.branch}`), '1');
+  assert.deepEqual(JSON.parse(fs.readFileSync(again.proposalFile)).advance.map(e => e.path), ['s1']);
+});
+
+test('later advance body covers all pending suppliers and their base pins', () => {
+  const { origin, work } = parent();
+  const branch = 'ci/submodule-advance';
+  run(work, { branch, head: u => u.endsWith('s1') ? B : A, status: chainStatus });
+  sh(work, 'checkout', '-q', 'main');
+  const result = run(work, { branch, head: () => C, status: chainStatus });
+  assert.match(result.body, /s1: aaaaaaaaa -> ccccccccc/);
+  assert.match(result.body, /s2: aaaaaaaaa -> ccccccccc/);
+  assert.equal(result.metadataReady, true);
+  assert.doesNotMatch(result.body, /s1: bbbbbbbbb -> ccccccccc/);
+  assert.equal(sh(origin, 'rev-list', '--count', `main..${branch}`), '2');
+});
+
+test('five pending suppliers survive a three-supplier run and unchanged-head recovery', () => {
+  const { origin, work } = parent();
+  const branch = 'ci/submodule-advance';
+  for (const name of ['s3', 's4', 's5']) {
+    fs.appendFileSync(path.join(work, '.gitmodules'), `[submodule "${name}"]\n\tpath = ${name}\n\turl = https://github.com/o/${name}\n`);
+    sh(work, 'update-index', '--add', '--cacheinfo', `160000,${A},${name}`);
+  }
+  sh(work, 'add', '.gitmodules'); sh(work, 'commit', '-q', '-m', 'five suppliers'); sh(work, 'push', '-q', 'origin', 'main');
+  const base = sh(work, 'rev-parse', 'HEAD');
+  run(work, { branch, head: url => /s[12]$/.test(url) ? B : A, status: chainStatus });
+  sh(work, 'checkout', '-q', 'main');
+  const options = { branch, head: url => /s[12]$/.test(url) ? B : C, status: chainStatus };
+  const result = run(work, options);
+  assert.match(result.body, /s1: aaaaaaaaa -> bbbbbbbbb/);
+  assert.match(result.body, /s2: aaaaaaaaa -> bbbbbbbbb/);
+  assert.equal(result.metadataReady, true);
+  const proposal = JSON.parse(fs.readFileSync(result.proposalFile));
+  assert.deepEqual(proposal.advance.map(e => [e.path, e.pin, e.head]),
+    ['s1', 's2', 's3', 's4', 's5'].map(name => [name, A, /s[12]/.test(name) ? B : C]));
+  const published = sh(origin, 'rev-parse', branch);
+  assert.equal(proposal.baseSha, base); assert.equal(proposal.headSha, published);
+  assert.equal(proposal.body.match(/^- s[1-5]:/gm).length, 5);
+  sh(work, 'checkout', '-q', 'main');
+  const recovered = run(work, options);
+  assert.equal(recovered.pushed, false); assert.equal(recovered.metadataReady, true);
+  assert.equal(recovered.body, result.body);
+  assert.equal(sh(origin, 'rev-parse', branch), published);
+  assert.equal(sh(origin, 'rev-list', '--count', `main..${branch}`), '2');
+});
+
+test('unrelated manual pending source is preserved but refuses automated metadata', () => {
+  const { origin, work } = parent();
+  const branch = 'ci/submodule-advance';
+  run(work, { branch, ...deps });
+  fs.writeFileSync(path.join(work, 'manual.txt'), 'manual review required');
+  sh(work, 'add', 'manual.txt'); sh(work, 'commit', '-q', '-m', 'manual source'); sh(work, 'push', '-q', 'origin', branch);
+  const observed = sh(origin, 'rev-parse', branch);
+  sh(work, 'checkout', '-q', 'main');
+  const result = run(work, { branch, ...deps });
+  assert.equal(result.metadataReady, false);
+  assert.match(result.metadataError, /unrelated.*manual.txt/);
+  assert.equal(result.pushed, false);
+  assert.equal(sh(origin, 'rev-parse', branch), observed);
+  assert.equal(fs.existsSync(result.proposalFile), false);
+});
+
+test('empty pending tree removes stale local metadata and creates no review proposal', () => {
+  const { work } = parent();
+  fs.writeFileSync(path.join(work, '.git/advance-proposal.json'), '{"stale":true}');
+  fs.writeFileSync(path.join(work, '.git/advance-body.md'), 'stale');
+  const result = run(work, { branch: 'ci/submodule-advance', head: () => A, status: chainStatus });
+  assert.equal(result.metadataReady, false);
+  assert.equal(fs.existsSync(result.proposalFile), false);
+  assert.equal(fs.existsSync(result.bodyFile), false);
+});
+
+test('unproven cumulative pending ancestry cannot be mistaken for current metadata', () => {
+  const { work } = parent();
+  const branch = 'ci/submodule-advance';
+  run(work, { branch, head: u => u.endsWith('s1') ? B : A, status: chainStatus });
+  sh(work, 'checkout', '-q', 'main');
+  const result = run(work, { branch, head: u => u.endsWith('s1') ? B : A, status: () => 'unknown' });
+  assert.equal(result.pushed, false); assert.equal(result.metadataReady, false);
+  assert.match(result.metadataError, /unproven pending supplier ancestry/);
+  assert.equal(fs.existsSync(result.proposalFile), false);
+});
+
+test('no supplier source removes prior metadata before returning without a proposal', () => {
+  const { work } = parent();
+  sh(work, 'rm', '.gitmodules'); sh(work, 'commit', '-q', '-m', 'remove suppliers');
+  fs.writeFileSync(path.join(work, '.git/advance-proposal.json'), '{"stale":true}');
+  fs.writeFileSync(path.join(work, '.git/advance-body.md'), 'stale');
+  const result = run(work, { branch: 'ci/submodule-advance', head: () => A, status: chainStatus });
+  assert.equal(result.result, 'no submodules');
+  assert.equal(fs.existsSync(path.join(work, '.git/advance-proposal.json')), false);
+  assert.equal(fs.existsSync(path.join(work, '.git/advance-body.md')), false);
 });
