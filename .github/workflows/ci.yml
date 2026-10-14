@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: '24'
       - name: Install pinned generator parser
-        run: npm ci --no-audit --no-fund
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
       - name: Check standalone public source contracts
         run: |
           node --check generator/generate-ci.mjs

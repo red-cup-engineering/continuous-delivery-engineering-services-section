@@ -4,10 +4,12 @@ The one hired CI/CD section. Repos consume its reusable workflows instead of dup
 
 **CI receiving for this public source owner:** Its own trusted-branch source checks use the
 standard `ubuntu-24.04` GitHub-hosted runner, free for public repositories,
-instead of requiring the development laptop. The project-local `.npmrc` selects
-`legacy-peer-deps=true` for the pinned standalone npm lock, as the existing
-Cloud Build source self-check already does; it does **not** erase the required
-Git-services peer from `package.json` or qualify a downstream composition.
+instead of requiring the development laptop. Only this hosted public source-
+contract job passes `--legacy-peer-deps` to its pinned npm installation,
+matching the existing Cloud Build source self-check. The full private-composition
+job retains its normal peer validation; no shared `.npmrc` relaxes it. This
+source-only installation does **not** erase the required Git-services peer
+from `package.json` or qualify a downstream composition.
 The public `agent-work-contract` job now executes only the full owner-selected
 standalone, dependency-closed source-contract suite: generator/rendering,
 retained-runner graph analysis, node-package interface, and provider-native
