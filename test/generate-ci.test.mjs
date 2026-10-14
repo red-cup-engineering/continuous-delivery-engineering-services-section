@@ -28,11 +28,11 @@ test('empty repository selects no fabrication while retaining original-work inta
   assert.deepEqual(Object.keys(r.files), ['.github/workflows/agent-work-intake.yml']);
 });
 
-test('agent intake serializes only comparable events and cannot cancel latest push with PR-target receiving', () => {
+test('agent intake cancels superseded same-event runs without crossing push and PR-target groups', () => {
   const parsed = YAML.parse(renderAgentWork({ref: REF, runsOn}));
   assert.deepEqual(parsed.concurrency, {
     group: 'agent-work-${{ github.event_name }}-${{ github.event.pull_request.head.ref || github.ref_name }}',
-    'cancel-in-progress': false
+    'cancel-in-progress': true
   });
   assert.equal(parsed.jobs.receive.with['runs-on'], '["self-hosted","existing-runner"]');
   assert.equal(parsed.jobs.receive.if,
