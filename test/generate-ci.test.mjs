@@ -218,3 +218,30 @@ test('runner access audit requires explicit recipient identity', async () => {
   await assert.rejects(() => auditRunnerAccess(fixture({}),{repo:'unspecified',request:async()=>{}}),
     /explicit owner\/repository/);
 });
+
+test('section CI exercises current caller contracts without retired intake files', () => {
+  const workflow = YAML.parse(fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
+  const job = workflow.jobs['agent-work-contract'];
+  assert.equal(job['runs-on'], 'ubuntu-24.04');
+  assert.equal(workflow.jobs['node-package'].with['runs-on'], '["self-hosted","Linux","X64","bare-cedar-fog"]');
+  assert.deepEqual(workflow.permissions, {contents: 'read'});
+  assert.match(job.steps.at(-1).run, /--audit-runners --public-repo/);
+  // Standalone source checks deliberately omit the private Git peer;
+  // the actual composed source and release must still receive that peer.
+  assert.equal(fs.existsSync(new URL('../.npmrc', import.meta.url)), false);
+  assert.equal(job.steps.find(step => step.name === 'Install pinned generator parser').run,
+    'npm ci --legacy-peer-deps --no-audit --no-fund');
+  assert.deepEqual(auditRunnerRouting(new URL('..', import.meta.url).pathname, {publicRepository: true}), []);
+  assert.deepEqual(job.permissions, {contents: 'read'});
+  const step = job.steps.find(step => step.name === 'Check standalone public source contracts');
+  assert.ok(step);
+  assert.match(step.run, /node --test test\/generate-ci\.test\.mjs test\/retained-runner\.test\.mjs test\/node-package-options\.test\.mjs test\/cloudbuild-native\.test\.mjs/);
+  assert.doesNotMatch(step.run, /test\/generated-source-receiving\.test\.mjs/);
+  assert.doesNotMatch(step.run, /agent-work/);
+  for (const file of step.run.matchAll(/(?:node --check |test\/)([^\s]+\.mjs)/g)) {
+    const name = file[0].startsWith('test/') ? 'test/' + file[1] : file[1];
+    assert.ok(fs.statSync(new URL('../' + name, import.meta.url)).isFile(), name);
+  }
+  assert.equal(fs.existsSync(new URL('../.github/workflows/agent-work.yml', import.meta.url)), false);
+  assert.equal(fs.existsSync(new URL('../.github/workflows/agent-work-intake.yml', import.meta.url)), false);
+});
