@@ -60,12 +60,15 @@ After a real build completes, `read-build` reads **both** the provider's
 build and the actual original `cloudbuild.yaml` Git blob at the provider's
 resolved commit, using `--source-workspace=/absolute/authenticated/checkout`.
 It compares every provider-executed build step against the committed source
-recipe after resolving Google Cloud's exact substitution values. Arbitrary
-early exits, altered commands, forged matching step names, unreviewed extra
-steps, missing/changed image or environment and dirty source file changes
-cannot be accepted as successful test execution. This uses the normal
-`git show COMMIT:cloudbuild.yaml` source reader rather than a second JSON
-source catalogue or a caller-supplied "test successful" assertion.
+recipe after resolving Google Cloud's exact substitution values. The original
+source preflight must be a preceding Bash step; **the selected test step must
+run `npm run verify` as its direct `npm` entrypoint and arguments**, not
+inside Bash. Otherwise even a faithfully executed committed script can
+exit successfully before it reaches the tests. The receiver refuses arbitrary
+early exits, bypassed test commands, changed entrypoints, extra steps,
+`allowFailure`, `allowExitCodes` and mismatched images or environments.
+This reuses the native `git show COMMIT:cloudbuild.yaml` source reader and
+Cloud Build's original executed-step status, without a second code store.
 
 `read-build` still checks the original GitHub repository, exact commit,
 2nd-generation source provenance, approved build, selected service account,
