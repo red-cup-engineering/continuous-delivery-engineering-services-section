@@ -1,0 +1,15 @@
+{
+  "id": "build-and-release-jobs-are-placed-by-resources",
+  "statement": "A build or release job MUST be placed on a node that advertises the capabilities and resources the job needs, chosen by price over wall time, closure cache and scarcity of any budgeted allowance; hosted minutes MUST be held against the free allowance and MUST NOT overdraw it; each job MUST have at most one live lease holder with a fencing token; a build result MUST be published only when its builders agree.",
+  "because": "Leader, 2026-10-15T04:28Z: \"WE HAVE LIMITED FREE GITHUB ACTION MINUTES STOP FUCKING PICKING FUCKING BETWEEN SHITTY ALTERNATES AND BUILD ACTUAL DISTRIBUTED SYSTEMS THAT PICK BASED ON RESOURCES\"; and 04:10Z: \"we shouldn't need just bare cedar fog to do whatever everyone is trying to get it to do\".",
+  "owner": "red-cup-engineering/continuous-delivery-services-section",
+  "consumer": "561-group/bare-cedar-fog release workflow and the Kalshi trading service build",
+  "specification": {
+    "inputs": ["job (needs, requires, closure, minutes, effect)", "node advertisements", "hosted-minutes ledger", "lease table"],
+    "output": "a placement naming the chosen node and every refusal with its reason",
+    "refusals": ["node is down", "missing capability", "advertised resource too small", "hosted minutes would overdraw the allowance", "live lease held", "stale fencing token", "effect result after lease expiry", "contested build outputs"],
+    "unknowns": "An unadvertised quantity is an interval from zero to unbounded, never zero; a placement on such a node is marked for probing."
+  },
+  "code": "src/placement/",
+  "tests": "test/placement.test.mjs"
+}

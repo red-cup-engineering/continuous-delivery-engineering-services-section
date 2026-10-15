@@ -1,0 +1,11 @@
+{
+  "id": "laptop",
+  "state": "intermittent",
+  "expectedAwayMinutes": null,
+  "cores": null, "memoryGb": null, "freeDiskGb": null,
+  "capabilities": ["node", "guix", "git", "guix-builder", "bare-cedar-fog"],
+  "bandwidthMbps": null,
+  "closureCache": [],
+  "cost": { "kind": "held" },
+  "measured": "not measured here; it carries the retained runner label [self-hosted, Linux, X64, guix, bare-cedar-fog]"
+}

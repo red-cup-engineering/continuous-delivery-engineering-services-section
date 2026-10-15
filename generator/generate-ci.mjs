@@ -1,6 +1,7 @@
 // Caller generator (requirement 18): selects node-package, lean and content from
 // a repository's files and writes short callers under .github/workflows/.
 import fs from 'node:fs';
+import { PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES } from '../src/placement/plan-allowances.mjs';
 import YAML from 'yaml';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -18,13 +19,7 @@ const revision = ref => {
   if (!/^[a-f0-9]{40}$/.test(ref)) throw new Error('workflow supplier needs an exact source commit');
   return ref;
 };
-// GitHub-published monthly standard-hosted minutes for PRIVATE organization repos.
-// The organization's plan is a Coesite/Group input; do not assume all orgs use Free.
-// This is an allowance, not a statement about how many minutes an org has spent.
-// https://docs.github.com/en/billing/reference/product-usage-included
-export const PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES = Object.freeze({
-  free: 2000, team: 3000, enterpriseCloud: 50000,
-});
+export { PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES };
 export function remainingPrivateOrgActionsMinutes(plan, usedMinutes) {
   if (!Object.hasOwn(PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES, plan)
       || !Number.isSafeInteger(usedMinutes) || usedMinutes < 0)

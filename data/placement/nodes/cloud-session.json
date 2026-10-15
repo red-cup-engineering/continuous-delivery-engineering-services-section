@@ -1,0 +1,20 @@
+{
+  "id": "cloud-session",
+  "state": "intermittent",
+  "expectedAwayMinutes": null,
+  "cores": 4, "memoryGb": 15, "freeDiskGb": 24,
+  "capabilities": ["node", "guix", "git"],
+  "bandwidthMbps": null,
+  "closureCache": [
+    "red-cup-engineering/kalshi-engineering-services-section",
+    "red-cup-engineering/computer-content-address-engineering-services-section",
+    "red-cup-engineering/computer-data-engineering-services-section",
+    "red-cup-engineering/computer-code-engineering-services-section",
+    "red-cup-engineering/financial-engineering-services-section",
+    "red-cup-engineering/computer-engineering-services-section",
+    "red-cup-engineering/signchain",
+    "red-cup-engineering/prediction-market-engineering-services-section"
+  ],
+  "cost": { "kind": "held" },
+  "measured": "2026-10-15T04:15Z by nproc, free and df in the cloud session; closureCache is the assembled source tree of the weather cycle run"
+}
