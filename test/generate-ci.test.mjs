@@ -4,10 +4,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, auditRunnerRouting, auditRunnerAccess, REUSABLE, REF } from '../generator/generate-ci.mjs';
+import { detect, generate as generateSource, renderCi as renderCiSource, renderSync as renderSyncSource, auditRunnerRouting, auditRunnerAccess, PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES, remainingPrivateOrgActionsMinutes, REUSABLE, REF } from '../generator/generate-ci.mjs';
 
 
 const runsOn=['self-hosted','existing-runner'];
+test('GitHub standard private-org monthly included minutes are plan-based quantities',()=>{
+  assert.deepEqual(PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES, {free:2000,team:3000,enterpriseCloud:50000});
+  assert.equal(remainingPrivateOrgActionsMinutes('free',0),2000);
+  assert.equal(remainingPrivateOrgActionsMinutes('free',1989),11);
+  assert.equal(remainingPrivateOrgActionsMinutes('free',2000),0);
+  assert.equal(remainingPrivateOrgActionsMinutes('free',2500),0);
+  assert.equal(remainingPrivateOrgActionsMinutes('team',2999),1);
+  assert.equal(remainingPrivateOrgActionsMinutes('enterpriseCloud',2000),48000);
+  for(const [plan,used] of [['unknown',0],['free',-1],['free',1.25],['free',undefined]]) {
+    assert.throws(()=>remainingPrivateOrgActionsMinutes(plan,used),/known GitHub organization plan/);
+  }
+});
+
+
 const generate=(root,options={})=>generateSource(root,{runsOn,...options});
 const renderCi=(selection,options={})=>renderCiSource(selection,{runsOn,...options});
 const renderSync=options=>renderSyncSource({runsOn,...options});
