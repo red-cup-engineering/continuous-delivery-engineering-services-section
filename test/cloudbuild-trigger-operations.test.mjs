@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {discoverNativeCloudBuildSource,selectCloudBuildSource,plannedNativeTrigger,receiveCloudBuildTrigger,
-  qualifyNativeTrigger,qualifyNativeCloudBuildResult,readNativeCloudBuildResult}
+  qualifyNativeTrigger,qualifyNativeCloudBuildResult,readNativeCloudBuildResult,
+  requestNativeCloudBuild}
   from '../scripts/cloudbuild-github-trigger.mjs';
 const image='docker.io/library/node@sha256:'+'a'.repeat(64);
 const input={project:'five-six-one-group-dev',region:'us-central1',connection:'red-cup-github',
@@ -95,6 +96,13 @@ test('build readback observes actual successful step and rejects switched identi
   const request={id:build.id,triggerId:id,commit:'c'.repeat(40),repository:input.repository,
     step:'source-custody-regressions',sourceResource,serviceAccount,image,command};
   assert.equal(qualifyNativeCloudBuildResult(build,request).state,'TEST_EXECUTED');
+  const pinned={...build,source:{connectedRepository:{
+    repository:sourceResource,revision:request.commit}},
+    substitutions:{...build.substitutions,BRANCH_NAME:''}};
+  assert.equal(qualifyNativeCloudBuildResult(pinned,request).state,'TEST_EXECUTED');
+  assert.throws(()=>qualifyNativeCloudBuildResult({...pinned,
+    source:{connectedRepository:{repository:sourceResource,revision:'d'.repeat(40)}}},request));
+
   for(const changed of [{status:'FAILURE'}, {steps:[]},{buildTriggerId:'bad'},
     {substitutions:{COMMIT_SHA:'d'.repeat(40),REPO_FULL_NAME:input.repository}}])
     assert.throws(()=>qualifyNativeCloudBuildResult({...build,...changed},request));
@@ -144,4 +152,71 @@ test('native 2nd-gen repository discovery requires one genuine matching GitHub c
   assert.ok(calls.every(x=>!x.includes('create')&&!x.includes('delete')));
   assert.throws(()=>discoverNativeCloudBuildSource(request,{execute:provider({duplicate:true})}),/ambiguous/);
   assert.throws(()=>discoverNativeCloudBuildSource(request,{execute:provider({missing:true})}),/not connected/);
+});
+
+
+test('native exact-commit request uses the installed approved trigger; dry-run cannot bill',()=>{
+  const f=host(),commit='c'.repeat(40);
+  const preview=requestNativeCloudBuild({...input,commit},f);
+  assert.equal(preview.state,'READY_TO_REQUEST');
+  assert.ok(preview.command.includes('--sha='+commit));
+  assert.ok(preview.command.includes(id));
+  assert.equal(preview.executed,false);
+  assert.equal(f.calls.some(args=>args[2]==='run'),false);
+  assert.throws(()=>requestNativeCloudBuild({...input,commit,apply:true},host()),
+    /authorization/);
+  assert.throws(()=>requestNativeCloudBuild({...input,commit:'HEAD'},host()),
+    /invalid source commit/);
+  assert.throws(()=>requestNativeCloudBuild({...input,commit},host({missing:true})),
+    /install and independently receive/);
+  assert.throws(()=>requestNativeCloudBuild({...input,commit},
+    host({listRows:[{...trigger,approvalConfig:{approvalRequired:false}}]})),
+    /approved main-source selection/);
+});
+
+test('native pending request has a provider build receipt; failure is never retried',()=>{
+  const commit='c'.repeat(40),buildId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const build={id:buildId,projectId:input.project,buildTriggerId:id,
+    status:'PENDING',serviceAccount:input.serviceAccount,
+    source:{connectedRepository:{repository:s.repoResource,revision:commit}},
+    substitutions:{COMMIT_SHA:commit,REPO_FULL_NAME:input.repository},
+    approval:{state:'PENDING',config:{approvalRequired:true}}};
+  function provider({result={id:buildId},readback=build,failRequest=false}={}){
+    const base=host(),calls=[];
+    return {calls,execute:(program,args)=>{
+      calls.push(args);
+      if(args[0]==='builds'&&args[1]==='triggers'&&args[2]==='run'){
+        assert.deepEqual(args.slice(0,4),['builds','triggers','run',id]);
+        assert.ok(args.includes('--sha='+commit));
+        if(failRequest)throw new Error('provider timeout');
+        return JSON.stringify(result);
+      }
+      if(args[0]==='builds'&&args[1]==='describe')
+        return JSON.stringify(readback);
+      return base.execute(program,args);
+    }};
+  }
+  let f=provider();
+  const r=requestNativeCloudBuild({...input,commit,apply:true,authorizeRequest:true},f);
+  assert.equal(r.state,'PENDING_APPROVAL');
+  assert.equal(r.buildId,buildId);
+  assert.equal(r.executed,false);
+  assert.equal(r.providerReadback,true);
+  assert.equal(f.calls.filter(args=>args[2]==='run').length,1);
+  for(const change of [{status:'SUCCESS'},{approval:{state:'APPROVED',config:{approvalRequired:true}}},
+    {source:{connectedRepository:{repository:'foreign'}}},
+    {substitutions:{COMMIT_SHA:'d'.repeat(40),REPO_FULL_NAME:input.repository}},
+    {buildTriggerId:'wrong'}]){
+    f=provider({readback:{...build,...change}});
+    assert.throws(()=>requestNativeCloudBuild({...input,commit,apply:true,authorizeRequest:true},f),
+      /reconcile before retry/);
+    assert.equal(f.calls.filter(args=>args[2]==='run').length,1);
+  }
+  f=provider({result:{name:'projects/p/operations/unknown'}});
+  assert.throws(()=>requestNativeCloudBuild({...input,commit,apply:true,authorizeRequest:true},f),
+    /identity ambiguous/);
+  f=provider({failRequest:true});
+  assert.throws(()=>requestNativeCloudBuild({...input,commit,apply:true,authorizeRequest:true},f),
+    /outcome unknown/);
+  assert.equal(f.calls.filter(args=>args[2]==='run').length,1);
 });
