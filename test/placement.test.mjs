@@ -368,3 +368,44 @@ test('fleet does not dispatch effects, unknown nodes, missing quota or duplicate
   assert.equal(planFleet([j],[{...n,observedAt:'2026-10-14T00:00:00.000Z'}],
     {now}).proposed,0);
 });
+
+
+test('the existing placement CLI reads a complete original office shift without provider effects',async()=>{
+  const {spawnSync}=await import('node:child_process');
+  const {mkdtempSync,mkdirSync,writeFileSync,rmSync}=await import('node:fs');
+  const {join}=await import('node:path');
+  const {tmpdir}=await import('node:os');
+  const root=mkdtempSync(join(tmpdir(),'placement-real-entry-'));
+  try{
+    const dir=join(root,'nodes');mkdirSync(dir);
+    const n={id:'held-verified',state:'up',observedAt:NOW,cores:2,
+      memoryGb:4,freeDiskGb:8,bandwidthMbps:100,
+      closureCache:[],capabilities:['node'],cost:{kind:'held'}};
+    writeFileSync(join(dir,'observed-node.json'),JSON.stringify(n));
+    const job={id:'one',effect:false,minutes:5,maxMinutes:10,
+      closure:[],needs:{cores:1,memoryGb:2,freeDiskGb:1},
+      requires:{capabilities:['node']}};
+    const jobs=join(root,'jobs.json'),single=join(root,'job.json');
+    writeFileSync(jobs,JSON.stringify([job,{...job,id:'two'},{...job,id:'three'}]));
+    writeFileSync(single,JSON.stringify(job));
+    const script=new URL('../scripts/place-job.mjs',import.meta.url).pathname;
+    const run=(...args)=>spawnSync(process.execPath,[script,...args],{
+      encoding:'utf8',timeout:10000});
+    const batch=run('--jobs',jobs,'--nodes',dir,'--now',NOW);
+    assert.equal(batch.status,0,batch.stderr);
+    const result=JSON.parse(batch.stdout);
+    assert.equal(result.kind,'original-fleet-placement-proposal');
+    assert.deepEqual(result.placements.map(x=>x.jobId),['one','two']);
+    assert.equal(result.pending[0].jobId,'three');
+    assert.equal(result.executed,0);
+    assert.equal(result.providerBudgetHeld,false);
+    const original=run('--job',single,'--nodes',dir,'--now',NOW);
+    assert.equal(original.status,0,original.stderr);
+    assert.equal(JSON.parse(original.stdout).chosen,'held-verified');
+    for(const flags of [
+      ['--jobs',jobs,'--job',single,'--nodes',dir],
+      ['--jobs',jobs,'--nodes',dir,'--unknown','x'],
+      ['--jobs',jobs,'--nodes',dir,'--used','0']
+    ])assert.notEqual(run(...flags).status,0);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
