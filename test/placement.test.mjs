@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { newLedger, hold, settle, remainingMinutes, minutePrice, paceMinutes,
   newObservedBudget, quoteBudget, holdBudget, settleBudget, budgetAvailable }
   from '../src/placement/allowance.mjs';
-import { place, assess } from '../src/placement/place.mjs';
+import { place, assess, planFleet } from '../src/placement/place.mjs';
 import { newTable, grant, renew, accept, expired } from '../src/placement/lease.mjs';
 import { compareBuilds, publishable } from '../src/placement/settle.mjs';
 
@@ -288,4 +288,83 @@ test('hosted minutes are held at maximum duration and provider overrun cannot se
   assert.equal(l.usedMinutes,7);
   assert.throws(()=>hold(l,{jobId:'bounded',minutes:2}),/already-holds-or-settled/);
   assert.throws(()=>hold(l,{jobId:' ',minutes:2}),/original job identity/);
+});
+
+
+test('fleet planning actually distributes concurrent work across held and free providers',()=>{
+  const now='2026-10-15T04:50:00.000Z',scopeA='circleci/free/org',
+    scopeB='oci/home/a1';
+  const quotaA=newObservedBudget({provider:'circleci-free-private',scope:scopeA,
+    hardStop:true,sourceRef:'provider://circleci/native-credit-balance',
+    observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',
+    remaining:{credits:120}});
+  const quotaB=newObservedBudget({provider:'oci-always-free-a1',scope:scopeB,
+    hardStop:true,sourceRef:'provider://oci/native-a1-usage',
+    observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',
+    remaining:{ocpuHours:2,gbHours:12}});
+  const originalNodes=[
+    {id:'owned-host',state:'up',observedAt:now,cores:1,memoryGb:2,freeDiskGb:3,
+      capabilities:['node'],bandwidthMbps:100,closureCache:[],
+      cost:{kind:'held'}},
+    {id:'circleci',state:'up',observedAt:now,cores:1,memoryGb:2,freeDiskGb:3,
+      capabilities:['node'],bandwidthMbps:100,closureCache:[],
+      cost:{kind:'metered-free',provider:'circleci-free-private',scope:scopeA,
+        maxJobMinutes:30,hardStop:true,unitsPerMinute:{credits:5}}},
+    {id:'oci',state:'up',observedAt:now,cores:2,memoryGb:12,freeDiskGb:10,
+      capabilities:['node'],bandwidthMbps:100,closureCache:[],
+      cost:{kind:'metered-free',provider:'oci-always-free-a1',scope:scopeB,
+        maxJobMinutes:60,hardStop:true,
+        unitsPerMinute:{ocpuHours:2/60,gbHours:12/60}}}
+  ];
+  const originalBudgets={[scopeA]:quotaA,[scopeB]:quotaB};
+  const task=(id,cores,memoryGb,provider,scope)=>({
+    id,minutes:5,maxMinutes:20,visibility:'private',effect:false,
+    closure:[],needs:{cores,memoryGb,freeDiskGb:1},
+    requires:{capabilities:['node']},
+    sourceEgress:provider?{permitted:true,provider,scope,
+      authorityRef:'office:source-owner/external-compute-grant'}:undefined
+  });
+  const jobs=[
+    task('first',1,2),
+    task('second',1,2,'circleci-free-private',scopeA),
+    task('third',2,8,'oci-always-free-a1',scopeB),
+    task('fourth',1,2,'circleci-free-private',scopeA)
+  ];
+  const beforeNodes=structuredClone(originalNodes),
+    beforeBudgets=structuredClone(originalBudgets);
+  const result=planFleet(jobs,originalNodes,{now,budgets:originalBudgets});
+  assert.deepEqual(result.placements.map(p=>[p.jobId,p.nodeId]),
+    [['first','owned-host'],['second','circleci'],['third','oci']]);
+  assert.equal(result.unplaced,1);
+  assert.equal(result.pending[0].jobId,'fourth');
+  assert.equal(result.proposed,3);
+  assert.equal(result.executed,0);
+  assert.equal(result.providerBudgetHeld,false);
+  assert.equal(result.leaseReceived,false);
+  assert.equal(result.placements[1].budgetHold.units.credits,100);
+  assert.equal(result.placements[2].budgetHold.units.ocpuHours>0,true);
+  assert.deepEqual(originalNodes,beforeNodes);
+  assert.deepEqual(originalBudgets,beforeBudgets);
+  // Deterministic outcomes for the same observed inputs.
+  assert.deepEqual(planFleet(jobs,originalNodes,{now,budgets:originalBudgets}),result);
+});
+
+test('fleet does not dispatch effects, unknown nodes, missing quota or duplicate jobs',()=>{
+  const now='2026-10-15T04:50:00.000Z';
+  const n={id:'original-host',state:'up',observedAt:now,
+    cores:2,memoryGb:4,freeDiskGb:8,bandwidthMbps:100,
+    capabilities:['node'],closureCache:[],cost:{kind:'held'}};
+  const j={id:'x',minutes:1,maxMinutes:5,closure:[],
+    needs:{cores:1,memoryGb:2,freeDiskGb:1},effect:false};
+  assert.throws(()=>planFleet([j,{...j}],[n],{now}),/unique original job/);
+  const batch=planFleet([{...j,effect:true}, {...j,id:'unknown',maxMinutes:undefined}],
+    [n],{now});
+  assert.equal(batch.placements.length,0);
+  assert.deepEqual(batch.pending.map(x=>x.reason),
+    ['effect-authority-not-received','original-job-closure-or-maximum-runtime-unmeasured']);
+  const unmeasured=planFleet([j],[{...n,cores:null}],{now});
+  assert.equal(unmeasured.placements.length,0);
+  assert.equal(unmeasured.probes.length,1);
+  assert.equal(planFleet([j],[{...n,observedAt:'2026-10-14T00:00:00.000Z'}],
+    {now}).proposed,0);
 });
