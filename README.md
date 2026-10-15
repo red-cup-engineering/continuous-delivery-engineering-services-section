@@ -28,6 +28,41 @@ private consumers' own self-hosted runner requirements, the exact-source
 build receiver, the Guix/LAGOON release path, or installed customer acceptance.
 No CI result is implied by a runner selector alone.
 
+## Native off-host artifact fabrication and independent receiving
+
+The original **public** Red Cup Continuous Delivery owner already has
+`scripts/release-pack.mjs` and native release/source tests. Its
+[`native-source-package.yml`](.github/workflows/native-source-package.yml)
+now runs those original components on GitHub-hosted `ubuntu-24.04`, with
+no private source checkout, secrets, private GitHub Actions consumption or
+machine-host dependency. It checks the exact triggering Git revision and
+packages **the original Continuous Delivery source owner** using its
+source-owned release-closure/version logic; it does not construct a new
+resource-placement engine or publish a second registry.
+
+The first independent runner creates the actual npm-format release archive,
+`plan.json` and `SHA256SUMS`; the second runner downloads that exact
+GitHub Actions artifact, verifies its SHA-256, extracts the npm archive and
+executes the original dependency-closed placement/release tests **from the
+unpacked artifact**, not the producer checkout. It also observes its own
+running CPU, available RAM and free disk and asks the original
+`scripts/place-job.mjs` to plan one genuine already-admitted CI qualification
+against this already allocated runner. The source job executes **only after**
+the original planner selects that exact observed runner. This local job
+observation is not a provider quota report or authority to run arbitrary
+customer effects. No private data leaves its repository.
+
+**Receiving limits:** Artifact construction, artifact transfer and isolated
+package execution are genuine independent cloud results, but the tarball's
+mandatory `@red-cup-engineering/git-services-section` peer remains
+unavailable to that public source-only installation. This does not qualify
+the full private Composition, Guix/LAGOON construction, runtime deployment,
+independent production actor Work, enterprise resource settlement or buyer
+acceptance. Preserve the existing reusable `node-package.yml` and those
+original receiving gates unchanged. Source-only CI by itself never proves
+the separate native artifact/consumer job passed; inspect both completed
+jobs and their exact source/artifact identities.
+
 ## Resource-based compute placement, not a cloud shortlist
 
 The existing [resource-placement engine](src/placement/place.mjs), [shared
