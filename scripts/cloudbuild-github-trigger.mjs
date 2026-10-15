@@ -200,7 +200,7 @@ export function readNativeCloudBuildResult(request,{execute=execFileSync}={}){
   return {...qualifyNativeCloudBuildResult(build,request),project,region};
 }
 
-const usage='Usage: cloudbuild-github-trigger inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID --source-resource=projects/.../repositories/... --service-account=projects/.../serviceAccounts/... --image=IMAGE@sha256:DIGEST --command='npm run verify'';
+const usage='Usage: cloudbuild-github-trigger inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID --source-resource=projects/.../repositories/... --service-account=projects/.../serviceAccounts/... --image=IMAGE@sha256:DIGEST --command="npm run verify"';
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
   try {
     const [mode,...opts]=process.argv.slice(2);
