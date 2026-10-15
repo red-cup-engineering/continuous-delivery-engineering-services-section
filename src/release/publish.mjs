@@ -5,19 +5,25 @@
 import { shaVersion } from './version.mjs';
 
 // packages: [{ name, dir, base, dependsOn: [names] }] -> publish order with exact internal versions.
-export function planPublish(packages, sha) {
+// A production-dependency cycle cannot be ordered. Versions are exact and shared, so a registry does not
+// need the dependency first; the cycle is reported (`cycles`) and `failOnCycle` makes it an error.
+export function planPublish(packages, sha, { failOnCycle = true } = {}) {
   const byName = new Map(packages.map(p => [p.name, p]));
-  const order = [], seen = new Set(), stack = new Set();
+  const order = [], seen = new Set(), stack = new Set(), cycles = [], path = [];
   const visit = n => {
     if (seen.has(n)) return;
-    if (stack.has(n)) throw new Error(`dependency-cycle:${n}`);
-    stack.add(n);
+    if (stack.has(n)) {
+      if (failOnCycle) throw new Error(`dependency-cycle:${n}`);
+      cycles.push([...path.slice(path.indexOf(n)), n]); return;
+    }
+    stack.add(n); path.push(n);
     for (const d of byName.get(n).dependsOn ?? []) if (byName.has(d)) visit(d);
-    stack.delete(n); seen.add(n); order.push(n);
+    stack.delete(n); path.pop(); seen.add(n); order.push(n);
   };
   packages.forEach(p => visit(p.name));
   const versions = Object.fromEntries(packages.map(p => [p.name, shaVersion(p.base, sha)]));
-  return order.map(n => ({ name: n, dir: byName.get(n).dir, version: versions[n], internal: Object.fromEntries((byName.get(n).dependsOn ?? []).filter(d => byName.has(d)).map(d => [d, versions[d]])) }));
+  const steps = order.map(n => ({ name: n, dir: byName.get(n).dir, version: versions[n], internal: Object.fromEntries((byName.get(n).dependsOn ?? []).filter(d => byName.has(d)).map(d => [d, versions[d]])) }));
+  return Object.assign(steps, { cycles });
 }
 
 export async function publishAll({ plan, registry, tag = 'candidate', provenance = false, run }) {

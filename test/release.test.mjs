@@ -97,9 +97,35 @@ test('publish: dependencies first, exact internal versions, a cycle is refused, 
   assert.deepEqual(plan.map(p => p.name), ['b', 'a']);
   assert.equal(plan[1].internal.b, plan[0].version);
   assert.throws(() => planPublish([{ name: 'a', dir: 'a', base: '1.0.0', dependsOn: ['a'] }], 'c'.repeat(40)), /cycle/);
+  const cyc = planPublish([{ name: 'a', dir: 'a', base: '1.0.0', dependsOn: ['b'] }, { name: 'b', dir: 'b', base: '1.0.0', dependsOn: ['a'] }], 'c'.repeat(40), { failOnCycle: false });
+  assert.equal(cyc.length, 2); assert.deepEqual(cyc.cycles[0], ['a', 'b', 'a']);
   const calls = []; const r = await publishAll({ plan, registry: 'https://registry.561.group', run: async (c, a) => (calls.push(a), { status: 0 }) });
   assert.equal(r.ok, true); assert.ok(calls[0].includes('--tag') && calls[0].includes('candidate'));
   const stop = await publishAll({ plan, registry: 'r', run: async () => ({ status: 1 }) });
   assert.deepEqual([stop.ok, stop.failedAt], [false, 'b']);
   assert.deepEqual(promoteArgs('a', plan[1].version, 'production', 'r').slice(0, 2), ['dist-tag', 'add']);
+});
+
+import { indexPackages, closureOf, rewriteManifest, planClosure } from '../src/release/closure.mjs';
+test('closure: follows internal dependencies, rewrites workspace ranges to exact versions, ignores external ones', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-'));
+  const mk = (n, m) => { fs.mkdirSync(path.join(d, n)); fs.writeFileSync(path.join(d, n, 'package.json'), JSON.stringify({ version: '1.2.3', ...m })); };
+  mk('svc', { name: '@x/svc', dependencies: { '@x/lib': 'workspace:*', yaml: '2.8.3' } });
+  mk('lib', { name: '@x/lib', dependencies: { '@x/deep': 'workspace:*' }, devDependencies: { t: '1' } });
+  mk('deep', { name: '@x/deep' });
+  mk('other', { name: '@x/other' });
+  mk('lost', { name: '@x/lost', dependencies: { '@x/absent': 'workspace:*' } });
+  const index = indexPackages([d]);
+  const c = closureOf('@x/svc', index);
+  assert.deepEqual(c.packages.map(p => p.name).sort(), ['@x/deep', '@x/lib', '@x/svc']);
+  assert.deepEqual(closureOf('@x/lost', index).missing, ['@x/absent']);
+  const { plan } = planClosure('@x/svc', index, 'd'.repeat(40));
+  assert.deepEqual(plan.map(p => p.name), ['@x/deep', '@x/lib', '@x/svc']);
+  const svc = plan.at(-1);
+  const m = rewriteManifest(index.get('@x/svc').manifest, svc.version, svc.internal);
+  assert.equal(m.dependencies['@x/lib'], plan[1].version);
+  assert.equal(m.dependencies.yaml, '2.8.3');
+  assert.equal(rewriteManifest(index.get('@x/lib').manifest, 'v', {}).devDependencies, undefined);
+  const lost = rewriteManifest(index.get('@x/lost').manifest, 'v', {});
+  assert.deepEqual(lost.dropped, ['@x/absent']); assert.equal(lost.dependencies['@x/absent'], undefined);
 });
