@@ -89,6 +89,15 @@ only agreeing claims from distinct, separately authenticated builders are
 publishable. The placement/settlement layer still requires an actual
 single-writer ledger and native provider readback before external effects.
 
+**Price the actual currently available capacity.** The original `quoteBudget`
+already subtracts outstanding free-quota reservations through
+`budgetAvailable`. Its companion scarcity ranking must price the **same**
+available balance, not an earlier nominal `remaining` snapshot; otherwise
+two individually eligible providers can be ranked backward after another
+office reserves one provider's credits. This is a price/placement correction,
+never evidence of execution, billing, a newly observed provider or a lease.
+The original provider-budget hold, fencing and native settlement remain required.
+
 **Read original quota before planning and hold before dispatch.** Provider
 adapters must authenticate fresh native, non-secret provider readback and
 supply an account-scoped free-only budget observation. Its `sourceRef`,
