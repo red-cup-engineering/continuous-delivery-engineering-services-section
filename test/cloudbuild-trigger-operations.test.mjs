@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {selectCloudBuildSource,plannedNativeTrigger,receiveCloudBuildTrigger,
+import {discoverNativeCloudBuildSource,selectCloudBuildSource,plannedNativeTrigger,receiveCloudBuildTrigger,
   qualifyNativeTrigger,qualifyNativeCloudBuildResult,readNativeCloudBuildResult}
   from '../scripts/cloudbuild-github-trigger.mjs';
 const image='docker.io/library/node@sha256:'+'a'.repeat(64);
@@ -114,4 +114,32 @@ test('build readback observes actual successful step and rejects switched identi
     {steps:[{...build.steps[0],args:['-euc','echo looks good'],env:['BUILDER_IMAGE='+image]}]},
     {substitutions:{...build.substitutions,BRANCH_NAME:'release'}}
   ])assert.throws(()=>qualifyNativeCloudBuildResult({...build,...change},request));
+});
+
+test('native 2nd-gen repository discovery requires one genuine matching GitHub connection',()=>{
+  const calls=[];
+  function provider({duplicate=false,missing=false}={}){
+    return (program,args)=>{
+      assert.equal(program,'gcloud');calls.push(args);
+      if(args[0]==='projects')return JSON.stringify({projectId:s.project,lifecycleState:'ACTIVE'});
+      if(args[0]==='billing')return JSON.stringify({projectId:s.project,billingEnabled:true});
+      if(args.slice(0,3).join(' ')==='builds connections list')
+        return JSON.stringify(missing?[]:[{name:s.connectionResource,
+          installationState:{stage:'COMPLETE'},githubConfig:{appInstallationId:'1234'}}]);
+      if(args.slice(0,3).join(' ')==='builds repositories list')
+        return JSON.stringify([{name:s.repoResource,
+          remoteUri:'https://github.com/'+s.repository+'.git'},
+          ...(duplicate?[{name:s.connectionResource+'/repositories/second-alias',
+            remoteUri:'https://github.com/'+s.repository+'.git'}]:[])]);
+      throw new Error('unexpected discovery call: '+args.join(' '));
+    };
+  }
+  const request={project:s.project,region:s.region,repository:s.repository};
+  const result=discoverNativeCloudBuildSource(request,{execute:provider()});
+  assert.equal(result.repoResource,s.repoResource);
+  assert.equal(result.connection,s.connection);
+  assert.equal(result.sourceDiscovered,true);
+  assert.ok(calls.every(x=>!x.includes('create')&&!x.includes('delete')));
+  assert.throws(()=>discoverNativeCloudBuildSource(request,{execute:provider({duplicate:true})}),/ambiguous/);
+  assert.throws(()=>discoverNativeCloudBuildSource(request,{execute:provider({missing:true})}),/not connected/);
 });
