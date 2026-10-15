@@ -1,0 +1,75 @@
+name: Release publish
+# Publish the named packages of this checkout, with its submodules, to the npm registry at registry.561.group.
+# The unit is one repository at one commit: every named package gets the version <base>-sha.<commit>; a
+# dependency that is not one of them must already be in the registry under the dist-tag candidate, and its exact
+# version is written into the tarball (scripts/release-pack.mjs). Packages are published with
+# scripts/release-publish.mjs, which reads the publisher token only from $CREDENTIALS_DIRECTORY on the host that
+# runs this job (systemd LoadCredential= of the runner's unit); no secret is passed to or through the workflow.
+# A version already in the registry counts as published, so a re-run is a no-op. The dist-tag production moves only
+# when the caller names a root package.
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Explicit JSON runner labels supplied by the caller'
+        type: string
+        required: true
+      packages:
+        description: 'JSON array of the package names this repository publishes'
+        type: string
+        required: true
+      root:
+        description: 'Package whose production dist-tag moves; empty moves none'
+        type: string
+        default: ''
+      drop:
+        description: 'JSON array of declared internal dependencies that no repository holds and the packed manifest omits'
+        type: string
+        default: '[]'
+      registry:
+        type: string
+        default: 'https://registry.561.group'
+permissions:
+  contents: read
+concurrency:
+  group: release-publish-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          ref: ${{ github.job_workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+      - name: Pack the named packages
+        env:
+          PACKAGES: ${{ inputs.packages }}
+          ROOT: ${{ inputs.root }}
+          DROP: ${{ inputs.drop }}
+          REGISTRY: ${{ inputs.registry }}
+        run: |
+          set -euo pipefail
+          node --version
+          only=$(node -e 'console.log(JSON.parse(process.env.PACKAGES).join(","))')
+          drop=$(node -e 'console.log(JSON.parse(process.env.DROP).join(","))')
+          args=(--only "$only" --search "$GITHUB_WORKSPACE" --sha "$GITHUB_SHA" --out "$RUNNER_TEMP/pack" --registry "$REGISTRY")
+          [ -n "$ROOT" ] && args+=(--root "$ROOT")
+          [ -n "$drop" ] && args+=(--drop "$drop")
+          node .release-tools/scripts/release-pack.mjs "${args[@]}"
+      - name: Publish to the registry
+        env:
+          ROOT: ${{ inputs.root }}
+          REGISTRY: ${{ inputs.registry }}
+        run: |
+          set -euo pipefail
+          promote=none
+          [ -n "$ROOT" ] && promote=production
+          node .release-tools/scripts/release-publish.mjs --pack "$RUNNER_TEMP/pack" --registry "$REGISTRY" --tag candidate --promote "$promote"

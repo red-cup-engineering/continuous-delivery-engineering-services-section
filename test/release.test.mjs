@@ -106,7 +106,7 @@ test('publish: dependencies first, exact internal versions, a cycle is refused, 
   assert.deepEqual(promoteArgs('a', plan[1].version, 'production', 'r').slice(0, 2), ['dist-tag', 'add']);
 });
 
-import { indexPackages, closureOf, rewriteManifest, planClosure } from '../src/release/closure.mjs';
+import { indexPackages, closureOf, rewriteManifest, planClosure, planUnit } from '../src/release/closure.mjs';
 test('closure: follows internal dependencies, rewrites workspace ranges to exact versions, ignores external ones', () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-'));
   const mk = (n, m) => { fs.mkdirSync(path.join(d, n)); fs.writeFileSync(path.join(d, n, 'package.json'), JSON.stringify({ version: '1.2.3', ...m })); };
@@ -128,6 +128,21 @@ test('closure: follows internal dependencies, rewrites workspace ranges to exact
   assert.equal(rewriteManifest(index.get('@x/lib').manifest, 'v', {}).devDependencies, undefined);
   const lost = rewriteManifest(index.get('@x/lost').manifest, 'v', {});
   assert.deepEqual(lost.dropped, ['@x/absent']); assert.equal(lost.dependencies['@x/absent'], undefined);
+});
+
+test('unit: names one checkout\'s packages, shares one version among them, and sends every other internal dependency to the registry', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-'));
+  const mk = (n, m) => { fs.mkdirSync(path.join(d, n)); fs.writeFileSync(path.join(d, n, 'package.json'), JSON.stringify({ version: '1.2.3', ...m })); };
+  mk('a', { name: '@x/a', dependencies: { '@x/b': 'workspace:*', '@x/earlier': 'workspace:*', '@x/nowhere': 'workspace:*', yaml: '2.8.3' } });
+  mk('b', { name: '@x/b', dependencies: { '@x/a': 'workspace:*' } });
+  mk('earlier', { name: '@x/earlier' });
+  const index = indexPackages([d]);
+  const u = planUnit(['@x/a', '@x/b'], index, 'e'.repeat(40));
+  assert.deepEqual(u.absent, []);
+  assert.deepEqual(u.external['@x/a'].sort(), ['@x/earlier', '@x/nowhere']);
+  assert.equal(u.cycles.length, 1);
+  assert.equal(new Set(u.plan.map(p => p.version)).size, 1);
+  assert.deepEqual(planUnit(['@x/ghost'], index, 'e'.repeat(40)).absent, ['@x/ghost']);
 });
 
 import { publishPacked, readPublishToken, writeNpmrc } from '../src/release/publish-packed.mjs';
