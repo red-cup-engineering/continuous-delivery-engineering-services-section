@@ -36,7 +36,7 @@ test('unknown sizes are intervals, never zero: an unmeasured node is possible, n
 });
 
 test('hosted minutes are refused once the free allowance cannot cover the job, never overdrawn', () => {
-  const r = place({ ...job(), minutes: 20 }, nodes(), { ledger: ledger(1990), now: NOW });
+  const r = place({ ...job(), minutes: 20, maxMinutes: 20 }, nodes(), { ledger: ledger(1990), now: NOW });
   const hosted = r.refused.find(x => x.nodeId === 'github-hosted-ubuntu-24.04');
   assert.ok(hosted.why.includes('hosted-allowance-exhausted-or-stale'));
 });
