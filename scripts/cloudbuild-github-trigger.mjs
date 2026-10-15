@@ -240,7 +240,9 @@ export function requestNativeCloudBuild(input,{execute=execFileSync}={}){
  * Dirty working copies cannot influence the expected executed steps.
  */
 export function readCommittedCloudBuildSteps(input,{executeGit=execFileSync}={}){
-  const {sourceWorkspace,commit,repository,image,step}=input??{};
+  const {sourceWorkspace,commit,repository,image,step,branchName='main'}=input??{};
+  if(branchName!==''&&branchName!=='main')
+    throw new TypeError('source recipe requires selected main branch or pinned SHA without branch');
   if(typeof sourceWorkspace!=='string'||!sourceWorkspace.startsWith('/')||
     sourceWorkspace.length>2048||/[\u0000\r\n]/u.test(sourceWorkspace))
     throw new TypeError('absolute Git source checkout required');
@@ -270,7 +272,7 @@ export function readCommittedCloudBuildSteps(input,{executeGit=execFileSync}={})
     config.availableSecrets!==undefined||config.secrets!==undefined)
     throw new Error('committed recipe is not the bounded approved build');
   const substitutions={_NODE_IMAGE:image,COMMIT_SHA:commit,
-    REPO_NAME:repository.split('/')[1],REPO_FULL_NAME:repository,BRANCH_NAME:'main'};
+    REPO_NAME:repository.split('/')[1],REPO_FULL_NAME:repository,BRANCH_NAME:branchName};
   const expand=value=>{
     if(typeof value!=='string')throw new TypeError('unsupported non-text build value');
     return value.replace(/\$\$|\$\{([_A-Z][_A-Z0-9]*)\}|\$([A-Z][_A-Z0-9]*)/gu,
@@ -369,8 +371,12 @@ export function readNativeCloudBuildResult(request,{execute=execFileSync,execute
   if(typeof request?.serviceAccount!=='string'||
      !request.serviceAccount.startsWith('projects/'+project+'/serviceAccounts/'))
     throw new TypeError('build principal differs from selected project');
-  const expectedSteps=readCommittedCloudBuildSteps(request,{executeGit});
+  // Manual exact-SHA Cloud Build invocations can have an absent branch
+  // substitution. Read the actual provider build before expanding the
+  // immutable recipe; the final receipt still verifies SHA and provenance.
   const build=nativeGcloud(['builds','describe',id,'--project='+project,'--region='+region,'--format=json'],execute);
+  const branchName=build?.substitutions?.BRANCH_NAME??'';
+  const expectedSteps=readCommittedCloudBuildSteps({...request,branchName},{executeGit});
   return {...qualifyNativeCloudBuildResult(build,{...request,expectedSteps}),
     project,region,committedSourceCompared:true};
 }

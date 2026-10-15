@@ -288,6 +288,20 @@ test('real Git objects bind the entire committed build step before GCP readback'
     }});
     assert.equal(receipt.committedSourceCompared,true);
     assert.equal(receipt.state,'TEST_EXECUTED');
+    // gcloud builds triggers run --sha=COMMIT may omit BRANCH_NAME. The same
+    // exact Git recipe must compare against the provider's empty substitution.
+    const pinnedSteps=readCommittedCloudBuildSteps({...expectedSource,branchName:''});
+    assert.ok(pinnedSteps[0].args[1].includes('echo ""'));
+    const pinnedBuild={...build,
+      source:{connectedRepository:{repository:s.repoResource,revision:commit}},
+      substitutions:{...build.substitutions,BRANCH_NAME:''},
+      steps:pinnedSteps.map(x=>({...x,status:'SUCCESS'}))};
+    const pinnedReceipt=readNativeCloudBuildResult(request,{execute:()=>JSON.stringify(pinnedBuild)});
+    assert.equal(pinnedReceipt.state,'TEST_EXECUTED');
+    assert.throws(()=>readCommittedCloudBuildSteps({...expectedSource,branchName:'feature'}));
+    const changedPinned={...pinnedBuild,steps:steps.map(x=>({...x,status:'SUCCESS'}))};
+    assert.throws(()=>readNativeCloudBuildResult(request,{execute:()=>JSON.stringify(changedPinned)}));
+
     // A successful early-exit program would formerly get TEST_EXECUTED.
     build.steps=[{...build.steps[0],args:['-euc','exit 0\nnpm run verify\n']}];
     assert.throws(()=>readNativeCloudBuildResult(request,{execute:()=>JSON.stringify(build)}));
