@@ -371,6 +371,45 @@ test('fleet does not dispatch effects, unknown nodes, missing quota or duplicate
 
 
 
+
+test('provider placement prices net-available free credits after original reservations',()=>{
+  const now='2026-10-15T04:50:00.000Z';
+  const provider='circleci-free-public';
+  const mkBudget=(scope,credits)=>newObservedBudget({provider,scope,
+    hardStop:true,sourceRef:'provider://circleci/account-credit-readback',
+    observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',
+    remaining:{credits}});
+  const a=mkBudget('org/cloud-a',100),b=mkBudget('org/cloud-b',50);
+  assert.equal(holdBudget(a,{jobId:'previous-office-job',provider,
+    scope:a.scope,now,units:{credits:85}}).ok,true);
+  assert.equal(budgetAvailable(a).credits,15);
+  assert.equal(budgetAvailable(b).credits,50);
+  const node=(id,scope)=>({id,state:'up',observedAt:now,
+    cores:1,memoryGb:2,freeDiskGb:4,bandwidthMbps:100,
+    capabilities:['node','git'],closureCache:[],
+    cost:{kind:'metered-free',provider,scope,hardStop:true,
+      maxJobMinutes:30,unitsPerMinute:{credits:1}}});
+  const nodes=[node('nearly-held','org/cloud-a'),node('available','org/cloud-b')];
+  const job={id:'current-public-source',visibility:'public',effect:false,
+    minutes:5,maxMinutes:10,closure:[],
+    needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const budgets={[a.scope]:a,[b.scope]:b};
+  const original=structuredClone(budgets);
+  const selection=place(job,nodes,{now,budgets});
+  assert.equal(selection.chosen,'available');
+  assert.equal(selection.candidates[0].nodeId,'available');
+  assert.ok(selection.candidates[0].scarcityPerMinute <
+    selection.candidates[1].scarcityPerMinute);
+  const fleet=planFleet([job,{...job,id:'second-public-source'}],nodes,{now,budgets});
+  assert.deepEqual(fleet.placements.map(p=>p.nodeId),['available','nearly-held']);
+  assert.equal(fleet.executed,0);
+  assert.equal(fleet.providerBudgetHeld,false);
+  assert.deepEqual(budgets,original);
+  // An unobserved balance is not a cheaper alternative.
+  assert.equal(place(job,nodes,{now,budgets:{[a.scope]:a}}).chosen,'nearly-held');
+});
+
 test('typed effectful office jobs never acquire pure fleet placements on owned or cloud capacity',()=>{
   const now='2026-10-15T04:50:00.000Z';
   const held={id:'owned',state:'up',observedAt:now,cores:8,memoryGb:16,
