@@ -22,10 +22,6 @@ on:
         description: 'Package whose production dist-tag moves; empty moves none'
         type: string
         default: ''
-      drop:
-        description: 'JSON array of declared internal dependencies that no repository holds and the packed manifest omits'
-        type: string
-        default: '[]'
       registry:
         type: string
         default: 'https://registry.561.group'
@@ -53,16 +49,13 @@ jobs:
         env:
           PACKAGES: ${{ inputs.packages }}
           ROOT: ${{ inputs.root }}
-          DROP: ${{ inputs.drop }}
           REGISTRY: ${{ inputs.registry }}
         run: |
           set -euo pipefail
           node --version
           only=$(node -e 'console.log(JSON.parse(process.env.PACKAGES).join(","))')
-          drop=$(node -e 'console.log(JSON.parse(process.env.DROP).join(","))')
           args=(--only "$only" --search "$GITHUB_WORKSPACE" --sha "$GITHUB_SHA" --out "$RUNNER_TEMP/pack" --registry "$REGISTRY")
           [ -n "$ROOT" ] && args+=(--root "$ROOT")
-          [ -n "$drop" ] && args+=(--drop "$drop")
           node .release-tools/scripts/release-pack.mjs "${args[@]}"
       - name: Publish to the registry
         env:

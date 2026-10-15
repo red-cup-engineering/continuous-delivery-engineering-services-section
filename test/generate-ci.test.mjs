@@ -277,7 +277,7 @@ test('section CI exercises current caller contracts without retired intake files
 test('release: a committed binding generates a caller of release-publish.yml, and a bad binding fails', async () => {
   const { renderRelease } = await import('../generator/generate-ci.mjs');
   const labels = ['self-hosted', 'Linux', 'X64', 'cold-red-gate-build'];
-  const text = renderRelease({ packages: ['@x/a', '@x/b'], root: '@x/a', drop: ['@x/z'] }, { runsOn: labels });
+  const text = renderRelease({ packages: ['@x/a', '@x/b'], root: '@x/a' }, { runsOn: labels });
   const doc = YAML.parse(text);
   assert.equal(doc.jobs.publish.uses, `${REUSABLE}/release-publish.yml@${REF}`);
   assert.deepEqual(JSON.parse(doc.jobs.publish.with.packages), ['@x/a', '@x/b']);
@@ -285,6 +285,7 @@ test('release: a committed binding generates a caller of release-publish.yml, an
   assert.deepEqual(JSON.parse(doc.jobs.publish.with['runs-on']), labels);
   assert.throws(() => renderRelease({ packages: ['@x/a'], root: '@x/b' }, { runsOn: labels }), /root/);
   assert.throws(() => renderRelease({ packages: [] }, { runsOn: labels }), /nonempty/);
+  assert.throws(() => renderRelease({ packages: ['@x/a'], drop: ['@x/z'] }, { runsOn: labels }), /cannot drop/);
   assert.throws(() => renderRelease({ packages: ['@x/a'] }, { runsOn: ['ubuntu-latest'] }), /self-hosted/);
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'rel-'));
   fs.writeFileSync(path.join(d, 'release-closure.json'), JSON.stringify({ packages: ['@x/a'] }));

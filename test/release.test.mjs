@@ -126,8 +126,16 @@ test('closure: follows internal dependencies, rewrites workspace ranges to exact
   assert.equal(m.dependencies['@x/lib'], plan[1].version);
   assert.equal(m.dependencies.yaml, '2.8.3');
   assert.equal(rewriteManifest(index.get('@x/lib').manifest, 'v', {}).devDependencies, undefined);
-  const lost = rewriteManifest(index.get('@x/lost').manifest, 'v', {});
-  assert.deepEqual(lost.dropped, ['@x/absent']); assert.equal(lost.dependencies['@x/absent'], undefined);
+  assert.throws(()=>rewriteManifest(index.get('@x/lost').manifest,'v',{}),/unresolved-local-dependency:@x\/lost:@x\/absent/);
+  assert.equal(index.get('@x/lost').manifest.dependencies['@x/absent'],'workspace:*');
+  const original={name:'@x/test',scripts:{prepare:'node create.js',start:'node run.js'},optionalDependencies:{'@x/remote':'file:../remote'}};
+  assert.throws(()=>rewriteManifest(original,'1.0.0',{}),/unresolved-local-dependency:@x\/test:@x\/remote/);
+  assert.equal(original.scripts.prepare,'node create.js');
+  const safe=rewriteManifest({...original,optionalDependencies:{'@x/remote':'1.2.3'}},'1.0.0',{});
+  assert.equal(safe.optionalDependencies['@x/remote'],'1.2.3');
+  assert.equal(safe.scripts.prepare,undefined);
+  assert.equal(safe.scripts.start,'node run.js');
+  assert.equal(original.scripts.prepare,'node create.js');
 });
 
 test('unit: names one checkout\'s packages, shares one version among them, and sends every other internal dependency to the registry', () => {

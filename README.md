@@ -28,6 +28,10 @@ private consumers' own self-hosted runner requirements, the exact-source
 build receiver, the Guix/LAGOON release path, or installed customer acceptance.
 No CI result is implied by a runner selector alone.
 
+## Release integrity: no ghost packages or sacrificed dependencies
+
+The original `src/release/closure.mjs` and `scripts/release-pack.mjs` must preserve every declared runtime and optional dependency. A missing internal owner, unresolved local `workspace:`/`file:`/`link:` coordinate, or dependency cycle is an **actual refusal before packing or publication**, never an apparent success with a smaller manifest. The old `--drop` release shortcut and generated workflow input have been retired. Existing Code-owned npm publication/version-policy and the genuine registry remain the authoritative release tools; this CD source never invents an external version or grants registry writes. An exact packed archive only qualifies source preservation; a real registry write, native LAGOON construction, installed MetroPlat and market receiving remain distinct outcomes.
+
 ## Native off-host artifact fabrication and independent receiving
 
 The original **public** Red Cup Continuous Delivery owner already has

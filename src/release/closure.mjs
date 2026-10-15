@@ -32,19 +32,21 @@ export function closureOf(rootName, index) {
   }
   return { packages: [...seen.entries()].map(([name, p]) => ({ name, dir: p.dir, base: /^\d+\.\d+\.\d+$/.test(p.manifest.version) ? p.manifest.version : '0.0.0', dependsOn: internalDeps(p.manifest, index) })), missing: [...missing] };
 }
-// A workspace range with no package in the searched tree cannot be installed from a registry. It is
-// dropped from the packed manifest and reported (`dropped`), never left as workspace:*.
+// Every runtime dependency must survive the native package release. A local
+// source coordinate without an admitted exact replacement is a refusal, not a
+// cheaper artifact with missing capabilities.
 export function rewriteManifest(manifest, version, internal) {
-  const out = { ...manifest, version }, dropped = [];
+  const out = { ...manifest, version };
   for (const k of ['dependencies', 'optionalDependencies']) if (out[k]) {
-    out[k] = Object.fromEntries(Object.entries(out[k]).flatMap(([n, r]) => {
-      if (n in internal) return [[n, internal[n]]];
-      if (/^(workspace|link|file):/.test(r)) { dropped.push(n); return []; }
-      return [[n, r]];
+    out[k] = Object.fromEntries(Object.entries(out[k]).map(([n, r]) => {
+      if (n in internal) return [n, internal[n]];
+      if (typeof r === 'string' && /^(workspace|link|file):/.test(r))
+        throw new Error(`unresolved-local-dependency:${manifest.name}:${n}`);
+      return [n, r];
     }));
   }
-  Object.defineProperty(out, 'dropped', { value: dropped, enumerable: false });
-  delete out.devDependencies; delete out.scripts?.prepare;
+  delete out.devDependencies;
+  if (out.scripts) { out.scripts = { ...out.scripts }; delete out.scripts.prepare; }
   return out;
 }
 // A publication unit is the named packages of one checkout, published at that checkout's commit. A dependency

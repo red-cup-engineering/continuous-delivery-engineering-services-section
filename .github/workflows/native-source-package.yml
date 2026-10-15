@@ -44,7 +44,7 @@ jobs:
           assert.equal(plan.files.length,1);
           assert.deepEqual(plan.notInTree,[]);
           assert.deepEqual(plan.cycles,[]);
-          assert.deepEqual(plan.dropped,{});
+          assert.equal(Object.hasOwn(plan,'dropped'),false);
           const file=plan.files[0];
           assert.equal(file.name,plan.root);
           assert.match(file.version,new RegExp('^0\\.0\\.0-sha\\.'+plan.sha.slice(0,12)+'$'));
