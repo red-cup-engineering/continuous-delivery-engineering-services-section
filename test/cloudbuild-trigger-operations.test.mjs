@@ -122,7 +122,7 @@ test('native 2nd-gen repository discovery requires one genuine matching GitHub c
     return (program,args)=>{
       assert.equal(program,'gcloud');calls.push(args);
       if(args[0]==='projects')return JSON.stringify({projectId:s.project,lifecycleState:'ACTIVE'});
-      if(args[0]==='billing')return JSON.stringify({projectId:s.project,billingEnabled:true});
+      if(args[0]==='billing')throw new Error('billing visibility is not needed for source discovery');
       if(args.slice(0,3).join(' ')==='builds connections list')
         return JSON.stringify(missing?[]:[{name:s.connectionResource,
           installationState:{stage:'COMPLETE'},githubConfig:{appInstallationId:'1234'}}]);
