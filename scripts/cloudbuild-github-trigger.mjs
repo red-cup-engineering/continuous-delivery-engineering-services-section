@@ -178,6 +178,58 @@ export function receiveCloudBuildTrigger(input,{execute=execFileSync}={}){
     executed:false,remainingFreeQuotaChecked:false};
 }
 
+
+/** Request one existing, approved-configuration Cloud Build trigger at an exact
+ * Git revision. A request creates only a pending-approval build; it does not
+ * approve, execute, or establish a successful CI receipt. No source registry,
+ * credential, runner or second state store is created.
+ *
+ * In case of provider timeout or ambiguous response, callers MUST reconcile
+ * native Cloud Build state before another request (never automatic retry).
+ */
+export function requestNativeCloudBuild(input,{execute=execFileSync}={}){
+  const commit=exact('source commit',input?.commit,pattern.commit);
+  const trigger=receiveCloudBuildTrigger(input,{execute});
+  if(trigger.state!=='EXISTING')
+    throw new Error('install and independently receive the existing approved trigger first');
+  const request=['builds','triggers','run',trigger.id,
+    '--project='+input.project,'--region='+input.region,
+    '--sha='+commit,'--format=json'];
+  if(input.apply!==true)return {state:'READY_TO_REQUEST',project:input.project,
+    repository:input.repository,commit,triggerId:trigger.id,command:request,
+    executed:false,approvalRequired:true,remainingFreeQuotaChecked:false};
+  if(input.authorizeRequest!==true)
+    throw new Error('an explicit pending-build request authorization is required');
+  let response;
+  try {response=nativeGcloud(request,execute);}
+  catch {throw new Error('provider request outcome unknown; inspect native builds before any retry');}
+  // gcloud releases can expose the Build directly or as operation metadata.
+  // Never mistake an operation ID for a Build without an independent describe.
+  const ids=[response?.id,response?.metadata?.build?.id,response?.response?.id]
+    .filter(value=>typeof value==='string'&&pattern.id.test(value));
+  const distinct=[...new Set(ids)];
+  if(distinct.length!==1)
+    throw new Error('provider request identity ambiguous; inspect native builds before any retry');
+  let build;
+  try {build=nativeGcloud(['builds','describe',distinct[0],
+    '--project='+input.project,'--region='+input.region,'--format=json'],execute);}
+  catch {throw new Error('provider returned a build ID but its receipt is not readable; reconcile before retry');}
+  if(build?.id!==distinct[0]||build.projectId!==input.project||
+    build.buildTriggerId!==trigger.id||
+    build.substitutions?.COMMIT_SHA!==commit||
+    build.substitutions?.REPO_FULL_NAME?.toLowerCase()!==input.repository.toLowerCase()||
+    build.source?.connectedRepository?.repository!==
+      selectCloudBuildSource(input).repoResource||
+    build.serviceAccount!==input.serviceAccount||
+    build.approval?.config?.approvalRequired!==true||
+    build.approval?.state!=='PENDING'||build.status!=='PENDING')
+    throw new Error('requested build lacks exact source/identity/approval readback; reconcile before retry');
+  return {state:'PENDING_APPROVAL',project:input.project,repository:input.repository,
+    commit,triggerId:trigger.id,buildId:build.id,
+    executed:false,approvalRequired:true,providerReadback:true,
+    remainingFreeQuotaChecked:false};
+}
+
 /** An executed CI receipt needs independently resolved immutable provider source
  * and actual executable test steps. Event substitutions and display step names
  * alone are insufficient: a successful unrelated build can claim both. */
@@ -206,7 +258,10 @@ export function qualifyNativeCloudBuildResult(build,{
     build.status!=='SUCCESS'||build.buildTriggerId!==triggerId||
     build.substitutions?.COMMIT_SHA!==commit||
     build.substitutions?.REPO_FULL_NAME?.toLowerCase()!==repository.toLowerCase()||
-    build.substitutions?.BRANCH_NAME!=='main'||
+    !((build.substitutions?.BRANCH_NAME==='main' &&
+       build.source?.connectedRepository?.revision==='refs/heads/main') ||
+      (build.source?.connectedRepository?.revision===commit &&
+       [undefined,'','main'].includes(build.substitutions?.BRANCH_NAME)))||
     build.source?.connectedRepository?.repository!==sourceResource||
     source?.repository!==sourceResource||source?.revision!==commit||
     build.serviceAccount!==serviceAccount||
@@ -245,13 +300,13 @@ export function readNativeCloudBuildResult(request,{execute=execFileSync}={}){
   return {...qualifyNativeCloudBuildResult(build,request),project,region};
 }
 
-const usage='Usage: cloudbuild-github-trigger discover --project=ID --region=REGION --repository=OWNER/REPO; or inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID --source-resource=projects/.../repositories/... --service-account=projects/.../serviceAccounts/... --image=IMAGE@sha256:DIGEST --command="npm run verify"';
+const usage='Usage: cloudbuild-github-trigger plan-build|request-build --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com --commit=SHA [--authorize-request=pending for request-build only]; or discover --project=ID --region=REGION --repository=OWNER/REPO; or inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID --source-resource=projects/.../repositories/... --service-account=projects/.../serviceAccounts/... --image=IMAGE@sha256:DIGEST --command="npm run verify"';
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
   try {
     const [mode,...opts]=process.argv.slice(2);
     if(mode==='--help'){process.stdout.write(usage+'\n');}
     else {
-      if(!['discover','inspect','ensure','read-build'].includes(mode))throw new TypeError(usage);
+      if(!['discover','inspect','ensure','read-build','plan-build','request-build'].includes(mode))throw new TypeError(usage);
       const fields={};
       for(const arg of opts){
         const m=/^--([a-z-]+)=(.+)$/u.exec(arg);
@@ -262,6 +317,9 @@ if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
         ?['project','region','repository']
         :mode==='read-build'
         ?['project','region','id','trigger-id','commit','repository','step','source-resource','service-account','image','command']
+        :['plan-build','request-build'].includes(mode)
+        ?['project','region','connection','repository-id','repository','trigger','image','service-account','commit',
+          ...(mode==='request-build'?['authorize-request']:[])]
         :['project','region','connection','repository-id','repository','trigger','image','service-account'];
       if(Object.keys(fields).length!==keys.length||Object.keys(fields).some(k=>!keys.includes(k)))
         throw new TypeError(usage);
@@ -269,6 +327,10 @@ if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
         ? discoverNativeCloudBuildSource(fields)
         :mode==='read-build'
         ? readNativeCloudBuildResult({...fields,triggerId:fields['trigger-id'],sourceResource:fields['source-resource'],serviceAccount:fields['service-account']})
+        :['plan-build','request-build'].includes(mode)
+        ?requestNativeCloudBuild({...fields,repositoryId:fields['repository-id'],
+          serviceAccount:fields['service-account'],apply:mode==='request-build',
+          authorizeRequest:fields['authorize-request']==='pending'})
         : receiveCloudBuildTrigger({...fields,repositoryId:fields['repository-id'],
           serviceAccount:fields['service-account'],apply:mode==='ensure'});
       process.stdout.write(JSON.stringify(value)+'\n');
