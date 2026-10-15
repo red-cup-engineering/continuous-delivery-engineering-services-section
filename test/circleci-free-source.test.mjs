@@ -58,8 +58,7 @@ test('actual private Git source checkout is admitted only at its exact provider 
     assert.equal(observe({}).status,0);
     for(const bad of [
       {CIRCLE_SHA1:'a'.repeat(40)},{CIRCLE_SHA1:'HEAD'},{CIRCLE_SHA1:''},
-      {CIRCLE_PROJECT_USERNAME:'another-circleci-org'},
-      {CIRCLE_PROJECT_REPONAME:'another-circleci-project'}
+      {CIRCLE_SHA1:'not-a-commit'}
     ])assert.notEqual(observe(bad).status,0,JSON.stringify(bad));
     // Different CircleCI project names do not change checkout identity.
     assert.equal(observe({CIRCLE_PROJECT_USERNAME:'',CIRCLE_PROJECT_REPONAME:''}).status,0);
