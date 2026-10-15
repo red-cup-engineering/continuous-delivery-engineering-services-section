@@ -1,0 +1,127 @@
+name: Native Continuous Delivery artifact receiving
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-source-package-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-fabrication:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+      - name: Fabricate original source-owned release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$GITHUB_SHA"
+          release="$RUNNER_TEMP/native-cd-release"
+          mkdir -p "$release"
+          node scripts/release-pack.mjs \
+            --root '@red-cup-engineering/continuous-delivery-services-section' \
+            --search "$GITHUB_WORKSPACE" --sha "$GITHUB_SHA" --out "$release"
+          RELEASE_ROOT="$release" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import assert from 'node:assert/strict';
+          const root=process.env.RELEASE_ROOT;
+          const plan=JSON.parse(fs.readFileSync(path.join(root,'plan.json'),'utf8'));
+          assert.equal(plan.root,'@red-cup-engineering/continuous-delivery-services-section');
+          assert.equal(plan.sha,process.env.GITHUB_SHA);
+          assert.equal(plan.files.length,1);
+          assert.deepEqual(plan.notInTree,[]);
+          assert.deepEqual(plan.cycles,[]);
+          assert.deepEqual(plan.dropped,{});
+          const file=plan.files[0];
+          assert.equal(file.name,plan.root);
+          assert.match(file.version,new RegExp('^0\\.0\\.0-sha\\.'+plan.sha.slice(0,12)+'$'));
+          assert.match(file.tarball,/\\.tgz$/);
+          assert.ok(fs.statSync(path.join(root,file.tarball)).size>100);
+          NODE
+          (cd "$release" && sha256sum -- *.tgz > SHA256SUMS)
+      - name: Retain the genuine immutable package, plan and digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: red-cup-native-cd-package
+          path: ${{ runner.temp }}/native-cd-release/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+  native-receiving:
+    needs: native-fabrication
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+      - name: Receive original cloud-fabricated artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: red-cup-native-cd-package
+          path: ${{ runner.temp }}/received-cd
+      - name: Authenticate archive and execute its original bounded work
+        shell: bash
+        run: |
+          set -euo pipefail
+          received="$RUNNER_TEMP/received-cd"
+          cd "$received"
+          sha256sum --check SHA256SUMS
+          archive="$(node -p 'JSON.parse(require("fs").readFileSync("plan.json","utf8")).files[0].tarball')"
+          test -f "$archive"
+          mkdir -p "$RUNNER_TEMP/installed-cd"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/installed-cd"
+          cd "$RUNNER_TEMP/installed-cd/package"
+          node --check scripts/place-job.mjs
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+          export NOW
+          mkdir -p "$RUNNER_TEMP/observed-nodes"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          const root=process.env.RUNNER_TEMP;
+          const space=fs.statfsSync(root);
+          const diskGb=space.bavail*space.bsize/1073741824;
+          const node={id:'github-actions-original-receiver',state:'up',
+            observedAt:process.env.NOW,cores:os.availableParallelism(),
+            memoryGb:os.freemem()/1073741824,freeDiskGb:diskGb,
+            bandwidthMbps:null,capabilities:['node24','git'],
+            closureCache:[],cost:{kind:'held'}};
+          const job={id:'receive-original-cd-archive',effect:false,visibility:'public',
+            minutes:1,maxMinutes:5,closure:[],
+            needs:{cores:1,memoryGb:0.25,freeDiskGb:0.1},
+            requires:{capabilities:['node24']}};
+          fs.writeFileSync(path.join(root,'observed-nodes','current.json'),JSON.stringify(node));
+          fs.writeFileSync(path.join(root,'native-qualification-job.json'),JSON.stringify(job));
+          NODE
+          node scripts/place-job.mjs \
+            --job "$RUNNER_TEMP/native-qualification-job.json" \
+            --nodes "$RUNNER_TEMP/observed-nodes" --now "$NOW" > "$RUNNER_TEMP/placement.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const proposal=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/placement.json','utf8'));
+          assert.equal(proposal.chosen,'github-actions-original-receiver');
+          assert.equal(proposal.needsProbe,false);
+          assert.equal(proposal.needsLeaderWords,false);
+          NODE
+          node --test test/placement.test.mjs test/release.test.mjs
+          printf 'Received original native archive at %s on an independent GitHub-hosted runner; source %s. Full private peer, Guix and enterprise operation remain separately unreceived.\n' "$archive" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
