@@ -54,7 +54,8 @@ has one using its existing test:source-custody suite.
 
 After a real build completes, read-build uses gcloud builds describe to
 compare its exact GitHub commit, full repository name, trigger ID, build ID and
-successful original test step. Billing-enabled does not establish remaining
+caller-selected actual original test step. A different Red Cup consumer supplies
+its own step ID; this owner does not hardcode Git Services. Billing-enabled does not establish remaining
 free quota; provider cost/usage and budget must be checked independently
 before approving a build. A source merge or installed trigger does not
 restore CI until the native build steps actually execute successfully.

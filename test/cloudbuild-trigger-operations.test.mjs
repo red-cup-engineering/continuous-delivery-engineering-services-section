@@ -80,7 +80,7 @@ test('build readback observes actual successful step and rejects switched identi
   const build={id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',buildTriggerId:id,
     status:'SUCCESS',substitutions:{COMMIT_SHA:'c'.repeat(40),REPO_FULL_NAME:input.repository},
     steps:[{id:'source-custody-regressions',status:'SUCCESS'}]};
-  const request={id:build.id,triggerId:id,commit:'c'.repeat(40),repository:input.repository};
+  const request={id:build.id,triggerId:id,commit:'c'.repeat(40),repository:input.repository,step:'source-custody-regressions'};
   assert.equal(qualifyNativeCloudBuildResult(build,request).state,'TEST_EXECUTED');
   for(const changed of [{status:'FAILURE'}, {steps:[]},{buildTriggerId:'bad'},
     {substitutions:{COMMIT_SHA:'d'.repeat(40),REPO_FULL_NAME:input.repository}}])
@@ -88,4 +88,7 @@ test('build readback observes actual successful step and rejects switched identi
   const result=readNativeCloudBuildResult({project:input.project,region:input.region,...request},
     {execute:(cmd,args)=>{assert.equal(args[1],'describe');return JSON.stringify(build);}});
   assert.equal(result.providerReadback,true);
+  const alternate={...build,steps:[{id:'different-test-suite',status:'SUCCESS'}]};
+  assert.equal(qualifyNativeCloudBuildResult(alternate,{...request,step:'different-test-suite'}).selectedStep,'different-test-suite');
+  assert.throws(()=>qualifyNativeCloudBuildResult(alternate,request));
 });

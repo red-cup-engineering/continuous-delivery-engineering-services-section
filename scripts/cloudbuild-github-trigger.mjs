@@ -107,7 +107,7 @@ export function receiveCloudBuildTrigger(input,{execute=execFileSync}={}){
     const ours=rows.filter(x=>x.name===s.trigger);
     if(ours.length>1)throw new Error('duplicate trigger names');
     if(rows.some(x=>x.name!==s.trigger&&x.repositoryEventConfig?.repository===s.repoResource&&
-      x.repositoryEventConfig?.push?.branch==='^main$'&&x.filename==='cloudbuild.yaml'))
+      x.repositoryEventConfig?.push!==undefined&&x.filename==='cloudbuild.yaml'))
       throw new Error('another source trigger already receives this repository');
     return ours[0]??null;
   };
@@ -126,16 +126,18 @@ export function receiveCloudBuildTrigger(input,{execute=execFileSync}={}){
     executed:false,remainingFreeQuotaChecked:false};
 }
 
-export function qualifyNativeCloudBuildResult(build,{id,triggerId,commit,repository}){
+export function qualifyNativeCloudBuildResult(build,{id,triggerId,commit,repository,step}){
   exact('build ID',id,pattern.id);exact('trigger ID',triggerId,pattern.id);
   exact('source commit',commit,pattern.commit);exact('repository',repository,pattern.repo);
+  exact('selected test step',step,/^[a-z][a-z0-9-]{2,63}$/u);
   if(!build||build.id!==id||build.status!=='SUCCESS'||build.buildTriggerId!==triggerId||
     build.substitutions?.COMMIT_SHA!==commit||
     build.substitutions?.REPO_FULL_NAME?.toLowerCase()!==repository.toLowerCase()||
-    !Array.isArray(build.steps)||build.steps.length!==1||
-    build.steps[0].id!=='source-custody-regressions'||build.steps[0].status!=='SUCCESS')
+    !Array.isArray(build.steps)||build.steps.length<1||build.steps.length>64||
+    build.steps.some(x=>x.status!=='SUCCESS')||
+    build.steps.filter(x=>x.id===step).length!==1)
     throw new Error('native provider build did not execute the exact source-custody tests');
-  return {state:'TEST_EXECUTED',id,commit,repository,
+  return {state:'TEST_EXECUTED',id,commit,repository,selectedStep:step,executedSteps:build.steps.length,
     logUrl:typeof build.logUrl==='string'?build.logUrl:null,providerReadback:true,
     billedMinutesVerified:false};
 }
@@ -148,7 +150,7 @@ export function readNativeCloudBuildResult(request,{execute=execFileSync}={}){
   return {...qualifyNativeCloudBuildResult(build,request),project,region};
 }
 
-const usage='Usage: cloudbuild-github-trigger inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO';
+const usage='Usage: cloudbuild-github-trigger inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID';
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
   try {
     const [mode,...opts]=process.argv.slice(2);
@@ -162,7 +164,7 @@ if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
         fields[m[1]]=m[2];
       }
       const keys=mode==='read-build'
-        ?['project','region','id','trigger-id','commit','repository']
+        ?['project','region','id','trigger-id','commit','repository','step']
         :['project','region','connection','repository-id','repository','trigger','image','service-account'];
       if(Object.keys(fields).length!==keys.length||Object.keys(fields).some(k=>!keys.includes(k)))
         throw new TypeError(usage);
