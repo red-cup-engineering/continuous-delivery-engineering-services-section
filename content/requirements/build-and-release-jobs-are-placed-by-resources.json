@@ -1,14 +1,37 @@
 {
   "id": "build-and-release-jobs-are-placed-by-resources",
-  "statement": "A build or release job MUST be placed on a node that advertises the capabilities and resources the job needs, chosen by price over wall time, closure cache and scarcity of any budgeted allowance; hosted minutes MUST be held against the free allowance and MUST NOT overdraw it; each job MUST have at most one live lease holder with a fencing token; a build result MUST be published only when its builders agree.",
+  "statement": "Every build or release job MUST be placed only on a recently observed available node that satisfies the capabilities, resource dimensions, true workload visibility, explicit private-source egress grants, and provider-specific FREE-only quota. Unknown provider balances or stale observations MUST NOT be interpreted as zero expenditure or free capacity. Finite hosted minutes and multi-denomination provider credits, OCPU-hours and GB-hours MUST be held against authentic, fresh provider observations without overdrawing, before dispatch; paid spillover MUST be refused. Each job MUST have at most one live fenced lease holder, and build outputs MUST remain contested until independent agreement.",
   "because": "Leader, 2026-10-15T04:28Z: \"WE HAVE LIMITED FREE GITHUB ACTION MINUTES STOP FUCKING PICKING FUCKING BETWEEN SHITTY ALTERNATES AND BUILD ACTUAL DISTRIBUTED SYSTEMS THAT PICK BASED ON RESOURCES\"; and 04:10Z: \"we shouldn't need just bare cedar fog to do whatever everyone is trying to get it to do\".",
   "owner": "red-cup-engineering/continuous-delivery-services-section",
   "consumer": "561-group/bare-cedar-fog release workflow and the Kalshi trading service build",
   "specification": {
-    "inputs": ["job (needs, requires, closure, minutes, effect)", "node advertisements", "hosted-minutes ledger", "lease table"],
+    "inputs": [
+      "original job (needs, capabilities, visibility, closure, duration and bounded max)",
+      "qualified node adverts with observedAt",
+      "original provider free-budget observations with scope, sourceRef, expiry and denominations",
+      "original hosted-minutes meter with actual used and observedAt",
+      "fenced lease table",
+      "original scoped source egress grant for any private source crossing"
+    ],
     "output": "a placement naming the chosen node and every refusal with its reason",
-    "refusals": ["node is down", "missing capability", "advertised resource too small", "hosted minutes would overdraw the allowance", "live lease held", "stale fencing token", "effect result after lease expiry", "contested build outputs"],
-    "unknowns": "An unadvertised quantity is an interval from zero to unbounded, never zero; a placement on such a node is marked for probing."
+    "refusals": [
+      "node down/unverified or stale observation",
+      "private source on public-only executor",
+      "missing capability or insufficient memory/cores/disk",
+      "hosted minutes unknown, exhausted or stale",
+      "provider has no hard-stop free-only allowance",
+      "provider quote lacks maximum duration",
+      "provider balance unknown/stale, units unmeasured, or would overdraw free quota",
+      "live lease held",
+      "stale fencing token",
+      "effect result after lease expiry",
+      "contested build outputs",
+      "private source egress not permitted for the exact provider and account scope"
+    ],
+    "unknowns": "An unadvertised quantity is an interval from zero to unbounded, never zero; a placement on such a node is marked for probing.",
+    "evidence": "Provider budget readback alone is not machine status. Original external provider/API must authenticate node, remaining quota, and cost rates; static Git node declarations are not live resource authority. No public source clone may qualify as proof of a private build.",
+    "code": "src/placement/{allowance,place,lease,settle}.mjs",
+    "tests": "test/placement.test.mjs"
   },
   "code": "src/placement/",
   "tests": "test/placement.test.mjs"

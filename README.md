@@ -24,6 +24,104 @@ private consumers' own self-hosted runner requirements, the exact-source
 build receiver, the Guix/LAGOON release path, or installed customer acceptance.
 No CI result is implied by a runner selector alone.
 
+## Resource-based compute placement, not a cloud shortlist
+
+The existing [resource-placement engine](src/placement/place.mjs), [shared
+allowance and budget owner](src/placement/allowance.mjs), [lease/fencing
+owner](src/placement/lease.mjs), [build settlement](src/placement/settle.mjs)
+and [original runnable entrypoint](scripts/place-job.mjs) form one concrete
+distributed-work mechanism. This is an Engineering engine; the instance node
+measurements and provider-account credentials remain in their actual
+Operations/corporate owners. Do not make another cloud/machine catalogue,
+agent-only deployer or `sources.json` to describe this one.
+
+**Admit measured capacity and source-egress authority, not a vendor's
+advertised free tier.** A private job sent to any externally metered free
+provider must carry a scope-specific original `sourceEgress` grant
+(`permitted`, `provider`, `scope`, `authorityRef`). Missing or mismatched
+grants are refused before a budget quote. Merely seeing an account or installed
+CLI cannot grant permission to send private Git source to it. Source
+snapshots under `data/placement/nodes/` are historical examples: a node
+must be observed `up` or `intermittent` within the last hour, with the
+needed capabilities and memory/cores/disk and a qualified budget where
+applicable. The current private GitHub-hosted runner is marked **down**
+because its free minutes are exhausted; Cold Red Gate is marked **down**
+because it is unavailable; the recorded cloud session's heartbeat expires
+after one hour. A new program invocation cannot default unknown spent
+GitHub minutes to zero. Other qualified nodes remain eligible even without
+a GitHub allowance. Non-observed node status, unknown cost kinds and private
+source on public-only compute refuse.
+
+**Read original quota before planning and hold before dispatch.** Provider
+adapters must authenticate fresh native, non-secret provider readback and
+supply an account-scoped free-only budget observation. Its `sourceRef`,
+`observedAt`, `expiresAt`, denominations and hard-stop rule are required.
+`newObservedBudget`, `quoteBudget`, `holdBudget`, `settleBudget` are
+functions of the *existing shared allowance module*, not a separate stored
+ledger. A `metered-free` node supplies explicit units per minute and a
+maximum admissible job duration. The allocator computes and returns the
+hold for the **maximum** runtime, not only the optimistic estimate; it
+refuses exhausted, unobserved or stale balances, wrong units, paid spillover
+and fake hard stops. Atomic holding and a fenced lease are still mandatory
+before an external effect is executed; a placement plan alone is no job
+or provider admission.
+
+**One CLI, no guessed credentials or ledger defaults:**
+
+```sh
+# Feed the native provider adapter's real transient JSON readback on
+# standard input; never invent account quotas or retain a machine registry.
+node scripts/place-job.mjs \
+  --job /original/job.json --nodes /existing/installed/node-observations \
+  --budget-stdin --now 2026-10-15T06:30:00Z < /observed/provider-readback.json
+
+# Optional hosted allowance only when an actual provider reading is known:
+node scripts/place-job.mjs --job /original/job.json \
+  --nodes /existing/installed/node-observations --plan free \
+  --used 2000 --observed-at 2026-10-15T06:30:00Z
+```
+
+The `/observed/provider-readback.json` path denotes a transient
+native provider readback already qualified by the caller, **not** a new
+installed executable, machine registry or claim that CircleCI/OCI is
+connected. With no authenticated, current provider observations the engine
+refuses to dispatch work there.
+
+### Current free-capacity constraints (provider offers, not live nodes)
+
+- CircleCI Free: private 30,000 credits/month, 5 credits/min for `small`
+  (1 CPU, 2 GB); public open-source Linux builds may qualify for an
+  additional 400,000 credits/month. **Never spend a public OSS allowance on
+  private source.** The actual CircleCI account/project and private checkout
+  must be received first. References: https://circleci.com/pricing/ and
+  https://circleci.com/pricing/price-list/ and
+  https://circleci.com/docs/guides/plans-pricing/credits/
+- OCI Always Free A1: 1,500 OCPU-hours and 9,000 GB-hours/month
+  (approximately 2 OCPUs and 12 GB continuously), plus separate AMD micro
+  allowances in the tenancy home region. The source allocator handles OCPU-
+  and GB-hour balances *as independent dimensions*; tenancy free-only
+  enforcement and a running guest need separate native provider receiving.
+  Reference: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
+- Cloudflare Workers Free: 100,000 requests/day and 10 ms CPU/request, not
+  a POSIX worker or a useful substitute for Node test/build VMs. Admit only
+  request-sized pure work through the original web/networking capability
+  with its **own** per-request CPU bound; this minute-based builder does
+  not pretend that a whole build fits in one Worker request.
+  Reference: https://developers.cloudflare.com/workers/platform/limits/
+- GitLab.com Free: 400 shared compute minutes/month; Render Free offers
+  750 web-instance hours/month but sleeps on idle. They are potential
+  provider offers, **not installed accounts, live workers or trusted
+  private Git checkouts**. References: https://docs.gitlab.com/ci/pipelines/compute_minutes/
+  and https://render.com/docs/free
+
+The real next receiving event is a no-billing provider observation with
+an independently verified test job/lease and original output, followed by
+quota settlement from actual usage. The source regression is
+[test/placement.test.mjs](test/placement.test.mjs); it exercises blocked
+GitHub consumption, expired provider observations, CircleCI credit holds,
+the two independent OCI quota dimensions, invalid private/public source
+placements and genuine lease fencing.
+
 ## Free private CI without Google billing or GitHub-hosted minutes
 
 **Selected consumer:** private `red-cup-engineering/git-services-section`.

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { newLedger, hold, settle, remainingMinutes, minutePrice, paceMinutes } from '../src/placement/allowance.mjs';
-import { place } from '../src/placement/place.mjs';
+import { newLedger, hold, settle, remainingMinutes, minutePrice, paceMinutes,
+  newObservedBudget, quoteBudget, holdBudget, settleBudget, budgetAvailable }
+  from '../src/placement/allowance.mjs';
+import { place, assess } from '../src/placement/place.mjs';
 import { newTable, grant, renew, accept, expired } from '../src/placement/lease.mjs';
 import { compareBuilds, publishable } from '../src/placement/settle.mjs';
 
@@ -10,7 +12,8 @@ const NOW = '2026-10-15T04:50:00Z';
 const read = f => JSON.parse(fs.readFileSync(new URL(`../data/placement/${f}`, import.meta.url), 'utf8'));
 const job = () => read('jobs/kalshi-trading-closure-build.json');
 const nodes = () => fs.readdirSync(new URL('../data/placement/nodes/', import.meta.url)).map(f => read(`nodes/${f}`));
-const ledger = (used = 0) => newLedger({ plan: 'free', month: '2026-10', usedMinutes: used });
+const ledger = (used = 0) => newLedger({ plan: 'free', month: '2026-10',
+  usedMinutes: used, observedAt: NOW });
 
 test('the Kalshi closure goes to the node that already holds it', () => {
   const r = place(job(), nodes(), { ledger: ledger(), now: NOW });
@@ -21,7 +24,12 @@ test('the Kalshi closure goes to the node that already holds it', () => {
 
 test('unknown sizes are intervals, never zero: an unmeasured node is possible, not certain', () => {
   const r = place(job(), nodes(), { ledger: ledger(), now: NOW });
-  const crg = r.candidates.find(c => c.nodeId === 'cold-red-gate');
+  // A down host must not be selected merely for unknown resources.
+  assert.ok(r.refused.some(c=>c.nodeId==='cold-red-gate'&&
+    c.why.includes('node-not-observed-up')));
+  // Hypothetical new provider observation: sizes still remain intervals.
+  const crg = assess(job(),{...nodes().find(n=>n.id==='cold-red-gate'),
+    state:'up',observedAt:NOW},{ledger:ledger(),now:NOW});
   assert.equal(crg.certainty, 'possible');
   assert.equal(crg.price.max, Infinity);
   assert.ok(crg.price.min >= job().minutes);
@@ -30,7 +38,7 @@ test('unknown sizes are intervals, never zero: an unmeasured node is possible, n
 test('hosted minutes are refused once the free allowance cannot cover the job, never overdrawn', () => {
   const r = place({ ...job(), minutes: 20 }, nodes(), { ledger: ledger(1990), now: NOW });
   const hosted = r.refused.find(x => x.nodeId === 'github-hosted-ubuntu-24.04');
-  assert.ok(hosted.why.includes('would-overdraw-the-free-allowance'));
+  assert.ok(hosted.why.includes('hosted-allowance-exhausted-or-stale'));
 });
 
 test('with only a hosted runner left and an exhausted allowance there is no placement', () => {
@@ -56,7 +64,11 @@ test('a node too small for the job is refused with the field named', () => {
 
 test('a job that must run on named nodes is not placed elsewhere, and an effect waits for the Leader', () => {
   const effect = { ...job(), effect: true, mustRunOn: ['laptop'], requires: { capabilities: ['bare-cedar-fog'] } };
-  const r = place(effect, nodes(), { ledger: ledger(), now: NOW });
+  // The real laptop has no current receiver observation; only this synthetic
+  // heartbeat would permit its capacity to be considered.
+  const observed=nodes().map(n=>n.id==='laptop'?{...n,observedAt:NOW}:n);
+  assert.equal(place(effect,nodes(),{ledger:ledger(),now:NOW}).chosen,null);
+  const r = place(effect, observed, { ledger: ledger(), now: NOW });
   assert.equal(r.chosen, 'laptop');
   assert.equal(r.needsLeaderWords, true);
 });
@@ -112,4 +124,133 @@ test('two builders with identical store paths agree; a difference is top and que
   assert.deepEqual(top.differing, ['profile']);
   assert.equal(publishable(top), false);
   assert.equal(compareBuilds([{ nodeId: 'laptop', outputs: out }]).state, 'single');
+});
+
+test('absence of usage or freshness never becomes free private GitHub minutes',()=>{
+  assert.throws(()=>newLedger({plan:'free',month:'2026-10'}),/observed/);
+  const privateRunner=nodes().find(n=>n.id==='github-hosted-ubuntu-24.04');
+  assert.equal(privateRunner.state,'down');
+  const r=place(job(),[{...privateRunner,state:'up',observedAt:NOW}],
+    {now:NOW});
+  assert.equal(r.chosen,null);
+  assert.ok(r.refused[0].why.includes('no-observed-hosted-allowance'));
+  const stale=newLedger({plan:'free',month:'2026-10',usedMinutes:0,
+    observedAt:'2026-10-15T01:00:00.000Z'});
+  assert.equal(place(job(),[{...privateRunner,state:'up',observedAt:NOW}],
+    {ledger:stale,now:NOW}).chosen,null);
+});
+
+test('stale cloud capacity is refused; source snapshots never authorize a job',()=>{
+  const cloud=nodes().find(n=>n.id==='cloud-session');
+  assert.ok(cloud.observedAt);
+  assert.equal(place(job(),[cloud],{ledger:ledger(),now:NOW}).chosen,'cloud-session');
+  const later='2026-10-15T06:30:00Z';
+  const stale=place(job(),[cloud],{ledger:ledger(),now:later});
+  assert.equal(stale.chosen,null);
+  assert.ok(stale.refused[0].why.includes('node-availability-observation-stale-or-absent'));
+  assert.equal(place(job(),[{...cloud,state:'unverified',observedAt:later}],
+    {now:later}).chosen,null);
+});
+
+test('observed Free CircleCI credits select original source without spending GitHub minutes',()=>{
+  const now='2026-10-15T04:50:00.000Z';
+  const scope='red-cup-engineering/private';
+  const sourceRef='provider://circleci/free-observation';
+  const creditLedger=newObservedBudget({provider:'circleci-free-private',scope,
+    sourceRef,hardStop:true,observedAt:now,
+    expiresAt:'2026-10-15T05:50:00.000Z',remaining:{credits:250}});
+  const circle={id:'circleci-free-private',state:'up',observedAt:now,
+    cores:1,memoryGb:2,freeDiskGb:4,bandwidthMbps:100,
+    capabilities:['node','git'],closureCache:[],
+    cost:{kind:'metered-free',provider:'circleci-free-private',scope,
+      hardStop:true,maxJobMinutes:60,unitsPerMinute:{credits:5}}};
+  const sourceJob={...job(),visibility:'private',minutes:10,maxMinutes:30,
+    sourceEgress:{permitted:true,provider:'circleci-free-private',scope,
+      authorityRef:'office:engineering/free-ci-github-app'},
+    needs:{cores:1,memoryGb:2,freeDiskGb:1},closure:[]};
+  const noGrant=place({...sourceJob,sourceEgress:null},[circle],{now});
+  assert.equal(noGrant.chosen,null);
+  assert.ok(noGrant.refused[0].why.includes('private-source-egress-not-granted'));
+  const missing=place(sourceJob,[circle],{now});
+  assert.equal(missing.chosen,null);
+  assert.ok(missing.refused[0].why.includes('provider-budget-unobserved'));
+  const context={now,budgets:{[scope]:creditLedger}};
+  const eligible=place(sourceJob,[circle],context);
+  assert.equal(eligible.chosen,circle.id);
+  assert.deepEqual(eligible.candidates[0].budgetHold.units,{credits:150});
+  assert.equal(holdBudget(creditLedger,{jobId:sourceJob.id,provider:circle.cost.provider,
+    scope,now,units:{credits:150}}).ok,true);
+  assert.equal(budgetAvailable(creditLedger).credits,100);
+  const other=place({...sourceJob,id:'other'},[circle],context);
+  assert.equal(other.chosen,null);
+  assert.ok(other.refused[0].why.some(x=>x.includes('would-overdraw')));
+  settleBudget(creditLedger,{jobId:sourceJob.id,state:'spent',actualUnits:{credits:70}});
+  assert.equal(budgetAvailable(creditLedger).credits,180);
+  assert.equal(place({...sourceJob,id:'other'},[circle],context).chosen,circle.id);
+  assert.equal(place(sourceJob,[{...circle,publicOnly:true}],context).chosen,null);
+  assert.equal(place(sourceJob,[{...circle,observedAt:'2026-10-15T00:00:00.000Z'}],
+    context).chosen,null);
+  assert.equal(place(sourceJob,[{...circle,cost:{...circle.cost,hardStop:false}}],
+    context).chosen,null);
+  assert.equal(place({...sourceJob,maxMinutes:120},[circle],context).chosen,null);
+});
+
+test('Oracle Always Free multi-unit quotes cannot overspend either OCPU or GB-hour',()=>{
+  const now='2026-10-15T04:50:00.000Z';
+  const scope='oci/home-free/a1';
+  const remaining={ocpuHours:2,gbHours:12};
+  const b=newObservedBudget({provider:'oci-always-free-a1',scope,hardStop:true,
+    sourceRef:'provider://oci/native-quota-observation',
+    observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',remaining});
+  const worker={id:'oci-a1-existing-vm',state:'up',observedAt:now,
+    cores:2,memoryGb:12,freeDiskGb:10,bandwidthMbps:100,
+    capabilities:['node','git','guix'],closureCache:[],
+    cost:{kind:'metered-free',provider:'oci-always-free-a1',
+      scope,hardStop:true,maxJobMinutes:1440,
+      unitsPerMinute:{ocpuHours:2/60,gbHours:12/60}}};
+  const short={...job(),minutes:30,maxMinutes:30,closure:[],
+    sourceEgress:{permitted:true,provider:'oci-always-free-a1',scope,
+      authorityRef:'office:engineering/oracle-test-observation'},
+    needs:{cores:1,memoryGb:2,freeDiskGb:1}};
+  assert.equal(place(short,[worker],{now,budgets:{[scope]:b}}).chosen,worker.id);
+  const tooLong={...short,maxMinutes:120};
+  const result=place(tooLong,[worker],{now,budgets:{[scope]:b}});
+  assert.equal(result.chosen,null);
+  assert.ok(result.refused[0].why.some(x=>x.includes('ocpuHours')));
+  const memoryBound=newObservedBudget({provider:'oci-always-free-a1',scope,
+    sourceRef:'provider://oci/separate-memory-cap',hardStop:true,
+    observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',
+    remaining:{ocpuHours:8,gbHours:12}});
+  const memory=place(tooLong,[worker],{now,budgets:{[scope]:memoryBound}});
+  assert.equal(memory.chosen,null);
+  assert.ok(memory.refused[0].why.some(x=>x.includes('gbHours')));
+  assert.throws(()=>newObservedBudget({provider:'oci-always-free-a1',scope,
+    sourceRef:'provider://oci/not-hard-stop',hardStop:false,
+    observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',remaining}),/free-only/);
+});
+
+test('budget receipt expires and provider may not silently switch denomination',()=>{
+  const b=newObservedBudget({provider:'circleci-free-private',scope:'org/a',
+    sourceRef:'provider://circleci/another-one',hardStop:true,
+    observedAt:'2026-10-15T04:50:00.000Z',
+    expiresAt:'2026-10-15T05:00:00.000Z',remaining:{credits:200}});
+  const query={provider:'circleci-free-private',scope:'org/a',
+    now:'2026-10-15T04:55:00.000Z',units:{credits:75}};
+  assert.equal(quoteBudget(b,query).ok,true);
+  assert.equal(quoteBudget(b,{...query,now:'2026-10-15T05:00:00.000Z'}).ok,false);
+  assert.equal(quoteBudget(b,{...query,units:{dollars:1}}).ok,false);
+  assert.equal(quoteBudget(b,{...query,provider:'google-cloud'}).ok,false);
+  holdBudget(b,{jobId:'one',...query});
+  assert.throws(()=>holdBudget(b,{jobId:'one',...query}),/already/);
+  assert.throws(()=>settleBudget(b,{jobId:'one',state:'spent',
+    actualUnits:{credits:80}}),/exceeds/);
+  settleBudget(b,{jobId:'one',state:'void'});
+  assert.equal(budgetAvailable(b).credits,200);
+});
+
+test('hosted remaining minutes cannot be carried across a monthly reset without reobservation',()=>{
+  const l=newLedger({plan:'free',month:'2026-10',usedMinutes:0,
+    observedAt:'2026-10-31T23:45:00Z'});
+  assert.equal(minutePrice(l,'2026-10-31T23:55:00Z',10)!==null,true);
+  assert.equal(minutePrice(l,'2026-11-01T00:15:00Z',10),null);
 });
