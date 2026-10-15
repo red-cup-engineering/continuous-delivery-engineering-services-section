@@ -48,18 +48,23 @@ test('actual private Git source checkout is admitted only at its exact provider 
     git('add','package.json');git('commit','-qm','original');
     git('remote','add','origin','git@github.com:red-cup-engineering/git-services-section.git');
     const revision=git('rev-parse','HEAD');
+    // GitHub App CIRCLE_PROJECT_* names refer to the CircleCI project,
+    // not necessarily to the independently selected checkout source.
     const env={...process.env,CIRCLE_SHA1:revision,
-      CIRCLE_PROJECT_USERNAME:'red-cup-engineering',
-      CIRCLE_PROJECT_REPONAME:'git-services-section'};
+      CIRCLE_PROJECT_USERNAME:'circleci-org-alias',
+      CIRCLE_PROJECT_REPONAME:'different-project-display-name'};
     const observe=changes=>spawnSync('/usr/bin/bash',['-euc',steps[1].run.command],{
       cwd,env:{...env,...changes},encoding:'utf8',timeout:5000});
     assert.equal(observe({}).status,0);
     for(const bad of [
       {CIRCLE_SHA1:'a'.repeat(40)},{CIRCLE_SHA1:'HEAD'},{CIRCLE_SHA1:''},
-      {CIRCLE_PROJECT_USERNAME:'wrong-owner'},{CIRCLE_PROJECT_REPONAME:'other'},
-      {CIRCLE_PROJECT_USERNAME:''}
+      {CIRCLE_SHA1:'not-a-commit'}
     ])assert.notEqual(observe(bad).status,0,JSON.stringify(bad));
+    // Different CircleCI project names do not change checkout identity.
+    assert.equal(observe({CIRCLE_PROJECT_USERNAME:'',CIRCLE_PROJECT_REPONAME:''}).status,0);
     git('remote','set-url','origin','https://attacker.example/other.git');
     assert.notEqual(observe({}).status,0,'foreign Git checkout must refuse');
+    git('remote','set-url','origin','git@github.com:red-cup-engineering/another-private-repo.git');
+    assert.notEqual(observe({}).status,0,'other private checkout must refuse');
   }finally{rmSync(cwd,{recursive:true,force:true});}
 });
