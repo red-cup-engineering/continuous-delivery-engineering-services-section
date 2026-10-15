@@ -9,7 +9,7 @@ const input={project:'five-six-one-group-dev',region:'us-central1',connection:'r
   trigger:'git-source-custody',image,serviceAccount:
   'projects/five-six-one-group-dev/serviceAccounts/ci-git-source@five-six-one-group-dev.iam.gserviceaccount.com'};
 const s=selectCloudBuildSource(input),id='01234567-89ab-4def-8123-456789abcdef';
-const trigger={id,name:input.trigger,filename:'cloudbuild.yaml',serviceAccount:input.serviceAccount,
+const trigger={id,name:input.trigger,eventType:'REPO',filename:'cloudbuild.yaml',serviceAccount:input.serviceAccount,
   approvalConfig:{approvalRequired:true},repositoryEventConfig:{
     repository:s.repoResource,push:{branch:'^main$'}},substitutions:{_NODE_IMAGE:image}};
 function host({missing=false,mutate=false,connection={},repo={},billing={},account={},listRows=null}={}){
@@ -75,7 +75,9 @@ test('provider trigger conflicts and missing manual approval are refused',()=>{
     [{...trigger,repositoryEventConfig:{...trigger.repositoryEventConfig,push:{branch:'.*'}}}],
     [{...trigger,includedFiles:['no-real-source/**']}],
     [{...trigger,ignoredFiles:['**/*.mjs']}],
-    [{...trigger,substitutions:{...trigger.substitutions,_SKIP_TESTS:'true'}}]])
+    [{...trigger,substitutions:{...trigger.substitutions,_SKIP_TESTS:'true'}}],
+    [{...trigger,eventType:'WEBHOOK'}],
+    [{...trigger,eventType:'PUSH'}]])
     assert.throws(()=>receiveCloudBuildTrigger({...input,apply:true},
       host({listRows,mutate:true})));
 });
