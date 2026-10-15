@@ -237,7 +237,15 @@ test('section CI exercises current caller contracts without retired intake files
   const workflow = YAML.parse(fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
   const job = workflow.jobs['agent-work-contract'];
   assert.equal(job['runs-on'], 'ubuntu-24.04');
-  assert.equal(workflow.jobs['node-package'].with['runs-on'], '["self-hosted","Linux","X64","bare-cedar-fog"]');
+  // Source-only public CI must complete even when the old laptop is down.
+  // The original private-composition workflow remains a separate reusable
+  // consumer contract; a source-only green check cannot stand in for it.
+  assert.deepEqual(Object.keys(workflow.jobs), ['agent-work-contract']);
+  assert.doesNotMatch(JSON.stringify(workflow), /self-hosted|bare-cedar-fog/u);
+  const native=YAML.parse(fs.readFileSync(new URL('../.github/workflows/node-package.yml', import.meta.url), 'utf8'));
+  assert.equal(native.on.workflow_call.inputs['runs-on'].required, true);
+  assert.equal(native.jobs.discover['runs-on'], '${{ fromJSON(inputs.runs-on) }}');
+  assert.equal(native.jobs.package['runs-on'], '${{ fromJSON(inputs.runs-on) }}');
   assert.deepEqual(workflow.permissions, {contents: 'read'});
   assert.equal(job.steps.at(-1).run.trim(),'npm run test:public-source-contract');
   const publicScript=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'))
