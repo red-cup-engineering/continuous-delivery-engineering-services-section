@@ -118,7 +118,7 @@ export function qualifyNativeTrigger(row,source){
     row.autodetect!==undefined||row.build!==undefined||row.gitFileSource!==undefined||
     (row.includedFiles?.length??0)!==0||(row.ignoredFiles?.length??0)!==0||
     (row.filter!==undefined&&row.filter!=='')||
-    (row.eventType!==undefined&&row.eventType!=='PUSH')||
+    (row.eventType!==undefined&&row.eventType!=='REPO')||
     row.repositoryEventConfig?.pullRequest!==undefined||
     (row.repositoryEventConfig?.repositoryType!==undefined&&
       row.repositoryEventConfig.repositoryType!=='GITHUB')||
