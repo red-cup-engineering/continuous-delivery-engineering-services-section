@@ -129,3 +129,26 @@ test('closure: follows internal dependencies, rewrites workspace ranges to exact
   const lost = rewriteManifest(index.get('@x/lost').manifest, 'v', {});
   assert.deepEqual(lost.dropped, ['@x/absent']); assert.equal(lost.dependencies['@x/absent'], undefined);
 });
+
+import { publishPacked, readPublishToken, writeNpmrc } from '../src/release/publish-packed.mjs';
+test('publish-packed: token from the credential directory only, dependencies first, present versions are idempotent, root is promoted', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'cred-'));
+  assert.throws(() => readPublishToken({}), /credential-missing/);
+  assert.throws(() => readPublishToken({ CREDENTIALS_DIRECTORY: d }), /credential-missing/);
+  fs.writeFileSync(path.join(d, 'registry-publish-token'), 'secret-token\n');
+  const token = readPublishToken({ CREDENTIALS_DIRECTORY: d });
+  assert.equal(token, 'secret-token');
+  const rc = writeNpmrc(path.join(d, 'w'), 'https://registry.561.group/', token);
+  assert.equal(fs.statSync(rc).mode & 0o777, 0o600);
+  assert.equal(fs.readFileSync(rc, 'utf8'), '//registry.561.group/:_authToken=secret-token\n');
+  const plan = { root: 'a', files: [{ name: 'b', version: '1.0.0-sha.abc1234', tarball: 'b.tgz' }, { name: 'a', version: '1.0.0-sha.abc1234', tarball: 'a.tgz' }] };
+  const calls = [];
+  const ok = await publishPacked({ plan, packDir: '/p', registry: 'https://r/', npmrc: rc, run: async (c, a) => (calls.push(a), { status: 0 }) });
+  assert.deepEqual([ok.ok, ok.promoted, ok.root], [true, 'production', 'a@1.0.0-sha.abc1234']);
+  assert.equal(calls[0][1], '/p/b.tgz'); assert.deepEqual(calls[2].slice(0, 2), ['dist-tag', 'add']);
+  assert.ok(calls.every(a => !a.join(' ').includes('secret-token')));
+  const again = await publishPacked({ plan, packDir: '/p', registry: 'r', npmrc: rc, run: async (c, a) => (a[0] === 'publish' ? { status: 1, stderr: 'You cannot publish over the previously published versions' } : { status: 0 }) });
+  assert.deepEqual([again.ok, again.published.length, again.present.length], [true, 0, 2]);
+  const bad = await publishPacked({ plan, packDir: '/p', registry: 'r', npmrc: rc, run: async () => ({ status: 1, stderr: 'E401' }) });
+  assert.deepEqual([bad.ok, bad.failedAt], [false, 'b']);
+});
