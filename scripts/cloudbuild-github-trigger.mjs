@@ -63,9 +63,8 @@ export function discoverNativeCloudBuildSource(input,{execute=execFileSync}={}){
   const current=read(['projects','describe',project,'--format=json']);
   if(current.projectId!==project||current.lifecycleState!=='ACTIVE')
     throw new Error('selected Google Cloud project unavailable');
-  const billing=read(['billing','projects','describe',project,'--format=json']);
-  if(billing.projectId!==project||billing.billingEnabled!==true)
-    throw new Error('selected Google Cloud billing unavailable');
+  // Discovery is a read-only source lookup. Billing permissions must not block
+  // finding an existing connection; inspect/ensure still qualify billing before writes.
   const connections=read(['builds','connections','list','--project='+project,
     '--region='+region,'--format=json']);
   if(!Array.isArray(connections)||connections.length>32)
