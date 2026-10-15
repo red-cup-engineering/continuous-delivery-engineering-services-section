@@ -72,15 +72,26 @@ test('provider trigger conflicts and missing manual approval are refused',()=>{
   const other={...trigger,id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',name:'other-trigger'};
   for(const listRows of [[other],[{...trigger,approvalConfig:{approvalRequired:false}}],
     [{...trigger,substitutions:{_NODE_IMAGE:'wrong'}}],
-    [{...trigger,repositoryEventConfig:{...trigger.repositoryEventConfig,push:{branch:'.*'}}}]])
+    [{...trigger,repositoryEventConfig:{...trigger.repositoryEventConfig,push:{branch:'.*'}}}],
+    [{...trigger,includedFiles:['no-real-source/**']}],
+    [{...trigger,ignoredFiles:['**/*.mjs']}],
+    [{...trigger,substitutions:{...trigger.substitutions,_SKIP_TESTS:'true'}}]])
     assert.throws(()=>receiveCloudBuildTrigger({...input,apply:true},
       host({listRows,mutate:true})));
 });
 test('build readback observes actual successful step and rejects switched identity',()=>{
-  const build={id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',buildTriggerId:id,
-    status:'SUCCESS',substitutions:{COMMIT_SHA:'c'.repeat(40),REPO_FULL_NAME:input.repository},
-    steps:[{id:'source-custody-regressions',status:'SUCCESS'}]};
-  const request={id:build.id,triggerId:id,commit:'c'.repeat(40),repository:input.repository,step:'source-custody-regressions'};
+  const sourceResource=s.repoResource,serviceAccount=s.serviceAccount,command='npm run verify';
+  const build={id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',projectId:s.project,
+    buildTriggerId:id,status:'SUCCESS',
+    source:{connectedRepository:{repository:sourceResource,revision:'refs/heads/main'}},
+    sourceProvenance:{resolvedConnectedRepository:{repository:sourceResource,revision:'c'.repeat(40)}},
+    serviceAccount,approval:{state:'APPROVED',config:{approvalRequired:true},result:{decision:'APPROVED'}},
+    options:{machineType:'E2_STANDARD_2',logging:'CLOUD_LOGGING_ONLY'},
+    substitutions:{COMMIT_SHA:'c'.repeat(40),REPO_FULL_NAME:input.repository,BRANCH_NAME:'main'},
+    steps:[{id:'source-custody-regressions',status:'SUCCESS',name:image,entrypoint:'bash',
+      args:['-euc','# immutable original source\nnpm run verify\n'],env:['BUILDER_IMAGE='+image]}]};
+  const request={id:build.id,triggerId:id,commit:'c'.repeat(40),repository:input.repository,
+    step:'source-custody-regressions',sourceResource,serviceAccount,image,command};
   assert.equal(qualifyNativeCloudBuildResult(build,request).state,'TEST_EXECUTED');
   for(const changed of [{status:'FAILURE'}, {steps:[]},{buildTriggerId:'bad'},
     {substitutions:{COMMIT_SHA:'d'.repeat(40),REPO_FULL_NAME:input.repository}}])
@@ -88,7 +99,19 @@ test('build readback observes actual successful step and rejects switched identi
   const result=readNativeCloudBuildResult({project:input.project,region:input.region,...request},
     {execute:(cmd,args)=>{assert.equal(args[1],'describe');return JSON.stringify(build);}});
   assert.equal(result.providerReadback,true);
-  const alternate={...build,steps:[{id:'different-test-suite',status:'SUCCESS'}]};
+  const alternate={...build,steps:[{...build.steps[0],id:'different-test-suite'}]};
   assert.equal(qualifyNativeCloudBuildResult(alternate,{...request,step:'different-test-suite'}).selectedStep,'different-test-suite');
   assert.throws(()=>qualifyNativeCloudBuildResult(alternate,request));
+  // Previously accepted: unrelated storage source and an echo-only fake test.
+  for(const change of [
+    {source:{storageSource:{bucket:'unrelated',object:'spoof.tgz'}}},
+    {sourceProvenance:{resolvedStorageSource:{bucket:'unrelated',object:'spoof.tgz'}}},
+    {sourceProvenance:{resolvedConnectedRepository:{repository:sourceResource,revision:'d'.repeat(40)}}},
+    {approval:{state:'PENDING',config:{approvalRequired:true}}},
+    {serviceAccount:'projects/other/serviceAccounts/admin@other.iam.gserviceaccount.com'},
+    {options:{machineType:'E2_STANDARD_2',logging:'CLOUD_LOGGING_ONLY',pool:{name:'wrong'}}},
+    {steps:[{...build.steps[0],name:'busybox',args:['-euc','echo done'],env:[]}]},
+    {steps:[{...build.steps[0],args:['-euc','echo looks good'],env:['BUILDER_IMAGE='+image]}]},
+    {substitutions:{...build.substitutions,BRANCH_NAME:'release'}}
+  ])assert.throws(()=>qualifyNativeCloudBuildResult({...build,...change},request));
 });

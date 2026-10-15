@@ -70,7 +70,14 @@ export function qualifyNativeTrigger(row,source){
     row.repositoryEventConfig?.push?.invertRegex===true||
     row.substitutions?._NODE_IMAGE!==source.image||
     row.github!==undefined||row.triggerTemplate!==undefined||
-    row.autodetect!==undefined||row.build!==undefined||row.gitFileSource!==undefined)
+    row.autodetect!==undefined||row.build!==undefined||row.gitFileSource!==undefined||
+    (row.includedFiles?.length??0)!==0||(row.ignoredFiles?.length??0)!==0||
+    (row.filter!==undefined&&row.filter!=='')||
+    (row.eventType!==undefined&&row.eventType!=='PUSH')||
+    row.repositoryEventConfig?.pullRequest!==undefined||
+    (row.repositoryEventConfig?.repositoryType!==undefined&&
+      row.repositoryEventConfig.repositoryType!=='GITHUB')||
+    Object.keys(row.substitutions??{}).length!==1)
     throw new Error('Cloud Build trigger contradicts private approved main-source selection');
   return {id:row.id,name:row.name,repository:source.repository,project:source.project,
     region:source.region,approvalRequired:true,providerIdentityChecked:true};
@@ -126,18 +133,54 @@ export function receiveCloudBuildTrigger(input,{execute=execFileSync}={}){
     executed:false,remainingFreeQuotaChecked:false};
 }
 
-export function qualifyNativeCloudBuildResult(build,{id,triggerId,commit,repository,step}){
+/** An executed CI receipt needs independently resolved immutable provider source
+ * and actual executable test steps. Event substitutions and display step names
+ * alone are insufficient: a successful unrelated build can claim both. */
+export function qualifyNativeCloudBuildResult(build,{
+    id,triggerId,commit,repository,step,sourceResource,serviceAccount,image,command
+  }){
   exact('build ID',id,pattern.id);exact('trigger ID',triggerId,pattern.id);
   exact('source commit',commit,pattern.commit);exact('repository',repository,pattern.repo);
   exact('selected test step',step,/^[a-z][a-z0-9-]{2,63}$/u);
-  if(!build||build.id!==id||build.status!=='SUCCESS'||build.buildTriggerId!==triggerId||
+  exact('connected source resource',sourceResource,
+    /^projects\/[a-z][a-z0-9-]+\/locations\/[a-z]+-[a-z0-9]+[0-9]\/connections\/[A-Za-z0-9_-]+\/repositories\/[A-Za-z0-9_-]+$/u);
+  exact('build service account',serviceAccount,
+    /^projects\/[a-z][a-z0-9-]+\/serviceAccounts\/[a-z][a-z0-9-]*@[a-z][a-z0-9-]*\.iam\.gserviceaccount\.com$/u);
+  exact('builder image digest',image,pattern.image);
+  if(typeof command!=='string'||command.length>256||
+     !/^(?:npm|pnpm|yarn|node) [A-Za-z0-9_ ./:-]+$/u.test(command))
+    throw new TypeError('exact original test command required');
+  const [project,region]=[sourceResource.split('/')[1],sourceResource.split('/')[3]];
+  const selected=Array.isArray(build?.steps)?build.steps.filter(x=>x.id===step):[];
+  const actual=selected[0];
+  const lines=typeof actual?.args?.[1]==='string'
+    ? actual.args[1].split(/\r?\n/u).map(x=>x.trim()):[];
+  const source=build?.sourceProvenance?.resolvedConnectedRepository;
+  if(!build||build.id!==id||build.projectId!==project||
+    (build.name!==undefined&&build.name!==`projects/${project}/locations/${region}/builds/${id}`)||
+    build.status!=='SUCCESS'||build.buildTriggerId!==triggerId||
     build.substitutions?.COMMIT_SHA!==commit||
     build.substitutions?.REPO_FULL_NAME?.toLowerCase()!==repository.toLowerCase()||
+    build.substitutions?.BRANCH_NAME!=='main'||
+    build.source?.connectedRepository?.repository!==sourceResource||
+    source?.repository!==sourceResource||source?.revision!==commit||
+    build.serviceAccount!==serviceAccount||
+    build.approval?.state!=='APPROVED'||
+    build.approval?.config?.approvalRequired!==true||
+    build.approval?.result?.decision!=='APPROVED'||
+    build.options?.machineType!=='E2_STANDARD_2'||
+    build.options?.logging!=='CLOUD_LOGGING_ONLY'||
+    build.options?.pool!==undefined||build.options?.workerPool!==undefined||
+    build.availableSecrets!==undefined||
+    (Array.isArray(build.secrets)&&build.secrets.length>0)||
     !Array.isArray(build.steps)||build.steps.length<1||build.steps.length>64||
-    build.steps.some(x=>x.status!=='SUCCESS')||
-    build.steps.filter(x=>x.id===step).length!==1)
-    throw new Error('native provider build did not execute the exact source-custody tests');
-  return {state:'TEST_EXECUTED',id,commit,repository,selectedStep:step,executedSteps:build.steps.length,
+    build.steps.some(x=>x.status!=='SUCCESS')||selected.length!==1||
+    actual.name!==image||actual.entrypoint!=='bash'||
+    actual.args?.[0]!=='-euc'||!lines.includes(command)||
+    !Array.isArray(actual.env)||!actual.env.includes('BUILDER_IMAGE='+image))
+    throw new Error('provider did not execute the approved original source test on the connected Git revision');
+  return {state:'TEST_EXECUTED',id,commit,repository,
+    sourceResource,selectedStep:step,executedSteps:build.steps.length,
     logUrl:typeof build.logUrl==='string'?build.logUrl:null,providerReadback:true,
     billedMinutesVerified:false};
 }
@@ -146,11 +189,18 @@ export function readNativeCloudBuildResult(request,{execute=execFileSync}={}){
   const project=exact('project',request?.project,pattern.project);
   const region=exact('region',request?.region,pattern.region);
   const id=exact('build',request?.id,pattern.id);
+  const sourceResource=exact('source resource',request?.sourceResource,
+    /^projects\/[a-z][a-z0-9-]+\/locations\/[a-z]+-[a-z0-9]+[0-9]\/connections\/[A-Za-z0-9_-]+\/repositories\/[A-Za-z0-9_-]+$/u);
+  if(!sourceResource.startsWith('projects/'+project+'/locations/'+region+'/'))
+    throw new TypeError('build source does not belong to selected project and region');
+  if(typeof request?.serviceAccount!=='string'||
+     !request.serviceAccount.startsWith('projects/'+project+'/serviceAccounts/'))
+    throw new TypeError('build principal differs from selected project');
   const build=nativeGcloud(['builds','describe',id,'--project='+project,'--region='+region,'--format=json'],execute);
   return {...qualifyNativeCloudBuildResult(build,request),project,region};
 }
 
-const usage='Usage: cloudbuild-github-trigger inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID';
+const usage='Usage: cloudbuild-github-trigger inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID --source-resource=projects/.../repositories/... --service-account=projects/.../serviceAccounts/... --image=IMAGE@sha256:DIGEST --command='npm run verify'';
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
   try {
     const [mode,...opts]=process.argv.slice(2);
@@ -164,12 +214,12 @@ if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
         fields[m[1]]=m[2];
       }
       const keys=mode==='read-build'
-        ?['project','region','id','trigger-id','commit','repository','step']
+        ?['project','region','id','trigger-id','commit','repository','step','source-resource','service-account','image','command']
         :['project','region','connection','repository-id','repository','trigger','image','service-account'];
       if(Object.keys(fields).length!==keys.length||Object.keys(fields).some(k=>!keys.includes(k)))
         throw new TypeError(usage);
       const value=mode==='read-build'
-        ? readNativeCloudBuildResult({...fields,triggerId:fields['trigger-id']})
+        ? readNativeCloudBuildResult({...fields,triggerId:fields['trigger-id'],sourceResource:fields['source-resource'],serviceAccount:fields['service-account']})
         : receiveCloudBuildTrigger({...fields,repositoryId:fields['repository-id'],
           serviceAccount:fields['service-account'],apply:mode==='ensure'});
       process.stdout.write(JSON.stringify(value)+'\n');
