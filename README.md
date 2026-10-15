@@ -77,6 +77,32 @@ public-source contract job runs them without private credentials or the
 unavailable private Git Services peer. GCP account/installation effects require
 an authenticated provider session; the source tests do not substitute for it.
 
+
+### Execute the selected private source, rather than stopping at an installed trigger
+
+The original \`scripts/cloudbuild-github-trigger.mjs\` now owns the complete
+provider request boundary. After \`discover\`, \`inspect\` and (if necessary)
+\`ensure\` have received the actual installed, manually approved native trigger,
+\`plan-build\` reads the same GCP identity and emits the exact
+\`gcloud builds triggers run --sha=<40-hex-commit>\` request **without running it**.
+Only \`request-build\` with \`--authorize-request=pending\` actually submits that
+request. It neither approves the pending build nor claims tested software; an
+independent authorized approver must check actual budget/free quota and approve
+it. The request reads the native build ID and verifies the exact commit,
+connected source, trigger, service account and required PENDING approval.
+If the provider response or readback is ambiguous, **do not retry**: reconcile
+that request from GCP's actual build inventory first, to avoid duplicates and
+unintended billed minutes. No parallel ledger or machine registry is introduced.
+
+After approval and successful execution, use existing \`read-build\` with
+the real build ID and original selected test command. The receiver admits
+either a normal main-source build or an exact pinned-SHA invocation, **only**
+when GCP's resolved connected repository and immutable commit agree, the
+original full test step actually passed, and the protected image/principal
+and approval evidence match. An accepted source-only CI run is not Guix
+promotion. The installed service still requires LAGOON generation,
+supervisor, process and native work readback.
+
 ## Runner custody: normative Group default (2026-10-13)
 
 **Use our own machines for ordinary Group CI, change receiving, branch intake, and releases. Do not select GitHub-hosted runners as an implicit fallback.** The existing caller generator requires a `self-hosted` label and an explicit machine or pool identity. For example, `["self-hosted","Linux","X64","bare-cedar-fog"]` names a machine observed completing jobs for `561-group`. A different organization or repository may not have permission to use it.
