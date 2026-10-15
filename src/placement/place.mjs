@@ -41,8 +41,23 @@ export function assess(job, node, { ledger = null, budgets = {}, now }) {
   for (const [k, v] of Object.entries(f)) if (v === 'no') why.push(`too-small:${k}`);
   let scarcity = 0, budgetHold = null;
   if (node.cost?.kind === 'hosted-minutes') {
+    // Minute-based external executions must hold their worst-case runtime.
+    // Quoting the optimistic estimate can exhaust free minutes mid-job.
+    const maximum=job.maxMinutes;
+    if(!Number.isSafeInteger(job.minutes)||job.minutes<=0||
+       !Number.isSafeInteger(maximum)||maximum<job.minutes||
+       (node.cost.maxJobMinutes!==undefined&&maximum>node.cost.maxJobMinutes))
+      why.push('bounded-max-hosted-minutes-required');
     if (!ledger) why.push('no-observed-hosted-allowance');
-    else { const p = minutePrice(ledger, now, job.minutes); if (p === null) why.push('hosted-allowance-exhausted-or-stale'); else scarcity = p; }
+    else if(Number.isSafeInteger(maximum)&&maximum>0){
+      const price=minutePrice(ledger,now,maximum);
+      if(price===null)why.push('hosted-allowance-exhausted-or-stale');
+      else {
+        scarcity=price;
+        budgetHold={kind:'hosted-minutes',minutes:maximum,
+          plan:ledger.plan,month:ledger.month,observedAt:ledger.observedAt};
+      }
+    }
   } else if(node.cost?.kind==='metered-free'){
     if(node.cost.hardStop!==true) why.push('provider-may-charge-above-free-tier');
     if(!Number.isFinite(job.maxMinutes)||job.maxMinutes<=0||

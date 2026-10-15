@@ -52,6 +52,18 @@ GitHub minutes to zero. Other qualified nodes remain eligible even without
 a GitHub allowance. Non-observed node status, unknown cost kinds and private
 source on public-only compute refuse.
 
+**Settle only independently observed spent minutes and independent
+build agreement.** The original GitHub hosted allowance now prices and
+reserves a job's *maximum* bounded duration; a missing maximum cannot turn
+an optimistic estimate into free capacity. Consumed minutes without a
+provider readback, negative consumption, overrun beyond the original hold,
+or replay of a settled job are refused without mutating the balance.
+A single build or multiple readings from one node may be locally inspected
+but may **not** be published as independently verified Guix/store output;
+only agreeing claims from distinct, separately authenticated builders are
+publishable. The placement/settlement layer still requires an actual
+single-writer ledger and native provider readback before external effects.
+
 **Read original quota before planning and hold before dispatch.** Provider
 adapters must authenticate fresh native, non-secret provider readback and
 supply an account-scoped free-only budget observation. Its `sourceRef`,
