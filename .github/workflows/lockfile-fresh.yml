@@ -90,35 +90,74 @@ jobs:
           path: tool-workspace
           token: ${{ secrets.source-read-token }}
           persist-credentials: false
-          submodules: recursive
+          submodules: false
+          filter: blob:none
           fetch-depth: 1
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - name: Install the committed checker workspace
+      - name: Receive only the selected checker Gitlinks
+        shell: bash
         env:
           TOOL_WORKSPACE_REVISION: ${{ inputs.tool-workspace-revision }}
           TOOL_WORKSPACE_CHECKER_PATH: ${{ inputs.tool-workspace-checker-path }}
           SUPPLIER_REVISION: ${{ inputs.supplier-revision }}
+          SOURCE_READ_TOKEN: ${{ secrets.source-read-token }}
         run: |
+          set -euo pipefail
           workspace="$GITHUB_WORKSPACE/tool-workspace"
-          [[ "$(git -C "$workspace" rev-parse HEAD)" == "$TOOL_WORKSPACE_REVISION" ]] || { echo 'composed workspace differs from its admitted revision' >&2; exit 1; }
+          test "$(git -C "$workspace" rev-parse HEAD)" = "$TOOL_WORKSPACE_REVISION"
+          test -n "$SOURCE_READ_TOKEN"
+          export GH_TOKEN="$SOURCE_READ_TOKEN"
+          root="$workspace"
+          remaining="$TOOL_WORKSPACE_CHECKER_PATH"
+          depth=0
+          while [ -n "$remaining" ]; do
+            selected=''
+            prefix=''
+            tail="$remaining"
+            while [ -n "$tail" ]; do
+              part="${tail%%/*}"
+              if [ "$tail" = "$part" ]; then tail=''; else tail="${tail#*/}"; fi
+              prefix="${prefix:+$prefix/}$part"
+              entry="$(git -C "$root" ls-tree HEAD -- "$prefix")"
+              if [ "${entry%% *}" = 160000 ]; then selected="$prefix"; break; fi
+            done
+            if [ -z "$selected" ]; then echo 'checker source is not reached by selected Gitlinks' >&2; exit 1; fi
+            expected="$(printf '%s\n' "$entry" | awk '{print $3}')"
+            [[ "$expected" =~ ^[a-f0-9]{40}$ ]] || exit 1
+            git -C "$root" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+              submodule update --init --checkout --depth=1 -- "$selected"
+            root="$root/$selected"
+            test "$(git -C "$root" rev-parse HEAD)" = "$expected"
+            depth=$((depth+1))
+            if [ "$depth" -gt 8 ]; then echo 'nested source depth exceeded' >&2; exit 1; fi
+            if [ "$remaining" = "$selected" ]; then remaining=''; else remaining="${remaining#"$selected"/}"; fi
+          done
+          test "$(realpath "$root")" = "$(realpath "$workspace/$TOOL_WORKSPACE_CHECKER_PATH")"
+          test "$(git -C "$root" rev-parse HEAD)" = "$SUPPLIER_REVISION"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install the exact committed checker
+        shell: bash
+        env:
+          TOOL_WORKSPACE_CHECKER_PATH: ${{ inputs.tool-workspace-checker-path }}
+          SUPPLIER_REVISION: ${{ inputs.supplier-revision }}
+        run: |
+          set -euo pipefail
+          workspace="$GITHUB_WORKSPACE/tool-workspace"
           checker="$workspace/$TOOL_WORKSPACE_CHECKER_PATH"
-          [[ -d "$checker" ]] || { echo 'selected checker Gitlink was not received' >&2; exit 1; }
-          checker=$(realpath "$checker")
-          checker_root=$(realpath "$(git -C "$checker" rev-parse --show-toplevel)")
-          [[ "$checker_root" == "$checker" ]] || { echo 'checker path must identify the selected Gitlink root' >&2; exit 1; }
-          [[ "$(git -C "$checker_root" rev-parse HEAD)" == "$SUPPLIER_REVISION" ]] || { echo 'checker source differs from its exact supplier revision' >&2; exit 1; }
-          [[ "$checker_root" == "$workspace/"* ]] || { echo 'checker source escaped the composed workspace' >&2; exit 1; }
-          package_manager=$(node -e 'const p=require(process.argv[1]);process.stdout.write(p.packageManager??"")' "$workspace/package.json")
-          [[ "$package_manager" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'composed workspace must declare an exact pnpm version' >&2; exit 1; }
-          cd "$workspace"
-          npm exec --yes --package="$package_manager" -- pnpm install --frozen-lockfile --filter "./$TOOL_WORKSPACE_CHECKER_PATH"...
+          test "$(git -C "$checker" rev-parse HEAD)" = "$SUPPLIER_REVISION"
+          test -s "$checker/package-lock.json"
+          cd "$checker"
+          npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org/
       - name: Lockfile freshness
         env:
           DIRECTORY: ${{ inputs.directory }}
           TOOL_WORKSPACE_CHECKER_PATH: ${{ inputs.tool-workspace-checker-path }}
+          GH_TOKEN: ${{ secrets.source-read-token }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!gh auth git-credential'
         run: |
           workspace="$GITHUB_WORKSPACE/tool-workspace"
           checker="$workspace/$TOOL_WORKSPACE_CHECKER_PATH"
@@ -129,9 +168,8 @@ jobs:
           checker=$(realpath "$checker")
           checker_root=$(realpath "$(git -C "$checker" rev-parse --show-toplevel)")
           [[ "$checker_root" == "$checker" ]] || { echo 'checker path must identify the selected Gitlink root' >&2; exit 1; }
-          package_manager=$(node -e 'process.stdout.write(require(process.argv[1]).packageManager)' "$workspace/package.json")
           status=0
-          (cd "$workspace" && npm exec --yes --package="$package_manager" -- pnpm --filter "./$TOOL_WORKSPACE_CHECKER_PATH" exec node scripts/lockfile-fresh.mjs "$head_directory" "${base_args[@]}") > "$FRESHNESS_FILE" || status=$?
+          (cd "$checker" && node scripts/lockfile-fresh.mjs "$head_directory" "${base_args[@]}") > "$FRESHNESS_FILE" || status=$?
           if [[ ! -s "$FRESHNESS_FILE" ]]; then
             echo 'native lockfile checker produced no freshness result' >&2
             if (( status != 0 )); then exit "$status"; fi

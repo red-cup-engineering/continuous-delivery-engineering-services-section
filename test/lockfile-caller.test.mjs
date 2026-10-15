@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { generate, renderLockfileFreshCaller, REF, REUSABLE } from '../generator/generate-ci.mjs';
 
@@ -175,5 +176,76 @@ test('exact composed source and existing secret name are required', () => {
   }
   for (const sourceTokenSecret of [undefined, '', 'secret-name', '${{ secrets.NAME }}']) {
     assert.throws(() => renderLockfileFreshCaller(source, { ...bindingOptions, sourceTokenSecret }), /existing source-read secret name/);
+  }
+});
+
+const ownerLockWorkflow = fs.readFileSync(new URL('../.github/workflows/lockfile-fresh.yml', import.meta.url), 'utf8');
+const ownerLockSteps = YAML.parse(ownerLockWorkflow).jobs['lockfile-fresh'].steps;
+const onlySelected = ownerLockSteps.find(step => step.name === 'Receive only the selected checker Gitlinks');
+const sourceInstall = ownerLockSteps.find(step => step.name === 'Install the exact committed checker');
+
+function selectedGitlinksFixture(t, depth) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cd-selected-gitlinks-'));
+  t.after(() => fs.rmSync(home, {recursive: true, force: true}));
+  const env = {...process.env, GIT_AUTHOR_NAME: 'CI fixture', GIT_COMMITTER_NAME: 'CI fixture',
+    GIT_AUTHOR_EMAIL: 'ci@example.test', GIT_COMMITTER_EMAIL: 'ci@example.test', GIT_ALLOW_PROTOCOL: 'file'};
+  const git = (directory, ...args) => {
+    const result = spawnSync('git', args, {cwd: directory, env, encoding: 'utf8'});
+    assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
+    return result.stdout.trim();
+  };
+  const source = path.join(home, 'supplier');
+  const parent = path.join(home, 'parent');
+  const enterprise = path.join(home, 'enterprise');
+  const consumer = path.join(home, 'tool-workspace');
+  for (const root of [source, parent, enterprise]) {
+    fs.mkdirSync(root);
+    git(root, 'init', '-q');
+  }
+  fs.writeFileSync(path.join(source, 'package.json'), '{"name":"checker"}\n');
+  git(source, 'add', 'package.json');
+  git(source, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'supplier');
+  const sourceRevision = git(source, 'rev-parse', 'HEAD');
+  let selectedPath;
+  if (depth === 2) {
+    git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'services/checker');
+    git(parent, 'add', '-A');
+    git(parent, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'parent');
+    git(enterprise, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', parent, 'lib/engineering');
+    selectedPath = 'lib/engineering/services/checker';
+  } else {
+    git(enterprise, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'lib/checker');
+    selectedPath = 'lib/checker';
+  }
+  git(enterprise, 'add', '-A');
+  git(enterprise, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'enterprise');
+  const revision = git(enterprise, 'rev-parse', 'HEAD');
+  git(home, 'clone', '-q', '--no-checkout', enterprise, consumer);
+  git(consumer, 'checkout', '-q', 'HEAD');
+  const run = (overrides = {}) => spawnSync('bash', ['-euo', 'pipefail', '-c', onlySelected.run], {
+    cwd: home, encoding: 'utf8',
+    env: {...env, GITHUB_WORKSPACE: home, TOOL_WORKSPACE_REVISION: revision,
+      TOOL_WORKSPACE_CHECKER_PATH: selectedPath, SUPPLIER_REVISION: sourceRevision,
+      SOURCE_READ_TOKEN: 'fixture-read-only', ...overrides},
+  });
+  return {run, consumer, selectedPath, sourceRevision, git};
+}
+
+test('selected checker Gitlink source survives one and two-level native Git receiving', t => {
+  assert.ok(onlySelected, 'source-owned selector step must exist');
+  assert.ok(sourceInstall, 'existing committed checker has an independent native installer');
+  const workflowCheckout = ownerLockSteps.find(s => s.with?.path === 'tool-workspace');
+  assert.equal(workflowCheckout.with.submodules, false, 'no whole-estate recursive checkout');
+  assert.match(sourceInstall.run, /npm ci --legacy-peer-deps --ignore-scripts/);
+  assert.match(ownerLockSteps.at(-1).run, /node scripts\/lockfile-fresh\.mjs/);
+  for (const depth of [1, 2]) {
+    const f = selectedGitlinksFixture(t, depth);
+    const got = f.run();
+    assert.equal(got.status, 0, `depth=${depth}: ${got.stderr}`);
+    assert.equal(f.git(path.join(f.consumer, f.selectedPath), 'rev-parse', 'HEAD'), f.sourceRevision);
+    const wrongRevision = f.run({SUPPLIER_REVISION: '0'.repeat(40)});
+    assert.notEqual(wrongRevision.status, 0, 'wrong selected supplier must refuse');
+    const missingPath = f.run({TOOL_WORKSPACE_CHECKER_PATH: 'lib/missing-checker'});
+    assert.notEqual(missingPath.status, 0, 'unbound path must refuse');
   }
 });
