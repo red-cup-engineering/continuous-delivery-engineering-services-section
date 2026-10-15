@@ -142,7 +142,7 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now}={}){
   for(const job of jobs){
     // An effectful office operation requires a separate authenticated
     // authority/lease receiver. A pure placement plan cannot manufacture one.
-    if(job.effect===true){
+    if(Boolean(job.effect)){
       pending.push({jobId:job.id,reason:'effect-authority-not-received'});
       continue;
     }
