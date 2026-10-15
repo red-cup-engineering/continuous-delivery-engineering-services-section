@@ -1,6 +1,6 @@
 // Place a job on the node that can run it at the lowest price. Unknown quantities are intervals
 // (min 0, max unbounded), never zero. Price is minutes of wall time plus scarcity.
-import { minutePrice, quoteBudget, hold, holdBudget } from './allowance.mjs';
+import { minutePrice, quoteBudget, budgetAvailable, hold, holdBudget } from './allowance.mjs';
 
 const iv = q => q == null ? { min: 0, max: Infinity } : typeof q === 'number' ? { min: q, max: q } : { min: q.min ?? 0, max: q.max ?? Infinity };
 const add = (a, b) => ({ min: a.min + b.min, max: a.max + b.max });
@@ -81,9 +81,11 @@ export function assess(job, node, { ledger = null, budgets = {}, now }) {
       else {
         budgetHold={provider:node.cost.provider,scope:node.cost.scope,
           units,sourceRef:quote.sourceRef,expiresAt:quote.expiresAt};
-        const remaining=budgets[node.cost.scope].remaining;
+        // Rank against the same outstanding holds already applied by quoteBudget.
+        // Nominal provider.remaining exaggerates capacity reserved by other jobs.
+        const available=budgetAvailable(budgets[node.cost.scope]);
         scarcity=0.1+Math.max(...Object.entries(units).map(([unit,value])=>
-          value/Math.max(remaining[unit],1e-9)));
+          value/Math.max(available[unit],1e-9)));
       }
     }
   } else if(node.cost?.kind!=='held')
