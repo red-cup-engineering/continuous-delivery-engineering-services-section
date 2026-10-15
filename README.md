@@ -137,6 +137,14 @@ office reserves one provider's credits. This is a price/placement correction,
 never evidence of execution, billing, a newly observed provider or a lease.
 The original provider-budget hold, fencing and native settlement remain required.
 
+**Admit a real bounded lease before changing the fencing table.** The
+existing `grant` and `renew` operations require nonempty original job/node
+identities, an actual parseable observation time, a positive whole-millisecond
+TTL and a representable expiry **before** incrementing a token or replacing a
+live expiry. Bad time/TTL must not poison the original monotone counter or
+create an indefinite/expired authority claim. Fenced acceptance remains the
+original receiver's responsibility, never a grant of office authority.
+
 **Read original quota before planning and hold before dispatch.** Provider
 adapters must authenticate fresh native, non-secret provider readback and
 supply an account-scoped free-only budget observation. Its `sourceRef`,

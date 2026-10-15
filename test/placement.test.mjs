@@ -106,6 +106,30 @@ test('lease: one live holder, fencing token rises, stale holder is refused', () 
   assert.equal(grant(t, { jobId: 'j', nodeId: 'laptop', now: later, ttlMs: 1 }).reason, 'job-already-settled');
 });
 
+test('invalid lease identities or unbounded time cannot mutate fencing custody', () => {
+  const t=newTable();
+  const before=structuredClone(t);
+  for(const data of [
+    {jobId:'',nodeId:'node',now:NOW,ttlMs:1000},
+    {jobId:'job',nodeId:'',now:NOW,ttlMs:1000},
+    {jobId:'job',nodeId:'node',now:'invalid',ttlMs:1000},
+    {jobId:'job',nodeId:'node',now:NOW,ttlMs:0},
+    {jobId:'job',nodeId:'node',now:NOW,ttlMs:-1},
+    {jobId:'job',nodeId:'node',now:NOW,ttlMs:Infinity},
+    {jobId:'job',nodeId:'node',now:NOW,ttlMs:1.5},
+    {jobId:'job',nodeId:'node',now:NOW,ttlMs:Number.MAX_SAFE_INTEGER},
+  ]) {
+    assert.throws(()=>grant(t,data),/identities|lease requires|expiry exceeds/);
+    assert.deepEqual(t,before);
+  }
+  const accepted=grant(t,{jobId:'job',nodeId:'node',now:NOW,ttlMs:1000});
+  assert.equal(accepted.ok,true);
+  const liveBefore=structuredClone(t);
+  assert.throws(()=>renew(t,{jobId:'job',nodeId:'node',token:accepted.token,now:NOW,ttlMs:0}),/positive whole TTL/);
+  assert.deepEqual(t,liveBefore);
+  assert.equal(renew(t,{jobId:'job',nodeId:'node',token:accepted.token,now:NOW,ttlMs:2000}).ok,true);
+});
+
 test('lease: an effect is not accepted after expiry, a pure build is', () => {
   const t = newTable();
   const a = grant(t, { jobId: 'e', nodeId: 'laptop', now: NOW, ttlMs: 1000 });
