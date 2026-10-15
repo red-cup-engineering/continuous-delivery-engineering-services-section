@@ -1,10 +1,17 @@
 {
   "id": "github-hosted-ubuntu-24.04",
-  "state": "up",
-  "cores": 2, "memoryGb": 7, "freeDiskGb": 14,
-  "capabilities": ["node", "git"],
+  "state": "down",
+  "cores": 2,
+  "memoryGb": 7,
+  "freeDiskGb": 14,
+  "capabilities": [
+    "node",
+    "git"
+  ],
   "bandwidthMbps": null,
   "closureCache": [],
-  "cost": { "kind": "hosted-minutes" },
-  "measured": "GitHub's published size of the standard runner for private repositories; not measured here"
+  "cost": {
+    "kind": "hosted-minutes"
+  },
+  "measured": "2026-10-15 Leader observed no remaining private GitHub Actions hosted minutes. No paid minutes allowed; a new account readback is required before re-admission."
 }

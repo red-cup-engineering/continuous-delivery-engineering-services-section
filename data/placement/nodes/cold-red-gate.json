@@ -1,10 +1,19 @@
 {
   "id": "cold-red-gate",
-  "state": "up",
-  "cores": null, "memoryGb": null, "freeDiskGb": null,
-  "capabilities": ["node", "guix", "git", "crg-deployer"],
+  "state": "down",
+  "cores": null,
+  "memoryGb": null,
+  "freeDiskGb": null,
+  "capabilities": [
+    "node",
+    "guix",
+    "git",
+    "crg-deployer"
+  ],
   "bandwidthMbps": null,
   "closureCache": [],
-  "cost": { "kind": "held" },
-  "measured": "not measured: sizes are unknown here, so they are intervals, not zeros. A cloud thread reaches it through the credential store, not through the laptop."
+  "cost": {
+    "kind": "held"
+  },
+  "measured": "2026-10-15 leader-reported Cold Red Gate outage. Intermittent connector response is not an active machine or production receiving heartbeat."
 }
