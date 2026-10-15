@@ -33,5 +33,5 @@ jobs:
       - name: Check standalone public source contracts
         run: |
           node --check generator/generate-ci.mjs
-          node --test test/generate-ci.test.mjs test/retained-runner.test.mjs test/node-package-options.test.mjs test/cloudbuild-native.test.mjs test/submodule-pr.test.mjs test/lockfile-caller.test.mjs test/retired-intake-fleet.test.mjs
+          node --test test/generate-ci.test.mjs test/retained-runner.test.mjs test/node-package-options.test.mjs test/cloudbuild-native.test.mjs test/cloudbuild-trigger-operations.test.mjs test/submodule-pr.test.mjs test/lockfile-caller.test.mjs test/retired-intake-fleet.test.mjs
           node generator/generate-ci.mjs . --audit-runners --public-repo

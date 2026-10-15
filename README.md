@@ -24,6 +24,50 @@ private consumers' own self-hosted runner requirements, the exact-source
 build receiver, the Guix/LAGOON release path, or installed customer acceptance.
 No CI result is implied by a runner selector alone.
 
+## Native Cloud Build trigger receiving for private GitHub source
+
+The existing provider-native cloudbuild.yaml is a source execution recipe;
+installation belongs to this Continuous Delivery section, not to independent
+ad hoc instructions at each consuming repository. The actual operation is
+[scripts/cloudbuild-github-trigger.mjs](scripts/cloudbuild-github-trigger.mjs).
+It uses supported gcloud builds connections/repositories/triggers API
+through one authenticated CLI, without holding, printing or copying credentials.
+
+Run node scripts/cloudbuild-github-trigger.mjs --help for the complete options.
+From an already authorized cloud toolchain, inspect reads the project,
+billing-enabled status, installed GitHub App connection, linked repository URI,
+dedicated build principal, and all native trigger declarations. ensure first
+performs those identical reads, creates only one absent approved exact-main
+private-source trigger, and rereads the provider's returned ID/configuration.
+A conflicting or switched trigger halts; repeat invocations reuse the qualified
+original. It does not create an account, connection, IAM principal, install a
+self-hosted runner, read secrets, run a test, or spend build minutes merely by
+creating a manually approved trigger.
+
+Inputs must name the actual selected GCP project, region, existing second-
+generation GitHub connection and repository resource ID, the source
+owner/repo, a dedicated same-project service account, and the verified digest
+of a suitable Node 24 image. Do not guess a connection ID or commit a private
+token. Obtain those from the legitimate existing GCP principal. The consuming
+source repository supplies its real cloudbuild.yaml; Git Services currently
+has one using its existing test:source-custody suite.
+
+After a real build completes, read-build uses gcloud builds describe to
+compare its exact GitHub commit, full repository name, trigger ID, build ID and
+caller-selected actual original test step. A different Red Cup consumer supplies
+its own step ID; this owner does not hardcode Git Services. Billing-enabled does not establish remaining
+free quota; provider cost/usage and budget must be checked independently
+before approving a build. A source merge or installed trigger does not
+restore CI until the native build steps actually execute successfully.
+
+This is the established provider infrastructure under Git Services CI incident
+[red-cup-engineering/github-engineering-services-section#7](https://github.com/red-cup-engineering/github-engineering-services-section/issues/7).
+The operative regressions are
+node --test test/cloudbuild-trigger-operations.test.mjs; the existing
+public-source contract job runs them without private credentials or the
+unavailable private Git Services peer. GCP account/installation effects require
+an authenticated provider session; the source tests do not substitute for it.
+
 ## Runner custody: normative Group default (2026-10-13)
 
 **Use our own machines for ordinary Group CI, change receiving, branch intake, and releases. Do not select GitHub-hosted runners as an implicit fallback.** The existing caller generator requires a `self-hosted` label and an explicit machine or pool identity. For example, `["self-hosted","Linux","X64","bare-cedar-fog"]` names a machine observed completing jobs for `561-group`. A different organization or repository may not have permission to use it.
