@@ -80,12 +80,12 @@ an authenticated provider session; the source tests do not substitute for it.
 
 ### Execute the selected private source, rather than stopping at an installed trigger
 
-The original \`scripts/cloudbuild-github-trigger.mjs\` now owns the complete
-provider request boundary. After \`discover\`, \`inspect\` and (if necessary)
-\`ensure\` have received the actual installed, manually approved native trigger,
-\`plan-build\` reads the same GCP identity and emits the exact
-\`gcloud builds triggers run --sha=<40-hex-commit>\` request **without running it**.
-Only \`request-build\` with \`--authorize-request=pending\` actually submits that
+The original `scripts/cloudbuild-github-trigger.mjs` now owns the complete
+provider request boundary. After `discover`, `inspect` and (if necessary)
+`ensure` have received the actual installed, manually approved native trigger,
+`plan-build` reads the same GCP identity and emits the exact
+`gcloud builds triggers run --sha=<40-hex-commit>` request **without running it**.
+Only `request-build` with `--authorize-request=pending` actually submits that
 request. It neither approves the pending build nor claims tested software; an
 independent authorized approver must check actual budget/free quota and approve
 it. The request reads the native build ID and verifies the exact commit,
@@ -94,7 +94,7 @@ If the provider response or readback is ambiguous, **do not retry**: reconcile
 that request from GCP's actual build inventory first, to avoid duplicates and
 unintended billed minutes. No parallel ledger or machine registry is introduced.
 
-After approval and successful execution, use existing \`read-build\` with
+After approval and successful execution, use existing `read-build` with
 the real build ID and original selected test command. The receiver admits
 either a normal main-source build or an exact pinned-SHA invocation, **only**
 when GCP's resolved connected repository and immutable commit agree, the
