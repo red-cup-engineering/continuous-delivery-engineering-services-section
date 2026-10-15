@@ -96,8 +96,12 @@ or provider admission.
 **One CLI, no guessed credentials or ledger defaults:**
 
 ```sh
-# Feed the native provider adapter's real transient JSON readback on
-# standard input; never invent account quotas or retain a machine registry.
+# Plan an actual ordered office shift with the same original source:
+node scripts/place-job.mjs \
+  --jobs /original/jobs.json --nodes /existing/installed/node-observations \
+  --budget-stdin --now 2026-10-15T06:30:00Z < /observed/provider-readback.json
+
+# Original single-job compatibility uses --job instead of --jobs.
 node scripts/place-job.mjs \
   --job /original/job.json --nodes /existing/installed/node-observations \
   --budget-stdin --now 2026-10-15T06:30:00Z < /observed/provider-readback.json
