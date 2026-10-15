@@ -18,6 +18,20 @@ const revision = ref => {
   if (!/^[a-f0-9]{40}$/.test(ref)) throw new Error('workflow supplier needs an exact source commit');
   return ref;
 };
+// GitHub-published monthly standard-hosted minutes for PRIVATE organization repos.
+// The organization's plan is a Coesite/Group input; do not assume all orgs use Free.
+// This is an allowance, not a statement about how many minutes an org has spent.
+// https://docs.github.com/en/billing/reference/product-usage-included
+export const PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES = Object.freeze({
+  free: 2000, team: 3000, enterpriseCloud: 50000,
+});
+export function remainingPrivateOrgActionsMinutes(plan, usedMinutes) {
+  if (!Object.hasOwn(PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES, plan)
+      || !Number.isSafeInteger(usedMinutes) || usedMinutes < 0)
+    throw new TypeError('known GitHub organization plan and nonnegative whole billed minutes required');
+  return Math.max(0, PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES[plan] - usedMinutes);
+}
+
 // The Group's generator may only hire an explicitly identified house runner.
 // "ubuntu-latest" works on some accounts until their hosted-minute budget ends;
 // treating that as the default hides an operational dependency and costs money.
