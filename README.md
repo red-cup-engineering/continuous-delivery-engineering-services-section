@@ -177,6 +177,34 @@ distinct reusable provider capability, **not selected or approved** for Git
 Services. Do not request, approve, or trigger Google builds for this consumer
 without a later, explicit change in financial authority.
 
+### Additional public open-source compute lane
+
+The same original Continuous Delivery Engineering owner also supplies
+[.circleci/public-source.yml](.circleci/public-source.yml) for its own
+**public repository** checkout, distinct from the private Git Services
+configuration above. CircleCI Free publishes up to **400,000 credits/month**
+for qualifying Linux open-source builds in a public repository, separate
+from the 30,000 private-personal credits. Eligibility and the actual
+recognized balance must be checked in the provider account. This is not a
+license to execute private source in a public pipeline.
+
+This public config checks the exact GitHub source/revision and uses a
+`cimg/node:24` **small** Docker executor, installs the existing pinned
+parser with lifecycle scripts disabled, and invokes the original
+`npm run test:public-source-contract`. The *same* package-owned command
+is used by the older GitHub public-source job; its explicit test selection
+no longer diverges, repeats `test/placement.test.mjs`, or accidentally
+substitutes the unavailable full private-composition suite.
+
+When CircleCI GitHub App access is provided, create a **separate** CircleCI
+public Red Cup Continuous Delivery project choosing this repository
+as both config and checkout source, selecting
+`.circleci/public-source.yml` at protected `main`; enable
+**Pushes to default branch**. That opens an independent source-test
+compute lane without private checkout grants. Observe an actual
+public CircleCI job, correct Git revision, test count, and OSS credit
+eligibility before counting this allowance as received capacity.
+
 ## Native Cloud Build trigger receiving for private GitHub source
 
 The existing provider-native cloudbuild.yaml is a source execution recipe;
