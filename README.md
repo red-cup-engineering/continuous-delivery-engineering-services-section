@@ -145,6 +145,16 @@ live expiry. Bad time/TTL must not poison the original monotone counter or
 create an indefinite/expired authority claim. Fenced acceptance remains the
 original receiver's responsibility, never a grant of office authority.
 
+**Conserve actual multi-provider capacity.** The original free-budget
+quote refuses a zero-resource reservation; every externally metered Work
+must claim at least one positive resource unit. A provider's observed
+remaining units can shrink while a held Work executes, so settlement
+checks **all** billed denominations against remaining observed capacity
+before debiting **any** of them or finalizing the hold. An infeasible
+readback requires reconciliation; it must not create a negative OCI,
+GCP or Cloudflare free-quota balance or disguise a charge as zero cost.
+This is an accounting boundary, not an account connection or executed job.
+
 **Read original quota before planning and hold before dispatch.** Provider
 adapters must authenticate fresh native, non-secret provider readback and
 supply an account-scoped free-only budget observation. Its `sourceRef`,

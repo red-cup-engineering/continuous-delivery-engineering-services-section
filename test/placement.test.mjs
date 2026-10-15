@@ -253,6 +253,31 @@ test('Oracle Always Free multi-unit quotes cannot overspend either OCPU or GB-ho
     observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',remaining}),/free-only/);
 });
 
+test('shared compute budget refuses zero holds and negative multi-unit settlement',()=>{
+  const now='2026-10-15T04:50:00.000Z';
+  const b=newObservedBudget({provider:'oci-always-free-a1',scope:'oci/one-free',
+    hardStop:true,sourceRef:'provider://oci/independent-budget',
+    observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',
+    remaining:{ocpuHours:2,gbHours:12}});
+  const claim={provider:b.provider,scope:b.scope,now,units:{ocpuHours:0,gbHours:0}};
+  assert.equal(quoteBudget(b,claim).reason,'provider-usage-has-no-positive-reservation');
+  assert.equal(holdBudget(b,{jobId:'zero',...claim}).ok,false);
+  assert.deepEqual(b.entries,[]);
+  const hold=holdBudget(b,{jobId:'real',...claim,units:{ocpuHours:1.5,gbHours:6}});
+  assert.equal(hold.ok,true);
+  // A later provider readback changed availability while the hold was active.
+  b.remaining.gbHours=5;
+  const before=structuredClone(b);
+  assert.throws(()=>settleBudget(b,{jobId:'real',state:'spent',
+    actualUnits:{ocpuHours:1.0,gbHours:6}}),/exceeds observed remaining/);
+  assert.deepEqual(b,before,'refusal cannot debit only the first unit or settle the hold');
+  b.remaining.gbHours=12;
+  const received=settleBudget(b,{jobId:'real',state:'spent',
+    actualUnits:{ocpuHours:1,gbHours:5}});
+  assert.equal(received.state,'spent');
+  assert.deepEqual(b.remaining,{ocpuHours:1,gbHours:7});
+});
+
 test('budget receipt expires and provider may not silently switch denomination',()=>{
   const b=newObservedBudget({provider:'circleci-free-private',scope:'org/a',
     sourceRef:'provider://circleci/another-one',hardStop:true,

@@ -125,6 +125,8 @@ export function quoteBudget(b,{provider,scope,now,units}={}){
     if(value>available[unit]+1e-9)
       return {ok:false,reason:'would-overdraw-the-observed-free-allowance:'+unit};
   }
+  if(!Object.values(units).some(value=>value>0))
+    return {ok:false,reason:'provider-usage-has-no-positive-reservation'};
   return {ok:true,units,sourceRef:b.sourceRef,expiresAt:b.expiresAt};
 }
 
@@ -152,6 +154,11 @@ export function settleBudget(b,{jobId,state,actualUnits={}}={}){
     for(const unit of Object.keys(held.units))
       if(!Object.hasOwn(actualUnits,unit))
         throw new TypeError('settlement missing observed usage unit: '+unit);
+    // Provider readback can shrink while a job is in flight. Reconcile before
+    // spending; never mutate one denomination before another proves feasible.
+    for(const [unit,amount] of Object.entries(actualUnits))
+      if(!Number.isFinite(b.remaining[unit])||amount>b.remaining[unit])
+        throw new TypeError('settlement exceeds observed remaining free units: '+unit);
     for(const [unit,amount] of Object.entries(actualUnits))
       b.remaining[unit]-=amount;
   }
