@@ -240,7 +240,9 @@ export function requestNativeCloudBuild(input,{execute=execFileSync}={}){
  * Dirty working copies cannot influence the expected executed steps.
  */
 export function readCommittedCloudBuildSteps(input,{executeGit=execFileSync}={}){
-  const {sourceWorkspace,commit,repository,image,step,branchName='main'}=input??{};
+  const {sourceWorkspace,commit,repository,image,step,command,branchName='main'}=input??{};
+  if(command!=='npm run verify' && !/^npm run [a-z][a-z0-9:._-]{0,63}$/u.test(command??''))
+    throw new TypeError('direct, source-owned npm test command required');
   if(branchName!==''&&branchName!=='main')
     throw new TypeError('source recipe requires selected main branch or pinned SHA without branch');
   if(typeof sourceWorkspace!=='string'||!sourceWorkspace.startsWith('/')||
@@ -286,14 +288,23 @@ export function readCommittedCloudBuildSteps(input,{executeGit=execFileSync}={})
   };
   const expected=config.steps.map(x=>{
     if(typeof x?.id!=='string'||typeof x.name!=='string'||
-      x.entrypoint!=='bash'||!Array.isArray(x.args)||!Array.isArray(x.env))
-      throw new Error('committed build step lacks explicit native execution');
+      !['bash','npm'].includes(x.entrypoint)||!Array.isArray(x.args)||!Array.isArray(x.env)||
+      x.script!==undefined||x.allowFailure!==undefined||
+      (x.allowExitCodes?.length??0)!==0||(x.secretEnv?.length??0)!==0||
+      (x.volumes?.length??0)!==0)
+      throw new Error('committed build step is not a strict native process');
     return {id:x.id,name:expand(x.name),entrypoint:x.entrypoint,
       args:x.args.map(expand),env:x.env.map(expand)};
   });
+  const selected=expected.filter(x=>x.id===step);
+  const position=expected.findIndex(x=>x.id===step);
   if(new Set(expected.map(x=>x.id)).size!==expected.length||
-    expected.filter(x=>x.id===step).length!==1)
-    throw new Error('selected original test step is not uniquely committed');
+    selected.length!==1||position<1||expected.length>4)
+    throw new Error('selected test step must follow a unique bounded source check');
+  if(expected.slice(0,position).some(x=>x.entrypoint!=='bash')||
+    selected[0].entrypoint!=='npm'||
+    !isDeepStrictEqual(selected[0].args,command.split(' ').slice(1)))
+    throw new Error('original committed test must invoke npm directly, after source preflight');
   return expected;
 }
 
@@ -314,9 +325,12 @@ export function qualifyNativeCloudBuildResult(build,{
   const [project,region]=[sourceResource.split('/')[1],sourceResource.split('/')[3]];
   const selected=Array.isArray(build?.steps)?build.steps.filter(x=>x.id===step):[];
   const actual=selected[0];
-  const lines=typeof actual?.args?.[1]==='string'
-    ? actual.args[1].split(/\r?\n/u).map(x=>x.trim()):[];
   const source=build?.sourceProvenance?.resolvedConnectedRepository;
+  // An arbitrary shell may exit before it reaches a test command. For a
+  // successful test receipt, npm itself must be the provider's entrypoint.
+  const directTest=command==='npm run verify'||
+    /^npm run [a-z][a-z0-9:._-]{0,63}$/u.test(command??'');
+  const directArgs=typeof command==='string'?command.split(' ').slice(1):[];
   const exactSourceSteps=Array.isArray(expectedSteps)&&expectedSteps.length>0&&
     expectedSteps.length<=16&&Array.isArray(build?.steps)&&
     build.steps.length===expectedSteps.length&&
@@ -350,8 +364,10 @@ export function qualifyNativeCloudBuildResult(build,{
     (Array.isArray(build.secrets)&&build.secrets.length>0)||
     !Array.isArray(build.steps)||build.steps.length<1||build.steps.length>64||
     build.steps.some(x=>x.status!=='SUCCESS')||selected.length!==1||!exactSourceSteps||
-    actual.name!==image||actual.entrypoint!=='bash'||
-    actual.args?.[0]!=='-euc'||!lines.includes(command)||
+    actual.name!==image||actual.entrypoint!=='npm'||!directTest||
+    !isDeepStrictEqual(actual.args,directArgs)||
+    actual.allowFailure===true||(actual.allowExitCodes?.length??0)!==0||
+    actual.exitCode!==undefined&&actual.exitCode!==0||
     !Array.isArray(actual.env)||!actual.env.includes('BUILDER_IMAGE='+image))
     throw new Error('provider did not execute the approved original source test on the connected Git revision');
   return {state:'TEST_EXECUTED',id,commit,repository,
