@@ -13,11 +13,15 @@ from `package.json` or qualify a downstream composition.
 The public `agent-work-contract` job now executes only the full owner-selected
 standalone, dependency-closed source-contract suite: generator/rendering,
 retained-runner graph analysis, node-package interface, and provider-native
-Cloud Build configuration. The full `node-package` job remains on the existing
-self-hosted/composed-source selection because Git-services 4.1.1 is a genuinely
-required private dependency of immutable-source receiving proofs. An isolated
-public checkout never substitutes a weakened local implementation or reports
-those private integration proofs as passed.
+Cloud Build configuration. The full `node-package` **reusable workflow** still
+requires a caller-supplied, observed self-hosted runner and original composed
+Git-services 4.1.1 dependency. It is **not** an automatic job of this public
+push/pull_request workflow: that previous wiring left the overall run queued
+for unavailable Bare Cedar Fog even after the public source-contract job
+succeeded. Independent public source CI now finishes without claiming
+the missing private composition tests. An original consuming repository must
+receive the complete suite on genuinely available compute; the public source
+suite cannot substitute a weakened local implementation or prove installation.
 Use `node generator/generate-ci.mjs . --audit-runners --public-repo` to audit
 this source owner's exceptional runner route. This exception does not change
 private consumers' own self-hosted runner requirements, the exact-source
