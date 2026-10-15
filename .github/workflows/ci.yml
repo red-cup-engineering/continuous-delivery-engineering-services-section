@@ -6,13 +6,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
-  node-package:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    uses: ./.github/workflows/node-package.yml
-    with:
-      # Full source/release verification requires the composed private Git-services
-      # supplier; it is not an isolated public CI test.
-      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
+  # Full private-composition receiving is preserved in the original reusable
+  # node-package.yml, but cannot be an automatic prerequisite for this PUBLIC
+  # source check while the old Bare Cedar Fog runner is not an independent
+  # available executor. An authorized consumer must select an observed runner.
   agent-work-contract:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Source-only tests in this public repository use an isolated standard
