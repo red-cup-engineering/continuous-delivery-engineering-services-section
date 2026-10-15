@@ -24,6 +24,61 @@ private consumers' own self-hosted runner requirements, the exact-source
 build receiver, the Guix/LAGOON release path, or installed customer acceptance.
 No CI result is implied by a runner selector alone.
 
+## Free private CI without Google billing or GitHub-hosted minutes
+
+**Selected consumer:** private `red-cup-engineering/git-services-section`.
+The native [CircleCI Free configuration](.circleci/config.yml) is held at its
+existing reusable **Red Cup Continuous Delivery** Engineering owner; the code
+and `npm run verify` remain in the actual private Git Services repository.
+This replaces that consumer's exhausted GitHub-hosted CI and unapproved
+Google Cloud Build activation. CircleCI Free currently grants 30,000 monthly
+credits (up to 6,000 small-Docker minutes) without a credit card, with jobs
+blocked at exhaustion rather than silently billed. This emergency independent
+hosted route is **not** a substitute for bringing up Guix/LAGOON-owned compute.
+
+**One-time native provider receiving (requires authorized account action):**
+In CircleCI Free, install the CircleCI GitHub App with *repository-limited*
+access to `red-cup-engineering/continuous-delivery-services-section` (public
+configuration source) and `red-cup-engineering/git-services-section` (private
+checkout source). Create the project for the **private Git Services repository**.
+Select this Engineering owner's `.circleci/config.yml` at protected `main`
+as its **configuration source**, and the private Git Services repository as
+**checkout source**. Supply the project checkout's normal SSH grant if the
+GitHub App onboarding requires it. Choose the GitHub App trigger preset
+**"Pushes to default branch"**; this source additionally filters to
+`pipeline.git.branch == "main"`. Do not authorize billing, add a paid
+account, create a context, copy private code into the public configuration
+repository, or deploy a Worker as a stand-in.
+
+The native CircleCI job selects a **small** Docker executor with CircleCI's
+published Node 24 image, verifies the exact provider `CIRCLE_SHA1` against
+the checked-out Git commit and origin repository, checks the existing full
+`npm run check && npm test` contract, then runs `npm run verify` in a
+**separate step**. It does not install workspace dependencies just to pass a
+source-only suite, spend Google or GitHub-hosted minutes, persist private
+artifacts, use caches, publish releases or read production credentials.
+
+**Real acceptance (still outstanding until connected):** independently read
+the CircleCI project's actual linked GitHub App/repository, config source,
+checkout source, active main trigger, Free-plan credit balance, and first
+completed pipeline/job ID. Verify the exact Git Services commit and full
+native test count/output. A skipped workflow, successful public config-source
+test, or a locally executed subset is *not* private CI delivery. Then admit
+a second private Red Cup consumer through the same Engineering-owned config.
+Keep [owning P0 CI incident #7](https://github.com/red-cup-engineering/github-engineering-services-section/issues/7)
+open until real provider build receipts exist.
+
+**Durable alternative:** Oracle Always Free capacity can be received as an
+authorized Guix/LAGOON self-hosted runner when original tenancy capacity and
+Red Cup repository/runner access are observed. Self-hosted Actions jobs use no
+GitHub-hosted minutes but require real registration and live receiving; no
+`bare-cedar-fog` or `cold-red-gate` fallback is an independent solution.
+
+**GCP custody:** the existing Cloud Build owner below is retained as a
+distinct reusable provider capability, **not selected or approved** for Git
+Services. Do not request, approve, or trigger Google builds for this consumer
+without a later, explicit change in financial authority.
+
 ## Native Cloud Build trigger receiving for private GitHub source
 
 The existing provider-native cloudbuild.yaml is a source execution recipe;
