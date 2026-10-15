@@ -53,9 +53,14 @@ source repository supplies its real cloudbuild.yaml; Git Services currently
 has one using its existing test:source-custody suite.
 
 After a real build completes, read-build uses gcloud builds describe to
-compare its exact GitHub commit, full repository name, trigger ID, build ID and
-caller-selected actual original test step. A different Red Cup consumer supplies
-its own step ID; this owner does not hardcode Git Services. Billing-enabled does not establish remaining
+compare its exact GitHub commit, full repository name, trigger ID, build ID,
+**resolved second-generation repository and commit**, manual approval, dedicated
+build principal, digest-pinned actual image and the original executable test
+command within the successful build step. The caller supplies its actual
+source resource, image, service account, command and step ID; this owner does
+not hardcode Git Services. A status or source substitution alone is not
+credible receiving evidence. A trigger that excludes relevant files or carries
+extra substitution keys refuses instead of silently skipping tests. Billing-enabled does not establish remaining
 free quota; provider cost/usage and budget must be checked independently
 before approving a build. A source merge or installed trigger does not
 restore CI until the native build steps actually execute successfully.
