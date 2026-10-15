@@ -1,0 +1,41 @@
+# Red Cup Continuous Delivery's native CircleCI Free execution contract.
+# Select THIS repository as the configuration source; select the PRIVATE
+# consumer as CircleCI GitHub App checkout source. No public mirror or deploy.
+version: 2.1
+jobs:
+  verify-original-git-source:
+    docker:
+      - image: cimg/node:24
+    resource_class: small
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Verify exact private GitHub source
+          command: |
+            set -euo pipefail
+            : "${CIRCLE_SHA1:?CircleCI source commit is absent}"
+            : "${CIRCLE_PROJECT_USERNAME:?CircleCI GitHub owner is absent}"
+            : "${CIRCLE_PROJECT_REPONAME:?CircleCI GitHub repository is absent}"
+            [[ "$CIRCLE_SHA1" =~ ^[a-f0-9]{40}$ ]] || { echo 'exact Git commit required' >&2; exit 78; }
+            test "$(git rev-parse --verify HEAD)" = "$CIRCLE_SHA1" || { echo 'checked-out source commit differs from provider' >&2; exit 78; }
+            repository="${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
+            remote="$(git remote get-url origin)"
+            case "$remote" in
+              "git@github.com:${repository}"|"git@github.com:${repository}.git"|"https://github.com/${repository}"|"https://github.com/${repository}.git"|"ssh://git@github.com/${repository}.git") ;;
+              *) echo 'checked-out source repository differs from provider' >&2; exit 78 ;;
+            esac
+      - run:
+          name: Qualify runtime and original full-suite contract
+          command: |
+            node -e 'if(process.versions.node.split(".")[0]!=="24"){console.error("Node 24 required");process.exit(78)}'
+            node -e 'const p=require("./package.json");if(p.scripts?.verify!=="npm run check && npm test"){console.error("original full suite required");process.exit(78)}'
+      - run:
+          name: Execute original complete test suite
+          command: npm run verify
+          no_output_timeout: 15m
+workflows:
+  private-source-verification:
+    jobs:
+      - verify-original-git-source:
+          filters: pipeline.git.branch == "main"
