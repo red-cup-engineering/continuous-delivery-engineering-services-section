@@ -48,7 +48,7 @@ jobs:
           const file=plan.files[0];
           assert.equal(file.name,plan.root);
           assert.match(file.version,new RegExp('^0\\.0\\.0-sha\\.'+plan.sha.slice(0,12)+'$'));
-          assert.match(file.tarball,/\\.tgz$/);
+          assert.match(file.tarball,/\.tgz$/);
           assert.ok(fs.statSync(path.join(root,file.tarball)).size>100);
           NODE
           (cd "$release" && sha256sum -- *.tgz > SHA256SUMS)
