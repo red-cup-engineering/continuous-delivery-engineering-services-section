@@ -54,20 +54,30 @@ owner/repo, a dedicated same-project service account, and the verified digest
 of a suitable Node 24 image. Do not guess a connection ID or commit a private
 token. Obtain those from the legitimate existing GCP principal. The consuming
 source repository supplies its real cloudbuild.yaml; Git Services currently
-has one using its existing test:source-custody suite.
+has one using its complete `npm run verify` suite.
 
-After a real build completes, read-build uses gcloud builds describe to
-compare its exact GitHub commit, full repository name, trigger ID, build ID,
-**resolved second-generation repository and commit**, manual approval, dedicated
-build principal, digest-pinned actual image and the original executable test
-command within the successful build step. The caller supplies its actual
-source resource, image, service account, command and step ID; this owner does
-not hardcode Git Services. A status or source substitution alone is not
-credible receiving evidence. A trigger that excludes relevant files or carries
-extra substitution keys refuses instead of silently skipping tests. Billing-enabled does not establish remaining
-free quota; provider cost/usage and budget must be checked independently
-before approving a build. A source merge or installed trigger does not
-restore CI until the native build steps actually execute successfully.
+After a real build completes, `read-build` reads **both** the provider's
+build and the actual original `cloudbuild.yaml` Git blob at the provider's
+resolved commit, using `--source-workspace=/absolute/authenticated/checkout`.
+It compares every provider-executed build step against the committed source
+recipe after resolving Google Cloud's exact substitution values. Arbitrary
+early exits, altered commands, forged matching step names, unreviewed extra
+steps, missing/changed image or environment and dirty source file changes
+cannot be accepted as successful test execution. This uses the normal
+`git show COMMIT:cloudbuild.yaml` source reader rather than a second JSON
+source catalogue or a caller-supplied "test successful" assertion.
+
+`read-build` still checks the original GitHub repository, exact commit,
+2nd-generation source provenance, approved build, selected service account,
+digest-pinned image and selected original executable command. The caller
+supplies actual source workspace, repository resource, image, service account,
+command and step ID; this owner does not hardcode Git Services. Actual billing
+consumption must be read separately. A trigger that excludes relevant files
+or adds extra substitutions refuses instead of silently skipping tests. 
+Billing-enabled does not establish remaining free quota; provider cost/usage
+and budget must be checked independently before approving a build. A source
+merge or installed trigger does not restore CI until the native build steps
+actually execute successfully.
 
 This is the established provider infrastructure under Git Services CI incident
 [red-cup-engineering/github-engineering-services-section#7](https://github.com/red-cup-engineering/github-engineering-services-section/issues/7).
