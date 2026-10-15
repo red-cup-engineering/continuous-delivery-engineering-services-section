@@ -370,6 +370,51 @@ test('fleet does not dispatch effects, unknown nodes, missing quota or duplicate
 });
 
 
+
+test('typed effectful office jobs never acquire pure fleet placements on owned or cloud capacity',()=>{
+  const now='2026-10-15T04:50:00.000Z';
+  const held={id:'owned',state:'up',observedAt:now,cores:8,memoryGb:16,
+    freeDiskGb:20,bandwidthMbps:100,capabilities:['node','guix'],
+    closureCache:[],cost:{kind:'held'}};
+  const scope='oci/home/actual-authority-required';
+  const cloud={...held,id:'oci-a1',cost:{kind:'metered-free',
+    provider:'oci-always-free-a1',scope,hardStop:true,
+    maxJobMinutes:30,unitsPerMinute:{ocpuHours:1/60,gbHours:2/60}}};
+  const budget=newObservedBudget({provider:cloud.cost.provider,scope,
+    sourceRef:'provider://oci/fixture-not-installed',
+    hardStop:true,observedAt:now,expiresAt:'2026-10-15T05:50:00.000Z',
+    remaining:{ocpuHours:1,gbHours:3}});
+  const original={id:'office-work',effect:false,visibility:'private',
+    minutes:3,maxMinutes:12,closure:[],
+    needs:{cores:1,memoryGb:2,freeDiskGb:1},
+    requires:{capabilities:['node']},
+    sourceEgress:{permitted:true,provider:cloud.cost.provider,scope,
+      authorityRef:'office:engineering/fixture-cloud-egress'}};
+  const effects=[true,'deploy-cloud-run',{kind:'provider-write',operation:'deploy'},
+    ['ledger','settle'],1,'false'];
+  const jobs=effects.map((effect,i)=>({...original,id:'effect-'+i,effect}));
+  for(const node of [held,cloud]){
+    const options={now,budgets:{[scope]:budget}};
+    const before=structuredClone(budget);
+    const result=planFleet(jobs,[node],options);
+    assert.equal(result.proposed,0);
+    assert.equal(result.executed,0);
+    assert.equal(result.pending.length,effects.length);
+    assert.deepEqual(result.pending.map(x=>x.reason),
+      effects.map(()=> 'effect-authority-not-received'));
+    assert.equal(result.placements.length,0);
+    assert.equal(result.probes.length,0);
+    assert.deepEqual(budget,before);
+    for(const job of jobs){
+      assert.equal(place(job,[node],options).needsLeaderWords,true);
+    }
+    const pure=planFleet([original],[node],options);
+    assert.equal(pure.proposed,1);
+    assert.equal(pure.placements[0].state,'proposed-not-executed');
+    assert.equal(place(original,[node],options).needsLeaderWords,false);
+  }
+});
+
 test('the existing placement CLI reads a complete original office shift without provider effects',async()=>{
   const {spawnSync}=await import('node:child_process');
   const {mkdtempSync,mkdirSync,writeFileSync,rmSync}=await import('node:fs');
