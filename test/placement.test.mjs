@@ -36,7 +36,7 @@ test('unknown sizes are intervals, never zero: an unmeasured node is possible, n
 });
 
 test('hosted minutes are refused once the free allowance cannot cover the job, never overdrawn', () => {
-  const r = place({ ...job(), minutes: 20 }, nodes(), { ledger: ledger(1990), now: NOW });
+  const r = place({ ...job(), minutes: 20, maxMinutes: 20 }, nodes(), { ledger: ledger(1990), now: NOW });
   const hosted = r.refused.find(x => x.nodeId === 'github-hosted-ubuntu-24.04');
   assert.ok(hosted.why.includes('hosted-allowance-exhausted-or-stale'));
 });
@@ -253,4 +253,39 @@ test('hosted remaining minutes cannot be carried across a monthly reset without 
     observedAt:'2026-10-31T23:45:00Z'});
   assert.equal(minutePrice(l,'2026-10-31T23:55:00Z',10)!==null,true);
   assert.equal(minutePrice(l,'2026-11-01T00:15:00Z',10),null);
+});
+
+test('fenced build comparison never publishes a lone or duplicate builder',()=>{
+  const outputs={machine:'/gnu/store/aaa-machine',profile:'/gnu/store/bbb-profile'};
+  assert.equal(publishable(compareBuilds([{nodeId:'a',outputs}])),false);
+  assert.equal(compareBuilds([{nodeId:'a',outputs},{nodeId:'a',outputs}]).state,'unqualified');
+  assert.equal(publishable(compareBuilds([{nodeId:'a',outputs},{nodeId:'a',outputs}])),false);
+  assert.equal(publishable(compareBuilds([{nodeId:'a',outputs},{nodeId:'b',outputs}])),true);
+  assert.equal(compareBuilds([{nodeId:'a',outputs:{}},{nodeId:'b',outputs}]).state,'unqualified');
+  assert.equal(compareBuilds([{nodeId:'a',outputs:{x:'/tmp/not-a-store-path'}}]).state,'unqualified');
+});
+
+test('hosted minutes are held at maximum duration and provider overrun cannot settle',()=>{
+  const now=NOW,host=nodes().find(n=>n.id==='github-hosted-ubuntu-24.04');
+  const up={...host,state:'up',observedAt:now};
+  const limited={...job(),minutes:5,maxMinutes:30};
+  const available=ledger(1975);
+  let result=place(limited,[up],{ledger:available,now});
+  assert.equal(result.chosen,null);
+  assert.ok(result.refused[0].why.includes('hosted-allowance-exhausted-or-stale'));
+  result=place({...limited,maxMinutes:20},[up],{ledger:available,now});
+  assert.equal(result.chosen,up.id);
+  assert.equal(result.candidates[0].budgetHold.minutes,20);
+  assert.equal(place({...limited,maxMinutes:undefined},[up],
+    {ledger:available,now}).chosen,null);
+  const l=ledger(0);
+  assert.equal(hold(l,{jobId:'bounded',minutes:20}).ok,true);
+  assert.throws(()=>settle(l,{jobId:'bounded',state:'spent'}),/observed-hosted-minutes/);
+  assert.throws(()=>settle(l,{jobId:'bounded',state:'spent',billedMinutes:-1}),/observed-hosted-minutes/);
+  assert.throws(()=>settle(l,{jobId:'bounded',state:'spent',billedMinutes:21}),/observed-hosted-minutes/);
+  assert.equal(l.entries[0].state,'held');
+  settle(l,{jobId:'bounded',state:'spent',billedMinutes:7});
+  assert.equal(l.usedMinutes,7);
+  assert.throws(()=>hold(l,{jobId:'bounded',minutes:2}),/already-holds-or-settled/);
+  assert.throws(()=>hold(l,{jobId:' ',minutes:2}),/original job identity/);
 });

@@ -33,18 +33,32 @@ export function minutePrice(l, now, minutes) {
   return minutes <= pace ? 0.1 : 1 + (minutes - pace) / Math.max(pace, 1);
 }
 export function hold(l, { jobId, minutes }) {
+  if(typeof jobId!=='string'||!jobId.trim())throw new TypeError('original job identity required');
   if (!Number.isSafeInteger(minutes) || minutes <= 0) throw new TypeError('positive whole minutes required');
-  if (l.entries.some(e => e.jobId === jobId && e.state === 'held')) throw new Error('job-already-holds-minutes');
+  // A job that already consumed or voided a hold is not fresh work; refusing
+  // replay prevents a second free-allowance reservation on the same identity.
+  if (l.entries.some(e => e.jobId === jobId)) throw new Error('job-already-holds-or-settled-minutes');
   if (minutes > remainingMinutes(l)) return { ok: false, reason: 'would-overdraw-the-free-allowance' };
   l.entries.push({ jobId, minutes, state: 'held' });
   return { ok: true };
 }
-export function settle(l, { jobId, state, billedMinutes = 0 }) {
+export function settle(l, { jobId, state, billedMinutes }) {
   if (!['spent', 'refused', 'void'].includes(state)) throw new TypeError('spent, refused or void');
   const e = l.entries.find(x => x.jobId === jobId && x.state === 'held');
   if (!e) throw new Error('no-hold-to-settle');
-  e.state = state;
-  if (state === 'spent') { e.billedMinutes = billedMinutes; l.usedMinutes += billedMinutes; }
+  if(state==='spent'){
+    // Usage is independently observed; omitting it cannot mean zero.
+    // If a provider exceeded the original hold, keep the ledger unresolved
+    // and stop external dispatch until the real balance is reconciled.
+    if(!Number.isSafeInteger(billedMinutes)||billedMinutes<0||billedMinutes>e.minutes)
+      throw new TypeError('observed-hosted-minutes-missing-or-exceed-original-hold');
+    if(l.usedMinutes+billedMinutes>l.allowance)
+      throw new TypeError('observed-hosted-minutes-exceed-free-plan-allowance');
+  }else if(billedMinutes!==undefined&&billedMinutes!==0){
+    throw new TypeError('refusal-or-void-cannot-claim-consumed-hosted-minutes');
+  }
+  e.state=state;
+  if(state==='spent'){e.billedMinutes=billedMinutes;l.usedMinutes+=billedMinutes;}
   return e;
 }
 
