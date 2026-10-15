@@ -96,6 +96,13 @@ test('build readback observes actual successful step and rejects switched identi
   const request={id:build.id,triggerId:id,commit:'c'.repeat(40),repository:input.repository,
     step:'source-custody-regressions',sourceResource,serviceAccount,image,command};
   assert.equal(qualifyNativeCloudBuildResult(build,request).state,'TEST_EXECUTED');
+  const pinned={...build,source:{connectedRepository:{
+    repository:sourceResource,revision:request.commit}},
+    substitutions:{...build.substitutions,BRANCH_NAME:''}};
+  assert.equal(qualifyNativeCloudBuildResult(pinned,request).state,'TEST_EXECUTED');
+  assert.throws(()=>qualifyNativeCloudBuildResult({...pinned,
+    source:{connectedRepository:{repository:sourceResource,revision:'d'.repeat(40)}}},request));
+
   for(const changed of [{status:'FAILURE'}, {steps:[]},{buildTriggerId:'bad'},
     {substitutions:{COMMIT_SHA:'d'.repeat(40),REPO_FULL_NAME:input.repository}}])
     assert.throws(()=>qualifyNativeCloudBuildResult({...build,...changed},request));
