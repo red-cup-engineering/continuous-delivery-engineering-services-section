@@ -61,7 +61,13 @@ source on public-only compute refuse.
 engine, not a second scheduler. It provisionally packs *multiple jobs* against
 the same fresh, independently observed node CPU/RAM/disk and free-tier budgets,
 with temporary holds for maximum runtime and scoped private-source egress
-authority. It never mutates the original node or provider evidence, assumes
+authority. **Any truthy original job effect (boolean, typed object, or verb string)**
+is pending independent effect authority rather than provisionally placed as a
+pure build. The single-job view uses the same truthiness rule when marking
+`needsLeaderWords`; an unrecognized effect form must not become an implicit
+pure-operation grant. Original unknown/missing effects still receive the
+existing pure-eligibility semantics; an actual dispatcher needs the separately
+qualified effect classification and grant. It never mutates the original node or provider evidence, assumes
 a free account exists, acquires a live lease, or launches code. Uncertain
 resources create probe requests rather than silently receiving capacity; jobs
 with external effects require their real independent authority. Consumers
