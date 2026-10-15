@@ -1,6 +1,6 @@
 // Place a job on the node that can run it at the lowest price. Unknown quantities are intervals
 // (min 0, max unbounded), never zero. Price is minutes of wall time plus scarcity.
-import { minutePrice, quoteBudget } from './allowance.mjs';
+import { minutePrice, quoteBudget, hold, holdBudget } from './allowance.mjs';
 
 const iv = q => q == null ? { min: 0, max: Infinity } : typeof q === 'number' ? { min: q, max: q } : { min: q.min ?? 0, max: q.max ?? Infinity };
 const add = (a, b) => ({ min: a.min + b.min, max: a.max + b.max });
@@ -109,4 +109,111 @@ export function place(job, nodes, ctx) {
     needsLeaderWords: Boolean(job.effect),
     candidates, refused: assessed.filter(a => !a.feasible),
   };
+}
+
+
+/** Plan a whole office shift against the *same observed pool*.
+ * This is a deterministic, side-effect-free proposal: all budget holds and
+ * resource reservations are made only in temporary copies, never charged
+ * externally or persisted as a distributed lease. The receiver must acquire
+ * a single-writer original budget hold and fencing token before execution.
+ * Job ordering is the caller's independently governed priority ordering.
+ */
+export function planFleet(jobs,nodes,{ledger=null,budgets={},now}={}){
+  if(!Array.isArray(jobs)||!Array.isArray(nodes)||!jobs.length||
+    !Number.isFinite(Date.parse(now))||jobs.length>1000||nodes.length>256)
+    throw new TypeError('bounded original jobs, nodes and observation time required');
+  const ids=new Set();
+  for(const job of jobs){
+    if(typeof job?.id!=='string'||!job.id.trim()||ids.has(job.id))
+      throw new TypeError('unique original job identities required');
+    ids.add(job.id);
+  }
+  const locations=new Set();
+  for(const node of nodes){
+    if(typeof node?.id!=='string'||!node.id.trim()||locations.has(node.id))
+      throw new TypeError('unique original node identities required');
+    locations.add(node.id);
+  }
+  const provisionalNodes=structuredClone(nodes);
+  const provisionalLedger=ledger===null?null:structuredClone(ledger);
+  const provisionalBudgets=structuredClone(budgets);
+  const placements=[],pending=[],probes=[];
+  for(const job of jobs){
+    // An effectful office operation requires a separate authenticated
+    // authority/lease receiver. A pure placement plan cannot manufacture one.
+    if(job.effect===true){
+      pending.push({jobId:job.id,reason:'effect-authority-not-received'});
+      continue;
+    }
+    if(!Array.isArray(job.closure)||!Number.isFinite(job.minutes)||
+      job.minutes<=0||!Number.isFinite(job.maxMinutes)||
+      job.maxMinutes<job.minutes||job.maxMinutes<=0){
+      pending.push({jobId:job.id,reason:'original-job-closure-or-maximum-runtime-unmeasured'});
+      continue;
+    }
+    const dimensions=['cores','memoryGb','freeDiskGb'];
+    if(dimensions.some(k=>!Number.isFinite(job.needs?.[k])||job.needs[k]<0)||
+      job.needs.cores<=0){
+      pending.push({jobId:job.id,reason:'explicit-compute-footprint-required'});
+      continue;
+    }
+    const view=place(job,provisionalNodes,
+      {now,ledger:provisionalLedger,budgets:provisionalBudgets});
+    // Only candidates with finite worst-case runtime and *certain* measured
+    // resources can acquire provisional capacity. Possible measurements
+    // request probes; a chosen node name alone is never dispatch authority.
+    const candidate=view.candidates.find(c=>c.certainty==='certain'&&
+      Number.isFinite(c.price.max)&&provisionalNodes.some(n=>{
+        if(n.id!==c.nodeId)return false;
+        return dimensions.every(k=>typeof n[k]==='number'&&
+          Number.isFinite(n[k])&&n[k]>=job.needs[k]);
+      }));
+    if(!candidate){
+      if(view.candidates.some(c=>c.certainty!=='certain'||!Number.isFinite(c.price.max)))
+        probes.push({jobId:job.id,reason:'measure-original-node-resources-or-transfer-time',
+          nodeIds:view.candidates.map(c=>c.nodeId)});
+      pending.push({jobId:job.id,reason:'no-finite-certain-original-placement',
+        refused:view.refused.map(x=>({nodeId:x.nodeId,why:x.why}))});
+      continue;
+    }
+    const node=provisionalNodes.find(n=>n.id===candidate.nodeId);
+    // Account for *all* concurrent jobs in one provisional free allowance.
+    // Never expose the temporary hold as an authorization to execute work.
+    if(node.cost?.kind==='hosted-minutes'){
+      if(!candidate.budgetHold||!provisionalLedger){
+        pending.push({jobId:job.id,reason:'missing-original-hosted-hold'});
+        continue;
+      }
+      const held=hold(provisionalLedger,{jobId:job.id,
+        minutes:candidate.budgetHold.minutes});
+      if(!held.ok){
+        pending.push({jobId:job.id,reason:held.reason});
+        continue;
+      }
+    }else if(node.cost?.kind==='metered-free'){
+      if(!candidate.budgetHold||!provisionalBudgets[node.cost.scope]){
+        pending.push({jobId:job.id,reason:'missing-original-provider-budget'});
+        continue;
+      }
+      const held=holdBudget(provisionalBudgets[node.cost.scope],{
+        jobId:job.id,provider:node.cost.provider,scope:node.cost.scope,
+        now,units:candidate.budgetHold.units});
+      if(!held.ok){
+        pending.push({jobId:job.id,reason:held.reason});
+        continue;
+      }
+    }
+    const resourceHold=Object.fromEntries(dimensions.map(k=>[k,job.needs[k]]));
+    for(const key of dimensions)node[key]-=resourceHold[key];
+    placements.push({jobId:job.id,nodeId:node.id,resourceHold,
+      budgetHold:candidate.budgetHold,price:candidate.price,
+      state:'proposed-not-executed',leaseRequired:true});
+  }
+  return {kind:'original-fleet-placement-proposal',at:now,placements,pending,probes,
+    proposed:placements.length,unplaced:pending.length,
+    executed:0,providerBudgetHeld:false,leaseReceived:false,
+    // Remaining are temporary hypothetical amounts, not provider readback.
+    residualResources:provisionalNodes.map(n=>({nodeId:n.id,
+      cores:n.cores,memoryGb:n.memoryGb,freeDiskGb:n.freeDiskGb}))};
 }

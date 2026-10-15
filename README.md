@@ -52,6 +52,21 @@ GitHub minutes to zero. Other qualified nodes remain eligible even without
 a GitHub allowance. Non-observed node status, unknown cost kinds and private
 source on public-only compute refuse.
 
+**Distribute a whole original office shift before selecting a provider.**
+`planFleet(jobs,nodes,{now,ledger,budgets})` extends the same resource-placement
+engine, not a second scheduler. It provisionally packs *multiple jobs* against
+the same fresh, independently observed node CPU/RAM/disk and free-tier budgets,
+with temporary holds for maximum runtime and scoped private-source egress
+authority. It never mutates the original node or provider evidence, assumes
+a free account exists, acquires a live lease, or launches code. Uncertain
+resources create probe requests rather than silently receiving capacity; jobs
+with external effects require their real independent authority. Consumers
+must secure atomic provider budget holds and original fenced leases with
+an authenticated executor before turning proposals into effects. The original
+fleet regression uses one owned host, a CircleCI Free node and an OCI A1
+node with bounded *test-only* observations; it confirms distribution and
+no shared-quota double booking without pretending those nodes are online.
+
 **Settle only independently observed spent minutes and independent
 build agreement.** The original GitHub hosted allowance now prices and
 reserves a job's *maximum* bounded duration; a missing maximum cannot turn
