@@ -34,7 +34,11 @@ It uses supported gcloud builds connections/repositories/triggers API
 through one authenticated CLI, without holding, printing or copying credentials.
 
 Run node scripts/cloudbuild-github-trigger.mjs --help for the complete options.
-From an already authorized cloud toolchain, inspect reads the project,
+From an already authorized cloud toolchain, discover --project=ID --region=REGION
+--repository=OWNER/REPO finds the unique existing second-generation GitHub
+connection and repository resource, without guessing provider identifiers or
+creating another account, mirror, or registry. Absent, inaccessible and duplicate
+connections refuse rather than inventing a source. inspect then reads the project,
 billing-enabled status, installed GitHub App connection, linked repository URI,
 dedicated build principal, and all native trigger declarations. ensure first
 performs those identical reads, creates only one absent approved exact-main

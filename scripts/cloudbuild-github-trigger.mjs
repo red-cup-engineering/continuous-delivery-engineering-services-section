@@ -53,6 +53,52 @@ export function nativeGcloud(args,execute=execFileSync) {
   try{return JSON.parse(stdout);}catch{throw new Error('gcloud returned invalid JSON for '+args.slice(0,3).join(' '));}
 }
 
+/** Resolve one existing 2nd-gen private GitHub repository without a new
+ * catalogue, account, connection or provider write. */
+export function discoverNativeCloudBuildSource(input,{execute=execFileSync}={}){
+  const project=exact('project',input?.project,pattern.project);
+  const region=exact('region',input?.region,pattern.region);
+  const repository=exact('GitHub owner/repository',input?.repository,pattern.repo);
+  const read=args=>nativeGcloud(args,execute);
+  const current=read(['projects','describe',project,'--format=json']);
+  if(current.projectId!==project||current.lifecycleState!=='ACTIVE')
+    throw new Error('selected Google Cloud project unavailable');
+  const billing=read(['billing','projects','describe',project,'--format=json']);
+  if(billing.projectId!==project||billing.billingEnabled!==true)
+    throw new Error('selected Google Cloud billing unavailable');
+  const connections=read(['builds','connections','list','--project='+project,
+    '--region='+region,'--format=json']);
+  if(!Array.isArray(connections)||connections.length>32)
+    throw new Error('complete bounded native connection population required');
+  const matches=[];
+  for(const conn of connections){
+    if(typeof conn?.name!=='string'||
+      !conn.name.startsWith('projects/'+project+'/locations/'+region+'/connections/'))
+      throw new Error('foreign provider connection');
+    const connection=exact('connection',conn.name.split('/').at(-1),pattern.part);
+    if(conn.disabled===true||conn.reconciling===true||
+      conn.installationState?.stage!=='COMPLETE'||
+      !/^\d+$/u.test(conn.githubConfig?.appInstallationId??''))continue;
+    const rows=read(['builds','repositories','list','--connection='+connection,
+      '--project='+project,'--region='+region,'--format=json']);
+    if(!Array.isArray(rows)||rows.length>500)
+      throw new Error('complete bounded connected repository list required');
+    for(const entry of rows){
+      if(typeof entry?.name!=='string'||
+        !entry.name.startsWith(conn.name+'/repositories/'))
+        throw new Error('connected source outside owning connection');
+      const repositoryId=exact('repository ID',entry.name.split('/').at(-1),pattern.part);
+      if(remoteName(entry.remoteUri)===repository.toLowerCase())
+        matches.push({project,region,repository,connection,repositoryId,
+          repoResource:entry.name,connectionResource:conn.name});
+    }
+  }
+  if(matches.length!==1)throw new Error(matches.length===0
+    ?'selected GitHub repository is not connected in this GCP project/region'
+    :'ambiguous duplicate private GitHub repository connections');
+  return {...matches[0],sourceDiscovered:true,providerReadback:true,triggerInstalled:false};
+}
+
 export function plannedNativeTrigger(source) {
   return ['builds','triggers','create','github','--name='+source.trigger,
     '--project='+source.project,'--region='+source.region,
@@ -200,25 +246,29 @@ export function readNativeCloudBuildResult(request,{execute=execFileSync}={}){
   return {...qualifyNativeCloudBuildResult(build,request),project,region};
 }
 
-const usage='Usage: cloudbuild-github-trigger inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID --source-resource=projects/.../repositories/... --service-account=projects/.../serviceAccounts/... --image=IMAGE@sha256:DIGEST --command="npm run verify"';
+const usage='Usage: cloudbuild-github-trigger discover --project=ID --region=REGION --repository=OWNER/REPO; or inspect|ensure --project=ID --region=REGION --connection=ID --repository-id=ID --repository=OWNER/REPO --trigger=NAME --image=IMAGE@sha256:DIGEST --service-account=projects/ID/serviceAccounts/ci-...@ID.iam.gserviceaccount.com; or read-build --project=ID --region=REGION --id=BUILD --trigger-id=TRIGGER --commit=SHA --repository=OWNER/REPO --step=TEST_ID --source-resource=projects/.../repositories/... --service-account=projects/.../serviceAccounts/... --image=IMAGE@sha256:DIGEST --command="npm run verify"';
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href){
   try {
     const [mode,...opts]=process.argv.slice(2);
     if(mode==='--help'){process.stdout.write(usage+'\n');}
     else {
-      if(!['inspect','ensure','read-build'].includes(mode))throw new TypeError(usage);
+      if(!['discover','inspect','ensure','read-build'].includes(mode))throw new TypeError(usage);
       const fields={};
       for(const arg of opts){
         const m=/^--([a-z-]+)=(.+)$/u.exec(arg);
         if(!m||Object.hasOwn(fields,m[1]))throw new TypeError('invalid/duplicate option');
         fields[m[1]]=m[2];
       }
-      const keys=mode==='read-build'
+      const keys=mode==='discover'
+        ?['project','region','repository']
+        :mode==='read-build'
         ?['project','region','id','trigger-id','commit','repository','step','source-resource','service-account','image','command']
         :['project','region','connection','repository-id','repository','trigger','image','service-account'];
       if(Object.keys(fields).length!==keys.length||Object.keys(fields).some(k=>!keys.includes(k)))
         throw new TypeError(usage);
-      const value=mode==='read-build'
+      const value=mode==='discover'
+        ? discoverNativeCloudBuildSource(fields)
+        :mode==='read-build'
         ? readNativeCloudBuildResult({...fields,triggerId:fields['trigger-id'],sourceResource:fields['source-resource'],serviceAccount:fields['service-account']})
         : receiveCloudBuildTrigger({...fields,repositoryId:fields['repository-id'],
           serviceAccount:fields['service-account'],apply:mode==='ensure'});
