@@ -36,11 +36,12 @@ export async function publishPacked({ plan, packDir, registry, npmrc, tag = 'can
     else if (present(r)) present_.push(`${f.name}@${f.version}`);
     else return { ok: false, failedAt: f.name, published, present: present_ };
   }
+  if (!promote || promote === 'none') return { ok: true, root: null, promoted: null, published, present: present_ };
   const root = plan.files.find(f => f.name === plan.root);
   if (!root) return { ok: false, failedAt: 'root-not-in-plan', published, present: present_ };
-  if (promote) {
+  {
     const r = await run('npm', [...promoteArgs(root.name, root.version, promote, registry), '--userconfig', npmrc]);
     if (r.status !== 0) return { ok: false, failedAt: `dist-tag:${promote}`, published, present: present_ };
   }
-  return { ok: true, root: `${root.name}@${root.version}`, promoted: promote || null, published, present: present_ };
+  return { ok: true, root: `${root.name}@${root.version}`, promoted: promote, published, present: present_ };
 }

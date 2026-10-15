@@ -47,4 +47,16 @@ export function rewriteManifest(manifest, version, internal) {
   delete out.devDependencies; delete out.scripts?.prepare;
   return out;
 }
+// A publication unit is the named packages of one checkout, published at that checkout's commit. A dependency
+// that is another named package of the unit gets the unit's exact version. Any other internal dependency (a
+// workspace range, or a package this checkout holds that an earlier unit published) is external and must resolve
+// to a version already in the registry, so units publish in dependency order.
+export function planUnit(names, index, sha) {
+  const only = new Set(names), absent = names.filter(n => !index.has(n));
+  const held = names.filter(n => index.has(n));
+  const packages = held.map(n => { const p = index.get(n); return { name: n, dir: p.dir, base: /^\d+\.\d+\.\d+$/.test(p.manifest.version) ? p.manifest.version : '0.0.0', dependsOn: Object.keys(declared(p.manifest)).filter(d => only.has(d)) }; });
+  const plan = planPublish(packages, sha, { failOnCycle: false });
+  const external = Object.fromEntries(held.map(n => [n, Object.entries(declared(index.get(n).manifest)).filter(([d, r]) => !only.has(d) && (index.has(d) || /^(workspace|link|file):/.test(r))).map(([d]) => d)]));
+  return { plan, absent, external, cycles: plan.cycles };
+}
 export const planClosure = (rootName, index, sha, options) => { const c = closureOf(rootName, index); const plan = planPublish(c.packages, sha, options); return { plan, missing: c.missing, cycles: plan.cycles }; };
