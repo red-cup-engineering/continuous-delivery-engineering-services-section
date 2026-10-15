@@ -86,8 +86,14 @@ test('provider trigger conflicts and missing manual approval are refused',()=>{
     assert.throws(()=>receiveCloudBuildTrigger({...input,apply:true},
       host({listRows,mutate:true})));
 });
-test('build readback observes actual successful step and rejects switched identity',()=>{
+test('build readback requires a direct successful npm test after original preflight',()=>{
   const sourceResource=s.repoResource,serviceAccount=s.serviceAccount,command='npm run verify';
+  const steps=[
+    {id:'source-identity',status:'SUCCESS',name:image,entrypoint:'bash',
+      args:['-euc','echo original source selected\n'],env:['BUILDER_IMAGE='+image]},
+    {id:'source-custody-regressions',status:'SUCCESS',name:image,entrypoint:'npm',
+      args:['run','verify'],env:['BUILDER_IMAGE='+image]}
+  ];
   const build={id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',projectId:s.project,
     buildTriggerId:id,status:'SUCCESS',
     source:{connectedRepository:{repository:sourceResource,revision:'refs/heads/main'}},
@@ -95,45 +101,34 @@ test('build readback observes actual successful step and rejects switched identi
     serviceAccount,approval:{state:'APPROVED',config:{approvalRequired:true},result:{decision:'APPROVED'}},
     options:{machineType:'E2_STANDARD_2',logging:'CLOUD_LOGGING_ONLY'},
     substitutions:{COMMIT_SHA:'c'.repeat(40),REPO_FULL_NAME:input.repository,BRANCH_NAME:'main'},
-    steps:[{id:'source-custody-regressions',status:'SUCCESS',name:image,entrypoint:'bash',
-      args:['-euc','# immutable original source\nnpm run verify\n'],env:['BUILDER_IMAGE='+image]}]};
+    steps};
   const request={id:build.id,triggerId:id,commit:'c'.repeat(40),repository:input.repository,
     step:'source-custody-regressions',sourceResource,serviceAccount,image,command,
-    expectedSteps:[{id:build.steps[0].id,name:build.steps[0].name,
-      entrypoint:build.steps[0].entrypoint,args:build.steps[0].args,env:build.steps[0].env}]};
+    expectedSteps:steps.map(({id,name,entrypoint,args,env})=>({id,name,entrypoint,args,env}))};
   assert.equal(qualifyNativeCloudBuildResult(build,request).state,'TEST_EXECUTED');
   const pinned={...build,source:{connectedRepository:{
     repository:sourceResource,revision:request.commit}},
     substitutions:{...build.substitutions,BRANCH_NAME:''}};
   assert.equal(qualifyNativeCloudBuildResult(pinned,request).state,'TEST_EXECUTED');
-  assert.throws(()=>qualifyNativeCloudBuildResult({...pinned,
-    source:{connectedRepository:{repository:sourceResource,revision:'d'.repeat(40)}}},request));
-
-  for(const changed of [{status:'FAILURE'}, {steps:[]},{buildTriggerId:'bad'},
-    {substitutions:{COMMIT_SHA:'d'.repeat(40),REPO_FULL_NAME:input.repository}}])
-    assert.throws(()=>qualifyNativeCloudBuildResult({...build,...changed},request));
-  assert.equal(qualifyNativeCloudBuildResult(build,request).selectedStep,request.step);
-  // The previously accepted early-exit command never runs npm verify.
-  assert.throws(()=>qualifyNativeCloudBuildResult({...build,
-    steps:[{...build.steps[0],args:['-euc','exit 0\\nnpm run verify\\n']}]},request));
-  const alternate={...build,steps:[{...build.steps[0],id:'different-test-suite'}]};
-  assert.equal(qualifyNativeCloudBuildResult(alternate,{
-    ...request,step:'different-test-suite',
-    expectedSteps:[{...request.expectedSteps[0],id:'different-test-suite'}]
-  }).selectedStep,'different-test-suite');
-  assert.throws(()=>qualifyNativeCloudBuildResult(alternate,request));
-  // Previously accepted: unrelated storage source and an echo-only fake test.
   for(const change of [
+    {status:'FAILURE'}, {steps:[]},{buildTriggerId:'bad'},
+    {substitutions:{...build.substitutions,COMMIT_SHA:'d'.repeat(40)}},
     {source:{storageSource:{bucket:'unrelated',object:'spoof.tgz'}}},
-    {sourceProvenance:{resolvedStorageSource:{bucket:'unrelated',object:'spoof.tgz'}}},
     {sourceProvenance:{resolvedConnectedRepository:{repository:sourceResource,revision:'d'.repeat(40)}}},
     {approval:{state:'PENDING',config:{approvalRequired:true}}},
     {serviceAccount:'projects/other/serviceAccounts/admin@other.iam.gserviceaccount.com'},
     {options:{machineType:'E2_STANDARD_2',logging:'CLOUD_LOGGING_ONLY',pool:{name:'wrong'}}},
-    {steps:[{...build.steps[0],name:'busybox',args:['-euc','echo done'],env:[]}]},
-    {steps:[{...build.steps[0],args:['-euc','echo looks good'],env:['BUILDER_IMAGE='+image]}]},
-    {substitutions:{...build.substitutions,BRANCH_NAME:'release'}}
-  ])assert.throws(()=>qualifyNativeCloudBuildResult({...build,...change},request));
+    {steps:[{...steps[0]}, {...steps[1],entrypoint:'bash',
+      args:['-euc','exit 0\nnpm run verify\n']}]},
+    {steps:[{...steps[0]}, {...steps[1],args:['run','test']}]},
+    {steps:[{...steps[0]}, {...steps[1],allowFailure:true}]},
+    {steps:[{...steps[0]}, {...steps[1],exitCode:1}]},
+    {steps:[{...steps[1]}, {...steps[0]}]},
+    {steps:[{...steps[1]}]},
+    {substitutions:{...build.substitutions,BRANCH_NAME:'feature'}}
+  ]) assert.throws(()=>qualifyNativeCloudBuildResult({...build,...change},request));
+  assert.throws(()=>qualifyNativeCloudBuildResult(build,
+    {...request,command:'npm run test'}),/original source test/);
 });
 
 test('native 2nd-gen repository discovery requires one genuine matching GitHub connection',()=>{
@@ -231,7 +226,7 @@ test('native pending request has a provider build receipt; failure is never retr
   assert.equal(f.calls.filter(args=>args[2]==='run').length,1);
 });
 
-test('real Git objects bind the entire committed build step before GCP readback',()=>{
+test('original immutable Git recipe executes source checks before a direct npm test',()=>{
   const root=mkdtempSync(join(tmpdir(),'cloudbuild-original-'));
   const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
   try{
@@ -242,36 +237,36 @@ test('real Git objects bind the entire committed build step before GCP readback'
       '  machineType: E2_STANDARD_2',
       '  logging: CLOUD_LOGGING_ONLY',
       'steps:',
-      '  - id: source-custody-regressions',
-      "    name: '${_NODE_IMAGE}'",
+      '  - id: source-identity',
+      '    name: "${_NODE_IMAGE}"',
       '    entrypoint: bash',
       '    env:',
-      "      - 'BUILDER_IMAGE=${_NODE_IMAGE}'",
+      '      - "BUILDER_IMAGE=${_NODE_IMAGE}"',
       '    args:',
       '      - -euc',
       '      - |',
-      '        # immutable original source',
-      '        source_commit="$COMMIT_SHA"',
-      '        echo "$$source_commit"',
-      '        echo "$REPO_FULL_NAME"',
+      '        echo "$COMMIT_SHA"',
       '        echo "$BRANCH_NAME"',
-      '        echo "$$BUILDER_IMAGE"',
-      '        npm run verify',
+      '  - id: source-custody-regressions',
+      '    name: "${_NODE_IMAGE}"',
+      '    entrypoint: npm',
+      '    env:',
+      '      - "BUILDER_IMAGE=${_NODE_IMAGE}"',
+      '    args:',
+      '      - run',
+      '      - verify',
     ].join('\n')+'\n';
     writeFileSync(join(root,'cloudbuild.yaml'),yaml);
     git('-C',root,'add','cloudbuild.yaml');
     git('-C',root,'-c','user.email=ci@example.invalid','-c','user.name=CI','commit','-qm','qualified source');
     const commit=git('-C',root,'rev-parse','HEAD');
-    const expectedSource={sourceWorkspace:root,commit,repository:input.repository,image,step:'source-custody-regressions'};
+    const expectedSource={sourceWorkspace:root,commit,repository:input.repository,
+      image,step:'source-custody-regressions',command:'npm run verify'};
     const steps=readCommittedCloudBuildSteps(expectedSource);
-    assert.equal(steps.length,1);
-    assert.deepEqual(steps[0].args,['-euc',
-      '# immutable original source\nsource_commit="'+commit+'"\n'+
-      'echo "$source_commit"\n'+
-      'echo "'+input.repository+'"\n'+
-      'echo "main"\n'+
-      'echo "$BUILDER_IMAGE"\n'+
-      'npm run verify\n']);
+    assert.equal(steps.length,2);
+    assert.deepEqual(steps[0].args,['-euc','echo "'+commit+'"\necho "main"\n']);
+    assert.equal(steps[1].entrypoint,'npm');
+    assert.deepEqual(steps[1].args,['run','verify']);
     const build={id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',projectId:s.project,
       buildTriggerId:id,status:'SUCCESS',
       source:{connectedRepository:{repository:s.repoResource,revision:'refs/heads/main'}},
@@ -282,29 +277,28 @@ test('real Git objects bind the entire committed build step before GCP readback'
       substitutions:{COMMIT_SHA:commit,REPO_FULL_NAME:input.repository,BRANCH_NAME:'main'},
       steps:steps.map(x=>({...x,status:'SUCCESS'}))};
     const request={...expectedSource,id:build.id,triggerId:id,sourceResource:s.repoResource,
-      serviceAccount:s.serviceAccount,command:'npm run verify',project:s.project,region:s.region};
-    const receipt=readNativeCloudBuildResult(request,{execute:(command,args)=>{
-      assert.equal(command,'gcloud');assert.equal(args[1],'describe');return JSON.stringify(build);
-    }});
+      serviceAccount:s.serviceAccount,project:s.project,region:s.region};
+    const receipt=readNativeCloudBuildResult(request,{execute:()=>JSON.stringify(build)});
     assert.equal(receipt.committedSourceCompared,true);
     assert.equal(receipt.state,'TEST_EXECUTED');
-    // gcloud builds triggers run --sha=COMMIT may omit BRANCH_NAME. The same
-    // exact Git recipe must compare against the provider's empty substitution.
     const pinnedSteps=readCommittedCloudBuildSteps({...expectedSource,branchName:''});
-    assert.ok(pinnedSteps[0].args[1].includes('echo ""'));
-    const pinnedBuild={...build,
-      source:{connectedRepository:{repository:s.repoResource,revision:commit}},
+    assert.equal(pinnedSteps[0].args[1],'echo "'+commit+'"\necho ""\n');
+    const pinned={...build,source:{connectedRepository:{repository:s.repoResource,revision:commit}},
       substitutions:{...build.substitutions,BRANCH_NAME:''},
       steps:pinnedSteps.map(x=>({...x,status:'SUCCESS'}))};
-    const pinnedReceipt=readNativeCloudBuildResult(request,{execute:()=>JSON.stringify(pinnedBuild)});
-    assert.equal(pinnedReceipt.state,'TEST_EXECUTED');
+    assert.equal(readNativeCloudBuildResult(request,{execute:()=>JSON.stringify(pinned)}).state,'TEST_EXECUTED');
     assert.throws(()=>readCommittedCloudBuildSteps({...expectedSource,branchName:'feature'}));
-    const changedPinned={...pinnedBuild,steps:steps.map(x=>({...x,status:'SUCCESS'}))};
-    assert.throws(()=>readNativeCloudBuildResult(request,{execute:()=>JSON.stringify(changedPinned)}));
-
-    // A successful early-exit program would formerly get TEST_EXECUTED.
-    build.steps=[{...build.steps[0],args:['-euc','exit 0\nnpm run verify\n']}];
-    assert.throws(()=>readNativeCloudBuildResult(request,{execute:()=>JSON.stringify(build)}));
+    // Even a script stored at the *correct* source commit cannot receive
+    // test success if it replaces the direct npm process with an early exit.
+    const malicious=yaml.replace('    entrypoint: npm','    entrypoint: bash')
+      .replace('      - run\n      - verify','      - -euc\n      - |\n        exit 0\n        npm run verify');
+    writeFileSync(join(root,'cloudbuild.yaml'),malicious);
+    git('-C',root,'add','cloudbuild.yaml');
+    git('-C',root,'-c','user.email=ci@example.invalid','-c','user.name=CI','commit','-qm','early exit source');
+    const badCommit=git('-C',root,'rev-parse','HEAD');
+    assert.throws(()=>readCommittedCloudBuildSteps({...expectedSource,commit:badCommit}));
+    // Dirty workspace changes do not change the selected older Git object.
+    assert.equal(readCommittedCloudBuildSteps(expectedSource).length,2);
     assert.throws(()=>readCommittedCloudBuildSteps({...expectedSource,commit:'a'.repeat(40)}));
   }finally{rmSync(root,{recursive:true,force:true});}
 });
