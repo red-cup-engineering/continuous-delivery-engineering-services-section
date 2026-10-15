@@ -189,7 +189,7 @@ export function receiveCloudBuildTrigger(input,{execute=execFileSync}={}){
  */
 export function requestNativeCloudBuild(input,{execute=execFileSync}={}){
   const commit=exact('source commit',input?.commit,pattern.commit);
-  const trigger=receiveCloudBuildTrigger(input,{execute});
+  const trigger=receiveCloudBuildTrigger({...input,apply:false},{execute});
   if(trigger.state!=='EXISTING')
     throw new Error('install and independently receive the existing approved trigger first');
   const request=['builds','triggers','run',trigger.id,
