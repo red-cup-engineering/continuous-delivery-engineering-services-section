@@ -31,7 +31,84 @@
     "unknowns": "An unadvertised quantity is an interval from zero to unbounded, never zero; a placement on such a node is marked for probing.",
     "evidence": "Provider budget readback alone is not machine status. Original external provider/API must authenticate node, remaining quota, and cost rates; static Git node declarations are not live resource authority. No public source clone may qualify as proof of a private build.",
     "code": "src/placement/{allowance,place,lease,settle}.mjs",
-    "tests": "test/placement.test.mjs"
+    "tests": "test/placement.test.mjs",
+    "executionPools": {
+      "status": "specified-not-dispatched",
+      "decision": {
+        "date": "2026-10-16",
+        "source": "Leader request and engineering delegation in task 01a12e43-345e-71de-affb-cda1fd6890ee",
+        "selection": "One logical Group compute service uses the existing placement engine over stable, independently authorized and budgeted execution pools. Federation is permitted, not required per Group section. No provider organization aggregation is assumed.",
+        "rationale": "Distribute original work by eligible resources and economic cost without coupling jobs to account setup or moving security boundaries.",
+        "lineage": "Refines requirement blob 65f4537d7e476ee09c7d1d21f1f5c575dbff3e65 at commit 4e5480cc0e82604f51f674616b0f2e493d04a3cd; preserves original inputs, refusals and source owners."
+      },
+      "ownership": {
+        "corporate": "The original workload owner retains priority, private-client custody, effect authority and acceptance. A Group service relationship does not transfer these authorities to a provider.",
+        "engineering": "Continuous Delivery owns placement, allowance, fencing and build comparison through src/placement/ and scripts/place-job.mjs. Pool refers to existing provider custody, not a new scheduler or machine catalogue.",
+        "operations": "Existing provider/account and instance owners authenticate connection scope, observation and native execution. Reuse computer-system-platform provider observation where installed and authorized.",
+        "receiving": "The original independent receiver qualifies the specified source/artifact result. Code, Guix and LAGOON retain separate composition, product and installed-target obligations."
+      },
+      "identityBoundaries": [
+        "Retain workload owner, client, authority and logical job identity separately from dispatch attempt and provider-native job identity.",
+        "Bind immutable source repository/revision, configuration supplier/revision and required artifact identities to the original job. Shared configuration is a versioned dependency, not a private-source grant.",
+        "Bind each pool to existing provider account, organization, connection and project/executor identities where applicable. Provider organizations remain stable security and budget boundaries.",
+        "Bind observations and maximum-duration reservations to exact native budget scopes and denominations. Equal quota names, common corporate ownership or shared configuration do not authorize quota pooling.",
+        "Preserve existing typed source, authority, budget, lease and receipt contracts; this refinement is not an alternate dispatch schema or identity service."
+      ],
+      "invariants": [
+        "Planning and dispatch MUST NOT create or relocate accounts, mutate provider-organization attachment, change repository grants, create credentials or provision targets. Such changes are separate specifically authorized operations, never routing fallbacks.",
+        "Private clients MUST retain separately qualified source-egress and credential custody. Account visibility, free balance or a public job does not authorize another private checkout.",
+        "Eligibility MUST retain fresh capacity, exact visibility/egress, capabilities, resource dimensions, bounded runtime and free-only quota checks. Rank eligible pools using existing transfer, queue, availability and scarcity logic; preserve caller priority and deterministic ordered-input behavior.",
+        "Before dispatch, an already authorized executor MUST enforce durable atomic reservation and single-writer fenced execution custody using the original budget and lease owners. Concurrent requests cannot double-book units or obtain simultaneous live authority for one logical job.",
+        "Durable dispatch custody MUST correlate logical job, immutable inputs, attempt, hold, fencing token and native provider request/result. Identical replay returns or reconciles the original attempt, never a second dispatch. Changed inputs cannot silently reuse a job identity.",
+        "An uncertain provider response MUST remain unresolved at the original destination until native reconciliation establishes its state. Lease expiry alone does not prove an external effect stopped or permit duplicate effects.",
+        "Authorization or policy denial MUST NOT be bypassed through another executor. Capacity failure may be replanned only after original-attempt reconciliation and hold disposition, with an already authorized destination, exact egress grant and fresh capacity/quota. A permitted new attempt retains the logical job and receives a new fencing token; stale effects remain refused.",
+        "Settlement MUST use authentic actual usage in every held denomination and exact account scope. Refusal or void cannot erase consumption; overrun or contradictory readback requires reconciliation, never paid spillover.",
+        "Receiving MUST bind original work, source/configuration, artifact digest, provider attempt, executor and actual usage to independent acceptance. Artifact transfer/testing is not two independent builds; compareBuilds retains separately qualified builders before independent build agreement."
+      ],
+      "alternatives": [
+        {
+          "option": "stable centralized provider topology",
+          "assessment": "Reduces administration where connection support and client custody are proven, but concentrates quota and failures. Not a universal assumption; native cardinality and exact grants must be verified."
+        },
+        {
+          "option": "federated stable provider topology",
+          "assessment": "Permitted within the one logical service to preserve account, budget and client boundaries. Account for fixed administration and native organization/project ceilings. Does not require an organization per section or task."
+        },
+        {
+          "option": "per-job account setup or organization relocation",
+          "assessment": "Rejected: routing would mutate security boundaries, invalidate observations and consume scarce organization/project capacity instead of using existing resources."
+        }
+      ],
+      "unresolvedDependencies": [
+        "Verify actual provider connection cardinality and repository support before admitting a concrete topology. Support for App pipelines in a CircleCI OAuth organization does not prove multiple GitHub organizations per CircleCI organization.",
+        "Confirm provider Free organization/project ceilings against the actual account before separately authorized setup. No paid upgrade, account multiplication to evade limits or quota pooling is assumed.",
+        "Exact account migrations, connection changes and new grants remain separate decisions; this requirement neither selects nor authorizes them.",
+        "Current place/planFleet and scripts/place-job.mjs produce proposals only. Allowance and lease modules operate on caller-held tables; this refinement establishes no installed durable atomic provider executor or cross-host dispatch integration."
+      ],
+      "acceptance": [
+        {
+          "case": "two original repository jobs",
+          "required": "Execute both bounded jobs through admitted pools with exact source/config revisions. Independently read unchanged account/organization/connection identities before and after; qualify private egress per job."
+        },
+        {
+          "case": "replay and uncertain response",
+          "required": "Replay an identical logical job, including after a lost dispatch response. Native provider inventory and durable custody identify one original execution and hold, or explicit unresolved refusal; no second dispatch occurs."
+        },
+        {
+          "case": "concurrent account quota isolation",
+          "required": "Reserve maximum units without double booking. Exhaustion or observation drift in one account cannot debit or borrow another scope. Settle every actual denomination from native receipts."
+        },
+        {
+          "case": "denial and capacity failover",
+          "required": "Authorization denial stops without executor evasion. Reconciled capacity failure may use another admitted pool only with its exact egress, capacity and budget qualification. Connections stay unchanged; stale fencing tokens cannot authorize effects."
+        },
+        {
+          "case": "independent original receiving",
+          "required": "Retain native job IDs, exact source/configuration and artifact digests, original test outputs, usage and independent acceptance/refusal. Failed, skipped, queued or unobserved work is not delivered; public artifacts cannot satisfy a private job."
+        }
+      ],
+      "verificationBoundary": "Required integration acceptance cases, not claims that placement unit tests or public artifact CI exercise a durable provider dispatcher. Existing tests remain scoped source evidence. This requirement change is not test-only and retains ordinary review and the applicable machine integration gate."
+    }
   },
   "code": "src/placement/",
   "tests": "test/placement.test.mjs"
