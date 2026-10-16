@@ -524,7 +524,62 @@ Tests: `npm test`.
 
 ## One path from change to machine
 
-A house package is made, tested, received and released along one path:
+### Approved test-source integration allocation (2026-10-16)
+
+The Leader explicitly approved separating strictly test-only source integration
+from machine qualification on 2026-10-16 at 18:27:11 UTC, in response to the
+18:26:17 proposal: “strictly test-only changes can merge after independent review,
+source tests and exact packaged-artifact receiving”; runtime, dependencies,
+workflows, build/deployment policy and mixed changes retain the existing machine
+gate, and branch protections stay unchanged. Governing source: original task
+`01a12e43-345e-71de-affb-cda1fd6890ee`. This paragraph records that explicit
+governing decision; this policy amendment is **not itself test-only** and is not
+self-authorized by the exception it defines.
+
+A strictly test-only proposal may merge after **test-source qualification** only
+when all of the following are independently established at its exact candidate:
+
+- The complete committed diff changes only existing test files. Production
+  modules, manifests, dependency locks, generators, workflow definitions,
+  build/deployment policy, admission rules and receiving selections are unchanged.
+- The changed files are tests only, not production entrypoints or fixtures consumed
+  by runtime/build code. Unknown or mixed consumption is ineligible.
+- Tests are not skipped or removed, coverage is not reduced, and failure
+  expectations, dependency checks and tolerances are not weakened. A repaired
+  positive fixture must satisfy the unchanged production contract; corresponding
+  refusal and preservation cases remain tested.
+- Independent review relates every changed assertion to the existing production
+  contract and accepts the exact source revision. An authenticated full diff,
+  the original public source suite and independent execution of the original
+  tests from the exact packaged artifact all qualify that revision. Receipts
+  bind candidate/tested tree identity, artifact digest and distinct producer and
+  receiver jobs. A changed base or candidate requires fresh qualification of the
+  resulting tree; prior review can be retained only for demonstrably unchanged
+  reviewed bytes and scope.
+- The owning pull request records eligibility, independent review and source/
+  artifact receipts, and uses an ordinary merge commit under unchanged repository
+  protections. Missing evidence keeps it unqualified.
+
+Changes to test selection or execution scripts, generated output, runtime-used
+fixtures, production behavior, dependencies, composition, workflows, build or
+deployment policy are **not** eligible. Neither a filename under `test/` nor
+passing CI is sufficient. Mixed changes and uncertain impact retain the machine
+comparison requirement below. This route grants no publication, machine-pin
+advancement, installation, deployment, spending or runtime acceptance.
+
+The received stage is **test-source qualification**, never machine
+`no-regression`. Tests included in a package remain changed artifact bytes.
+Later machine integration and operating acceptance retain their original
+Code/Guix/LAGOON obligations. The initial motivating proposal is
+[PR #74](https://github.com/red-cup-engineering/continuous-delivery-services-section/pull/74);
+its [independent source/artifact review](https://github.com/red-cup-engineering/continuous-delivery-services-section/pull/74#issuecomment-6222054562)
+predates this decision and did not itself waive the former gate.
+
+### Machine-affecting integration
+
+Except for the strictly test-only source route above, a house package is made,
+tested, received and released along the following path. Runtime, dependency,
+composition, workflow, build/deployment-policy and mixed changes retain it:
 
 1. **Pull request:** the release controller receives it before merge. A machine's runner runs
    `receive-pull-requests.mjs`: each open pull request into a ref the machine tracks is composed into the machine's
@@ -567,8 +622,10 @@ current generator and immutable-source contracts. The retained
 `agent-work-contract` job identifier is a compatibility name, not an active
 branch-intake operation.
 
-This retirement does not relax source review, the machine no-regression merge
-gate, runner admission, or separate deployment and customer receiving.
+This retirement does not relax source review, runner admission, or separate
+deployment and customer receiving. The machine no-regression merge gate remains
+for every change outside the explicitly approved strictly test-only source
+integration allocation above; retirement itself creates no exception.
 
 ## Reconcile retired branch-intake callers across actual GitHub repositories
 
