@@ -36,7 +36,7 @@
       "status": "specified-not-dispatched",
       "decision": {
         "date": "2026-10-16",
-        "source": "Leader request and engineering delegation in task 01a12e43-345e-71de-affb-cda1fd6890ee",
+        "source": "Leader request and engineering delegation in conversation thread 01a12e43-345e-71de-affb-cda1fd6890ee; conversation provenance only, not an institutional Task or stage-admission witness.",
         "selection": "One logical Group compute service uses the existing placement engine over stable, independently authorized and budgeted execution pools. Federation is permitted, not required per Group section. No provider organization aggregation is assumed.",
         "rationale": "Distribute original work by eligible resources and economic cost without coupling jobs to account setup or moving security boundaries.",
         "lineage": "Refines requirement blob 65f4537d7e476ee09c7d1d21f1f5c575dbff3e65 at commit 4e5480cc0e82604f51f674616b0f2e493d04a3cd; preserves original inputs, refusals and source owners."
@@ -55,7 +55,7 @@
         "Preserve existing typed source, authority, budget, lease and receipt contracts; this refinement is not an alternate dispatch schema or identity service."
       ],
       "invariants": [
-        "Planning and dispatch MUST NOT create or relocate accounts, mutate provider-organization attachment, change repository grants, create credentials or provision targets. Such changes are separate specifically authorized operations, never routing fallbacks.",
+        "Planning and dispatch MUST NOT create or relocate accounts, mutate provider-organization attachment, change repository grants, create credentials, establish new authority or provision new infrastructure or deployment targets. Such changes are separate specifically authorized operations, never routing fallbacks. Bounded ephemeral executor allocation, execution and teardown inside an already admitted pool are permitted within its existing authority, resource, budget and isolation contract; this lifecycle does not admit a new pool or expand its authority.",
         "Private clients MUST retain separately qualified source-egress and credential custody. Account visibility, free balance or a public job does not authorize another private checkout.",
         "Eligibility MUST retain fresh capacity, exact visibility/egress, capabilities, resource dimensions, bounded runtime and free-only quota checks. Rank eligible pools using existing transfer, queue, availability and scarcity logic; preserve caller priority and deterministic ordered-input behavior.",
         "Before dispatch, an already authorized executor MUST enforce durable atomic reservation and single-writer fenced execution custody using the original budget and lease owners. Concurrent requests cannot double-book units or obtain simultaneous live authority for one logical job.",
