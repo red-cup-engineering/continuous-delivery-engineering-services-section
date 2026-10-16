@@ -125,7 +125,12 @@ test('closure: follows internal dependencies, rewrites workspace ranges to exact
   const m = rewriteManifest(index.get('@x/svc').manifest, svc.version, svc.internal);
   assert.equal(m.dependencies['@x/lib'], plan[1].version);
   assert.equal(m.dependencies.yaml, '2.8.3');
-  assert.equal(rewriteManifest(index.get('@x/lib').manifest, 'v', {}).devDependencies, undefined);
+  const lib = plan.find(p => p.name === '@x/lib');
+  const rewrittenLib = rewriteManifest(index.get('@x/lib').manifest, lib.version, lib.internal);
+  assert.equal(rewrittenLib.devDependencies, undefined);
+  assert.equal(rewrittenLib.dependencies['@x/deep'], plan[0].version);
+  assert.equal(index.get('@x/lib').manifest.dependencies['@x/deep'], 'workspace:*');
+  assert.throws(() => rewriteManifest(index.get('@x/lib').manifest, lib.version, {}), /unresolved-local-dependency:@x\/lib:@x\/deep/);
   assert.throws(()=>rewriteManifest(index.get('@x/lost').manifest,'v',{}),/unresolved-local-dependency:@x\/lost:@x\/absent/);
   assert.equal(index.get('@x/lost').manifest.dependencies['@x/absent'],'workspace:*');
   const original={name:'@x/test',scripts:{prepare:'node create.js',start:'node run.js'},optionalDependencies:{'@x/remote':'file:../remote'}};
