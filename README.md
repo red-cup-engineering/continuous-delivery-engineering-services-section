@@ -575,9 +575,61 @@ Code/Guix/LAGOON obligations. The initial motivating proposal is
 its [independent source/artifact review](https://github.com/red-cup-engineering/continuous-delivery-services-section/pull/74#issuecomment-6222054562)
 predates this decision and did not itself waive the former gate.
 
+### Approved non-executable source integration allocation (2026-10-16)
+
+The Leader explicitly approved this bounded source-only extension at
+18:56:43 UTC on 2026-10-16, responding to the 18:55:11 proposal to integrate
+inert requirements/documentation after verifying that they are not loaded or
+generated into runtime behavior. Conversation provenance: thread
+`01a12e43-345e-71de-affb-cda1fd6890ee`, proposal
+`Sentinel_ee403f6fdf3481918d482835d7afe3fb`, approval
+`Sentinel_951afdbb8fd08191888386f6f08ca858`. These conversation identifiers
+are provenance, not an institutional Task or stage-admission witness.
+This governing policy amendment is authorized by the explicit Leader decision,
+**not** by the non-executable-source exception it defines; policy changes remain
+outside that exception.
+
+A proposal limited to non-executable requirements or documentation may merge
+after **non-executable source qualification** only when all of the following
+are independently established at its exact candidate:
+
+- Independent review identifies every changed field or passage, its current
+  consumers and the exact assessed source/build scope. Within that scope the
+  changed content is only preserved, displayed, parsed or schema-validated.
+  It is not interpreted as runtime configuration, generation directives,
+  build/deployment selections, access rules or integration policy.
+  Unknown interpretation within the assessed scope is ineligible; filename,
+  location, a documentation label or passing CI cannot establish inertness.
+- The complete diff leaves runtime code, executable configuration, generation
+  directives, workflows, dependencies, access/admission rules, integration
+  policy and receiving selections unchanged. Mixed changes retain their normal
+  controls and machine qualification; this route cannot qualify them.
+- Independent review accepts the exact source revision and records its evidence
+  and scope limits in the owning pull request. The original applicable source
+  suite and independent tests from the exact packaged artifact qualify that
+  candidate. Receipts explicitly bind the candidate/tested tree, changed
+  packaged bytes and artifact digest, and distinct producer and receiver jobs.
+  Preservation or copying into a package is still an artifact change requiring
+  explicit receiving; source tests alone do not receive the changed digest.
+- A changed base or candidate requires fresh qualification of the resulting
+  tree. Prior review is retained only for demonstrably unchanged reviewed bytes,
+  consumers and scope. Missing evidence keeps the candidate unqualified.
+  Integration uses an ordinary merge commit under unchanged protections.
+
+This stage grants source integration only, not publication, machine-pin
+advancement, runtime installation, deployment, spending or operating acceptance.
+Unknown downstream interpretation is not presumed inert: downstream composition,
+installation, pin advancement and integration retain their original gates.
+The Code/Guix/LAGOON obligations and applicable runtime comparison remain intact.
+A source-only result is never a machine `no-regression` verdict.
+The motivating requirement proposal is
+[PR #76](https://github.com/red-cup-engineering/continuous-delivery-services-section/pull/76);
+its independent consumer review is limited to its qualified source/build scope
+and does not qualify a durable executor or any downstream deployment.
+
 ### Machine-affecting integration
 
-Except for the strictly test-only source route above, a house package is made,
+Except for the two explicitly approved source-only routes above, a house package is made,
 tested, received and released along the following path. Runtime, dependency,
 composition, workflow, build/deployment-policy and mixed changes retain it:
 
@@ -624,8 +676,8 @@ branch-intake operation.
 
 This retirement does not relax source review, runner admission, or separate
 deployment and customer receiving. The machine no-regression merge gate remains
-for every change outside the explicitly approved strictly test-only source
-integration allocation above; retirement itself creates no exception.
+for every change outside the two explicitly approved source-only integration
+allocations above; retirement itself creates no exception.
 
 ## Reconcile retired branch-intake callers across actual GitHub repositories
 
