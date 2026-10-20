@@ -1,0 +1,54 @@
+# Additional private CI consumer of Red Cup's EXISTING CircleCI Free source owner.
+# GitHub App pipeline config source: red-cup-engineering/continuous-delivery-services-section
+# Config file path: .circleci/private-inference.yml
+# Checkout source: red-cup-engineering/computer-inference-engine (private).
+# No project creation, paid upgrade, registry credentials or runner admission
+# is implied by publishing this source declaration.
+version: 2.1
+jobs:
+  verify-original-inference-work-placement:
+    docker:
+      - image: cimg/node:24
+    resource_class: small
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Authenticate exact original private inference repository and Git head
+          command: |
+            set -euo pipefail
+            : "${CIRCLE_SHA1:?Original CircleCI Git commit required}"
+            [[ "$CIRCLE_SHA1" =~ ^[a-f0-9]{40}$ ]] || { echo '40-character source commit required' >&2; exit 78; }
+            test "$(git rev-parse --verify HEAD)" = "$CIRCLE_SHA1" || { echo 'checkout differs from source commit' >&2; exit 78; }
+            repository="red-cup-engineering/computer-inference-engine"
+            remote="$(git remote get-url origin)"
+            case "$remote" in
+              "git@github.com:${repository}"|"git@github.com:${repository}.git"|"https://github.com/${repository}"|"https://github.com/${repository}.git"|"ssh://git@github.com/${repository}.git") ;;
+              *) echo 'wrong private checkout: original inference repository required' >&2; exit 78 ;;
+            esac
+      - run:
+          name: Admit exact package and native WorkPlacement test requirements
+          command: |
+            set -euo pipefail
+            node -e 'if(process.versions.node.split(".")[0]!=="24"){console.error("Node 24 required");process.exit(78)}'
+            node -e 'const fs=require("node:fs"), p=require("./package.json");if(p.name!=="@red-cup-engineering/computer-inference-engine"||p.scripts?.test!=="node --test \"test/**/*.test.mjs\""||!fs.existsSync("pnpm-lock.yaml")||!fs.existsSync("test/dispatch/attention-work-placement.test.mjs")){console.error("native original WorkPlacement source contract changed");process.exit(78)}'
+      - run:
+          name: Install exact native dependency lock with pinned pnpm
+          command: |
+            set -euo pipefail
+            corepack --version
+            corepack prepare pnpm@10.18.3 --activate
+            pnpm install --frozen-lockfile --ignore-scripts
+          no_output_timeout: 15m
+      - run:
+          name: Execute original physical-energy reuse and resource-control tests
+          command: |
+            set -euo pipefail
+            node --check src/dispatch/decide-work-placement.mjs
+            node --test test/dispatch/attention-work-placement.test.mjs test/dispatch/resource-control-time.test.mjs
+          no_output_timeout: 15m
+workflows:
+  private-inference-source-verification:
+    jobs:
+      - verify-original-inference-work-placement:
+          filters: pipeline.git.branch == "main"
