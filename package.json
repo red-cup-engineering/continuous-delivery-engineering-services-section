@@ -11,5 +11,14 @@
   },
   "peerDependencies": {
     "@red-cup-engineering/git-services-section": ">=4.1.1"
+  },
+  "license": "MIT",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/561-group/.github/blob/main/TIPS.md"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/red-cup-engineering/continuous-delivery-services-section.git"
   }
 }
