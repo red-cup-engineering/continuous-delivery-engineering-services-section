@@ -258,7 +258,9 @@ const retiredIntakeBlobs = new Set([
   '1acb8b98d60959a7a42260b24f5aa946741a3c54',
   '1788f2c08b0fe190bcd41770d85cef54171cd837',
 ]);
-const fleetOrgs = new Set(['red-cup-engineering','lenticule-science','561-group','coesite-operations']);
+const fleetOrgs = new Set(['red-cup-engineering','lenticule-science','561-group','coesite-operations','causeway-services']);
+// red-cup-engineering alone holds more than 800 repositories; the census stays complete up to this bound.
+const fleetPages = 10;
 const fleetConcurrency = 4;
 const legacyIntake = text =>
   typeof text === 'string'
@@ -283,7 +285,7 @@ async function boundedFleetMap(items, worker) {
 /** apply=false reads a complete token-visible census, apply=true deletes
  * only qualified legacy callers. Never retries an uncertain mutation. */
 export async function reconcileRetiredIntakeFleet({organizations,apply=false,maxChanges=400}={}, {request}={}) {
-  if(!Array.isArray(organizations)||organizations.length<1||organizations.length>4
+  if(!Array.isArray(organizations)||organizations.length<1||organizations.length>fleetOrgs.size
     ||new Set(organizations).size!==organizations.length
     ||organizations.some(org=>!fleetOrgs.has(org))
     ||typeof apply!=='boolean'
@@ -293,12 +295,12 @@ export async function reconcileRetiredIntakeFleet({organizations,apply=false,max
   // Exhaust token-accessible org listings before any repository mutation.
   for(const org of organizations) {
     let completed=false;
-    for(let page=1;page<=6;page++) {
+    for(let page=1;page<=fleetPages+1;page++) {
       let rows;
       try {rows=await request('GET', '/orgs/'+org+'/repos?type=all&per_page=100&page='+page);}
       catch {throw new Error('fleet repository census unavailable: no mutations admitted');}
       if(!Array.isArray(rows)||rows.length>100)throw new Error('fleet repository enumeration malformed');
-      if(page===6&&rows.length)throw new RangeError('fleet organization population exceeds complete 500-repository bound');
+      if(page===fleetPages+1&&rows.length)throw new RangeError('fleet organization population exceeds complete '+fleetPages*100+'-repository bound');
       for(const row of rows) {
         if(!row||row.owner?.login!==org||row.full_name!==org+'/'+row.name
           ||!repoName(row.full_name)||!branchName(row.default_branch)
