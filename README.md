@@ -761,3 +761,31 @@ source-history receiving or application deployment succeeded.
 `publish-package.yml` owns registry publication for hiring repositories. The caller supplies runner labels and a registry token or registry user/password; authentication configuration contains environment placeholders. Tags are `publish/<organization>/<package>/v<declared version>`; a legacy `publish/<package>/v<declared version>` remains valid only when it selects exactly one manifest. The declared manifest supplies the scope. The tag source must already be in the default branch's history; private packages and the existing SQLite refusal remain intact.
 
 The package is packed once. `receive-registry-package.mjs` compares its digest with authoritative registry metadata before and after publication. An occupied version with different bytes is a refusal, and network/authentication errors cannot be reported as absence or receipt. Machine installation and useful operating receiving remain separate.
+
+
+## Preserved public compute application
+
+This section owns [Union Free Compute Runner](https://github.com/red-cup-engineering/union-free-compute-runner),
+repository ID `1308158077`, transferred from `emsenn/union-free-compute-runner`
+without changing its public audience, refs or source history. Its bounded public
+source test, six-platform architecture assay and signed Deno assay remain
+separate manual entrances. The obsolete pinned automatic branch-intake caller
+is retired under this section's exact known-caller contract, not substituted
+for those assays.
+
+The application's owned-data correction and actual public-source test receiving
+must be received at its source before dispatch. It does not admit private source,
+new provider signing credentials, paid runners or a private CI workaround.
+Original [GHS P0 #7](https://github.com/red-cup-engineering/github-engineering-services-section/issues/7)
+still requires the existing CircleCI project's actual private Git Services
+checkout, current Free credit receiving and full original verify result.
+
+
+This source owner's two automatic public qualification workflows bind their
+authored package cache, temporary files, archive, unpacked receiver and resource
+observation records beneath `data/logs/public-source-ci-logs` before package
+installation or fabrication. Original immutable action pins, test commands,
+artifact transfer, receiving assertions and time limits remain intact. `HOME`
+and hosted action-internal supplier paths are not reconfigured. This is an
+authored-path admission, not confinement of arbitrary test programs or a claim
+that other reusable workflows have already received the same migration.
