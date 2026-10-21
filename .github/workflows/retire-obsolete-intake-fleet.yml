@@ -6,7 +6,7 @@ on:
         description: 'Exact admitted GitHub organization list, comma-separated'
         required: true
         type: string
-        default: '561-group,red-cup-engineering,lenticule-science,coesite-operations'
+        default: '561-group,red-cup-engineering,lenticule-science,coesite-operations,causeway-services'
       apply:
         description: 'Delete only positively identified retired caller blobs, after complete read-only preflight'
         required: true

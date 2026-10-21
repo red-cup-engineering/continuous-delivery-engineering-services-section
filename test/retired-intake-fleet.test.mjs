@@ -109,3 +109,23 @@ test('bounded organization, immutable source and effect budget prevent blind fle
   await assert.rejects(reconcileRetiredIntakeFleet({organizations:[ORG],apply:true,maxChanges:1},{request:f.request}),/authorized batch bound/);
   assert.equal(f.writes.length,0);
 });
+
+test('a census past 500 repositories stays complete up to the 1000-repository bound',async()=>{
+  const f=fixture({count:868});
+  // Most repositories never carried the intake; only the first 300 do.
+  const request=async(method,path,body)=>method==='GET'&&/\/repo-([3-9][0-9]{2})\/contents\//u.test(path)?null:f.request(method,path,body);
+  const result=await reconcileRetiredIntakeFleet({organizations:[ORG]},{request});
+  assert.deepEqual({repositories:result.repositories,eligible:result.eligible,absent:result.absent},{repositories:868,eligible:300,absent:568});
+  assert.ok(f.queries.some(([,path])=>path.includes('page=9')));
+  await assert.rejects(reconcileRetiredIntakeFleet({organizations:[ORG]},{request:fixture({count:1001}).request}),/1000-repository bound/);
+  assert.equal(f.writes.length,0);
+});
+
+test('all five house organizations are admitted together, and no others',async()=>{
+  const f=fixture({count:1});
+  const all=['561-group','red-cup-engineering','lenticule-science','coesite-operations','causeway-services'];
+  const request=async(method,path,body)=>/^GET \/orgs\/(?!red-cup-engineering\/)[^/]+\/repos\?/u.test(method+' '+path)?[]:f.request(method,path,body);
+  const result=await reconcileRetiredIntakeFleet({organizations:all},{request});
+  assert.equal(result.repositories,1);
+  await assert.rejects(reconcileRetiredIntakeFleet({organizations:[...all,'emsenn']},{request}));
+});
