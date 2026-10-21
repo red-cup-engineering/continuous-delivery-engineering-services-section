@@ -13,7 +13,7 @@ export function indexPackages(roots) {
     if (entries.some(e => e.name === 'package.json' && e.isFile())) {
       try { const m = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')); if (m.name && !index.has(m.name)) index.set(m.name, { dir, manifest: m }); } catch { /* unreadable manifest */ }
     }
-    for (const e of entries) if (e.isDirectory() && !SKIP.has(e.name)) walk(path.join(dir, e.name), depth + 1);
+    for (const e of entries) if (e.isDirectory() && !SKIP.has(e.name) && !(path.basename(dir) === 'data' && e.name === 'logs')) walk(path.join(dir, e.name), depth + 1);
   };
   roots.forEach(r => walk(r, 0));
   return index;

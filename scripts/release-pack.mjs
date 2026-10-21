@@ -32,10 +32,27 @@ if (only) {
 if (missing.length || cycles.length) { console.error(JSON.stringify({notInTree:missing,cycles})); process.exit(1); }
 fs.mkdirSync(out, { recursive: true });
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'release-pack-'));
+// Raw/reproducible owner logs are not package inputs. Copy the root entries
+// separately so an owned TMPDIR below data/logs never becomes a self-copy.
+const copyPackageSource = (source, destination) => {
+  fs.mkdirSync(destination, { recursive: true });
+  const copyEntry = (from, to) => fs.cpSync(from, to, { recursive: true,
+    filter: s => !/(^|\/)(node_modules|\.git)(\/|$)/.test(s)
+      && !/(^|\/)data\/logs(?:\/|$)/.test(path.relative(source, s)) });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const from = path.join(source, entry.name), to = path.join(destination, entry.name);
+    if (entry.name === 'data' && entry.isDirectory()) {
+      fs.mkdirSync(to, { recursive: true });
+      for (const child of fs.readdirSync(from, { withFileTypes: true }))
+        if (child.name !== 'logs') copyEntry(path.join(from, child.name), path.join(to, child.name));
+    } else copyEntry(from, to);
+  }
+};
 const files = [];
+try {
 for (const step of plan) {
   const copy = path.join(tmp, step.name.replace('/', '__'));
-  fs.cpSync(step.dir, copy, { recursive: true, filter: s => !/(^|\/)(node_modules|\.git)(\/|$)/.test(s) });
+  copyPackageSource(step.dir, copy);
   const rewritten = rewriteManifest(index.get(step.name).manifest, step.version, step.internal);
   fs.writeFileSync(path.join(copy, 'package.json'), JSON.stringify(rewritten, null, 2));
   const name = execFileSync('npm', ['pack', '--pack-destination', out, '--silent', '--ignore-scripts'], { cwd: copy, encoding: 'utf8' }).trim().split('\n').pop();
@@ -43,3 +60,7 @@ for (const step of plan) {
 }
 fs.writeFileSync(path.join(out, 'plan.json'), JSON.stringify({ root, sha, files, notInTree: missing, cycles, externalVersions }, null, 2));
 console.log(JSON.stringify({ packages: files.length, notInTree: missing, cycles: cycles.length, external: Object.keys(externalVersions).length }));
+
+} finally {
+  fs.rmSync(tmp, { recursive: true, force: true });
+}

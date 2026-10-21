@@ -180,3 +180,48 @@ test('publish-packed: token from the credential directory only, dependencies fir
   const bad = await publishPacked({ plan, packDir: '/p', registry: 'r', npmrc: rc, run: async () => ({ status: 1, stderr: 'E401' }) });
   assert.deepEqual([bad.ok, bad.failedAt], [false, 'b']);
 });
+
+
+test('release source census excludes raw logs while preserving durable records and state', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cd-owned-index-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const [relative, name] of [['', '@x/root'], ['data/logs/reproduction', '@x/raw-log'],
+    ['data/records/durable', '@x/record'], ['data/state/current', '@x/state']]) {
+    const dir = path.join(root, relative); fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, version: '1.0.0' }));
+  }
+  assert.deepEqual([...indexPackages([root]).keys()].sort(), ['@x/record', '@x/root', '@x/state']);
+});
+
+test('actual release CLI packs from owned descendant temp without copying logs or losing durable data', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cd-owned-pack-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const temporary = path.join(root, 'data/logs/release-test-logs/temporary');
+  const out = path.join(root, 'data/logs/release-test-logs/products');
+  for (const dir of [temporary, out, path.join(root, 'data/records'), path.join(root, 'data/state'),
+    path.join(root, '.git'), path.join(root, 'node_modules')]) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: '@x/owned-native', version: '1.0.0' }));
+  fs.writeFileSync(path.join(root, 'source.mjs'), 'export const received = true;\n');
+  fs.writeFileSync(path.join(root, 'data/records/input.json'), '{"record":true}\n');
+  fs.writeFileSync(path.join(root, 'data/state/current.json'), '{"state":true}\n');
+  fs.writeFileSync(path.join(temporary, 'raw.log'), 'not a publication input');
+  const sha = 'f'.repeat(40);
+  const stdout = execFileSync(process.execPath, [new URL('../scripts/release-pack.mjs', import.meta.url).pathname,
+    '--root', '@x/owned-native', '--search', root, '--sha', sha, '--out', out], {
+    encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024,
+    env: { ...process.env, TMPDIR: temporary, npm_config_cache: path.join(temporary, 'npm-cache'),
+      npm_config_registry: 'http://127.0.0.1:9' },
+  });
+  assert.equal(JSON.parse(stdout).packages, 1);
+  const plan = JSON.parse(fs.readFileSync(path.join(out, 'plan.json'), 'utf8'));
+  assert.deepEqual(plan.notInTree, []); assert.deepEqual(plan.cycles, []);
+  const archive = path.join(out, plan.files[0].tarball);
+  const names = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n');
+  for (const name of ['source.mjs', 'data/records/input.json', 'data/state/current.json', 'package.json'])
+    assert.ok(names.includes('package/' + name), name);
+  assert.ok(names.every(name => !/(^|\/)(node_modules|\.git)(\/|$)|(^|\/)data\/logs(\/|$)/.test(name)));
+  const manifest = JSON.parse(execFileSync('tar', ['-xOzf', archive, 'package/package.json'], { encoding: 'utf8' }));
+  assert.equal(manifest.version, shaVersion('1.0.0', sha));
+  assert.equal(fs.readdirSync(temporary).some(name => name.startsWith('release-pack-')), false);
+  assert.equal(fs.readFileSync(path.join(root, 'data/records/input.json'), 'utf8'), '{"record":true}\n');
+});
