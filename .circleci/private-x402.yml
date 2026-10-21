@@ -1,0 +1,80 @@
+# Source-owned Red Cup Continuous Delivery receiver for the existing x402 package.
+# CircleCI GitHub App config source: this public CD repository, main,
+# config path: .circleci/private-x402.yml.
+# Checkout source: red-cup-engineering/x402-services-section (PRIVATE), main.
+# An authorized project/runner grant and current Free credits must be received
+# separately. This file neither installs a GitHub App nor runs a private job.
+version: 2.1
+jobs:
+  verify-original-x402-native-package:
+    docker:
+      - image: cimg/node:24
+    resource_class: small
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Require exact private x402 source identity and revision
+          command: |
+            set -euo pipefail
+            : "${CIRCLE_SHA1:?Original CircleCI Git commit required}"
+            [[ "$CIRCLE_SHA1" =~ ^[a-f0-9]{40}$ ]] || { echo 'Exact source SHA required' >&2; exit 78; }
+            test "$(git rev-parse --verify HEAD)" = "$CIRCLE_SHA1" || { echo 'Checkout/source commit mismatch' >&2; exit 78; }
+            repository="red-cup-engineering/x402-services-section"
+            remote="$(git remote get-url origin)"
+            case "$remote" in
+              "git@github.com:${repository}"|"git@github.com:${repository}.git"|"https://github.com/${repository}"|"https://github.com/${repository}.git"|"ssh://git@github.com/${repository}.git") ;;
+              *) echo 'Wrong original private x402 source' >&2; exit 78 ;;
+            esac
+      - run:
+          name: Admit original native package and field-handoff test selection
+          command: |
+            set -euo pipefail
+            node -e 'if(process.versions.node.split(".")[0]!=="24"){console.error("Node 24 required");process.exit(78)}'
+            node --input-type=commonjs <<'JS'
+            const fs = require("node:fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const fieldTest = "test/market/required-field-handoff.test.mjs";
+            const originalTest = "test/market/catalog-query.test.mjs";
+            if (pkg.name !== "@red-cup-engineering/x402-services-section" ||
+                typeof pkg.scripts?.check !== "string" ||
+                !pkg.scripts.check.includes("src/market/catalog.mjs") ||
+                typeof pkg.scripts?.test !== "string" ||
+                !pkg.scripts.test.includes(fieldTest) ||
+                !pkg.scripts.test.includes(originalTest) ||
+                !Array.isArray(pkg.receivingTests) ||
+                !pkg.receivingTests.includes(fieldTest) ||
+                !pkg.receivingTests.includes(originalTest) ||
+                !fs.existsSync(fieldTest) || !fs.existsSync(originalTest)) {
+              console.error("Original x402 native test/dependency contract changed");
+              process.exit(78);
+            }
+            const invalid = Object.entries(pkg.dependencies || {}).filter(
+              ([, version]) => typeof version !== "string" || version.startsWith("workspace:") ||
+                version.startsWith("file:") || version.startsWith("link:"));
+            if (invalid.length) {
+              console.error("Native package has unresolved local-only dependencies");
+              process.exit(78);
+            }
+            JS
+      - run:
+          name: Install original published dependency graph without lifecycle effects
+          command: |
+            set -euo pipefail
+            npm install --ignore-scripts --no-audit --no-fund
+            test -s package-lock.json
+            sha256sum package-lock.json
+            npm ls --depth=0
+          no_output_timeout: 15m
+      - run:
+          name: Run complete original native x402 source checks and regressions
+          command: |
+            set -euo pipefail
+            npm run check
+            npm test
+          no_output_timeout: 15m
+workflows:
+  private-x402-native-receiving:
+    jobs:
+      - verify-original-x402-native-package:
+          filters: pipeline.git.branch == "main"
