@@ -20,6 +20,36 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Bind authored CI outputs to section data
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd_workspace=$(realpath -e "$GITHUB_WORKSPACE")
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$GITHUB_JOB" =~ ^[A-Za-z0-9_-]+$ ]]
+          cd_ci_run="$cd_workspace/data/logs/public-source-ci-logs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          cd_ci_data="$cd_ci_run/$GITHUB_JOB"
+          cd_paths=("$cd_workspace/data" "$cd_workspace/data/logs" "$cd_workspace/data/logs/public-source-ci-logs"
+            "$cd_ci_run" "$cd_ci_data" "$cd_ci_data"/{npm-cache,corepack,cache,state,config,data,temporary})
+          for selected_path in "${cd_paths[@]}"; do
+            if [[ -e "$selected_path" || -L "$selected_path" ]]; then
+              [[ -d "$selected_path" && ! -L "$selected_path" && -O "$selected_path" ]] || exit 1
+            fi
+          done
+          mkdir -p "${cd_paths[@]}"
+          for selected_path in "${cd_paths[@]}"; do
+            [[ $(realpath -e "$selected_path") == "$selected_path" ]] || exit 1
+          done
+          {
+            printf 'CD_ARTIFACT_ROOT=%s\n' "$cd_ci_data"
+            printf 'npm_config_cache=%s\n' "$cd_ci_data/npm-cache"
+            printf 'COREPACK_HOME=%s\n' "$cd_ci_data/corepack"
+            printf 'XDG_CACHE_HOME=%s\n' "$cd_ci_data/cache"
+            printf 'XDG_STATE_HOME=%s\n' "$cd_ci_data/state"
+            printf 'XDG_CONFIG_HOME=%s\n' "$cd_ci_data/config"
+            printf 'XDG_DATA_HOME=%s\n' "$cd_ci_data/data"
+            printf 'TMPDIR=%s\n' "$cd_ci_data/temporary"
+          } >> "$GITHUB_ENV"
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '24'
@@ -28,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse --verify HEAD)" = "$GITHUB_SHA"
-          release="$RUNNER_TEMP/native-cd-release"
+          release="$CD_ARTIFACT_ROOT/native-cd-release"
           mkdir -p "$release"
           node scripts/release-pack.mjs \
             --root '@red-cup-engineering/continuous-delivery-services-section' \
@@ -56,7 +86,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: red-cup-native-cd-package
-          path: ${{ runner.temp }}/native-cd-release/
+          path: ${{ env.CD_ARTIFACT_ROOT }}/native-cd-release/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -69,6 +99,36 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Bind authored CI outputs to section data
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd_workspace=$(realpath -e "$GITHUB_WORKSPACE")
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$GITHUB_JOB" =~ ^[A-Za-z0-9_-]+$ ]]
+          cd_ci_run="$cd_workspace/data/logs/public-source-ci-logs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          cd_ci_data="$cd_ci_run/$GITHUB_JOB"
+          cd_paths=("$cd_workspace/data" "$cd_workspace/data/logs" "$cd_workspace/data/logs/public-source-ci-logs"
+            "$cd_ci_run" "$cd_ci_data" "$cd_ci_data"/{npm-cache,corepack,cache,state,config,data,temporary})
+          for selected_path in "${cd_paths[@]}"; do
+            if [[ -e "$selected_path" || -L "$selected_path" ]]; then
+              [[ -d "$selected_path" && ! -L "$selected_path" && -O "$selected_path" ]] || exit 1
+            fi
+          done
+          mkdir -p "${cd_paths[@]}"
+          for selected_path in "${cd_paths[@]}"; do
+            [[ $(realpath -e "$selected_path") == "$selected_path" ]] || exit 1
+          done
+          {
+            printf 'CD_ARTIFACT_ROOT=%s\n' "$cd_ci_data"
+            printf 'npm_config_cache=%s\n' "$cd_ci_data/npm-cache"
+            printf 'COREPACK_HOME=%s\n' "$cd_ci_data/corepack"
+            printf 'XDG_CACHE_HOME=%s\n' "$cd_ci_data/cache"
+            printf 'XDG_STATE_HOME=%s\n' "$cd_ci_data/state"
+            printf 'XDG_CONFIG_HOME=%s\n' "$cd_ci_data/config"
+            printf 'XDG_DATA_HOME=%s\n' "$cd_ci_data/data"
+            printf 'TMPDIR=%s\n' "$cd_ci_data/temporary"
+          } >> "$GITHUB_ENV"
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '24'
@@ -76,28 +136,28 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: red-cup-native-cd-package
-          path: ${{ runner.temp }}/received-cd
+          path: ${{ env.CD_ARTIFACT_ROOT }}/received-cd
       - name: Authenticate archive and execute its original bounded work
         shell: bash
         run: |
           set -euo pipefail
-          received="$RUNNER_TEMP/received-cd"
+          received="$CD_ARTIFACT_ROOT/received-cd"
           cd "$received"
           sha256sum --check SHA256SUMS
           archive="$(node -p 'JSON.parse(require("fs").readFileSync("plan.json","utf8")).files[0].tarball')"
           test -f "$archive"
-          mkdir -p "$RUNNER_TEMP/installed-cd"
-          tar -xzf "$archive" -C "$RUNNER_TEMP/installed-cd"
-          cd "$RUNNER_TEMP/installed-cd/package"
+          mkdir -p "$CD_ARTIFACT_ROOT/installed-cd"
+          tar -xzf "$archive" -C "$CD_ARTIFACT_ROOT/installed-cd"
+          cd "$CD_ARTIFACT_ROOT/installed-cd/package"
           node --check scripts/place-job.mjs
           NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
           export NOW
-          mkdir -p "$RUNNER_TEMP/observed-nodes"
+          mkdir -p "$CD_ARTIFACT_ROOT/observed-nodes"
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import os from 'node:os';
           import path from 'node:path';
-          const root=process.env.RUNNER_TEMP;
+          const root=process.env.CD_ARTIFACT_ROOT;
           const space=fs.statfsSync(root);
           const diskGb=space.bavail*space.bsize/1073741824;
           const node={id:'github-actions-original-receiver',state:'up',
@@ -113,12 +173,12 @@ jobs:
           fs.writeFileSync(path.join(root,'native-qualification-job.json'),JSON.stringify(job));
           NODE
           node scripts/place-job.mjs \
-            --job "$RUNNER_TEMP/native-qualification-job.json" \
-            --nodes "$RUNNER_TEMP/observed-nodes" --now "$NOW" > "$RUNNER_TEMP/placement.json"
+            --job "$CD_ARTIFACT_ROOT/native-qualification-job.json" \
+            --nodes "$CD_ARTIFACT_ROOT/observed-nodes" --now "$NOW" > "$CD_ARTIFACT_ROOT/placement.json"
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import assert from 'node:assert/strict';
-          const proposal=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/placement.json','utf8'));
+          const proposal=JSON.parse(fs.readFileSync(process.env.CD_ARTIFACT_ROOT+'/placement.json','utf8'));
           assert.equal(proposal.chosen,'github-actions-original-receiver');
           assert.equal(proposal.needsProbe,false);
           assert.equal(proposal.needsLeaderWords,false);

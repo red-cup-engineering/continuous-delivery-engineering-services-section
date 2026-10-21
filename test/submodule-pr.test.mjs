@@ -18,6 +18,8 @@ const A = 'a'.repeat(40), B = 'b'.repeat(40);
 function exercise(t, mode) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cd-pr-workflow-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Owned temp may be beneath this module package; the extensionless mock tools are CommonJS.
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ type: 'commonjs' }));
   fs.mkdirSync(path.join(root, '.git'));
   fs.mkdirSync(path.join(root, '.cds/scripts'), { recursive: true });
   fs.copyFileSync(new URL('../scripts/submodule-pr.mjs', import.meta.url), path.join(root, '.cds/scripts/submodule-pr.mjs'));
@@ -57,6 +59,9 @@ if (method === 'GET' && endpoint.includes('/git/ref/heads/')) {
 } else process.exit(93);
 `, { mode: 0o755 });
   const result = spawnSync('/bin/sh', ['-c', step.run], { cwd: root, encoding: 'utf8', env: {
+    HOME: process.env.HOME,
+    ...Object.fromEntries(['CODEX_HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']
+      .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])),
     PATH: `${root}${path.delimiter}${path.dirname(process.execPath)}`, MODE: mode,
     CALLS: path.join(root, 'calls'), GIT_CALLS: path.join(root, 'git-calls'),
     STATE: path.join(root, 'state'), TEMPLATE: path.join(root, 'template'),
