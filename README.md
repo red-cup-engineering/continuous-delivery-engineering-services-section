@@ -273,6 +273,36 @@ a second private Red Cup consumer through the same Engineering-owned config.
 Keep [owning P0 CI incident #7](https://github.com/red-cup-engineering/github-engineering-services-section/issues/7)
 open until real provider build receipts exist.
 
+**Second original private consumer prepared — inference energy WorkPlacement.**
+The separate [private inference CircleCI configuration](.circleci/private-inference.yml)
+will qualify [computer-inference-engine](https://github.com/red-cup-engineering/computer-inference-engine)
+as another exact GitHub App **checkout source**, while this **public** Continuous
+Delivery repository at protected `main` remains the config source and
+`.circleci/private-inference.yml` is its independent Config File Path.
+CircleCI's [multiple-configuration project contract](https://circleci.com/docs/guides/orchestrate/set-up-multiple-configuration-files-for-a-project/)
+explicitly supports distinct config, checkout and trigger source repositories.
+This never changes the existing Git Services configuration or uses a second
+paid GitHub-hosted Actions runner.
+
+The source-guarded `cimg/node:24` small executor rejects wrong Git origin,
+a stale `CIRCLE_SHA1`, changed native package identity or missing
+WorkPlacement test contract; uses pinned pnpm 10.18.3 against the original
+`pnpm-lock.yaml`, with lifecycle install scripts disabled; and then executes
+the **actual** `test/dispatch/attention-work-placement.test.mjs` and
+`test/dispatch/resource-control-time.test.mjs` source tests. It is a
+**bounded native WorkPlacement receiving gate**, not the inference package's
+entire test suite or an electricity sensor.
+
+**Activation remains separately owed.** An authorized organization admin must
+first complete the original CircleCI Free GitHub App integration, retaining
+repo-limited grants and Free-plan cost controls. After the original Git
+Services project actually receives its test, activate the second inference
+project with this file and its own private checkout, choose a matching
+main-branch event, and read the CircleCI pipeline/job/commit/test result.
+Without authentic provider installation, registry dependency availability and
+a completed result, this is only independently testable CI configuration
+source—not independent CI success or physical joules per accepted Work.
+
 **Durable alternative:** Oracle Always Free capacity can be received as an
 authorized Guix/LAGOON self-hosted runner when original tenancy capacity and
 Red Cup repository/runner access are observed. Self-hosted Actions jobs use no
