@@ -22,7 +22,7 @@ const refuse = reason => Object.freeze({kind:'swarm-ci-node-proposal.v2',admitte
  * original placement node. readAdmission MUST be supplied by a trusted original
  * service, never by an HTTP caller, OIDC ID token or the volunteer device. It
  * authenticates login, membership, consent, device credential, sandbox witness,
- * capacity observation and economic reserve in their original systems.
+ * capacity observation in their original systems; buyer reserve is read per Work.
  * Dispatch is NOT granted here; these proofs require renewal at execution.
  */
 export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}) {
@@ -83,7 +83,7 @@ export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}
     freeDiskGb: Math.min(measured.freeDiskGb, limits.freeDiskGb),
     bandwidthMbps: measured.bandwidthMbps, closureCache: [],
     capabilities: ['node', 'git', 'swarm-ci-public'], publicOnly: true,
-    cost: { kind: 'held' },
+    cost: { kind: 'associate-quoted' },
     associateCi: Object.freeze({admissionRef,witnessRef:a.witnessRef,
       instanceId:instance,instanceOrigin:origin,oauthAudience:audience,
       actorId:actor,deviceId:id,workClass:'public-ci',
@@ -107,7 +107,7 @@ export function assessAssociateCiJob({ job, node, now, authorizeAssociateJob } =
     || !isRef(a.witnessRef) || !isRef(a.instanceId) ||
     !HTTPS(a.instanceOrigin) || !isRef(a.oauthAudience) ||
     !isRef(a.actorId) || !isId(a.deviceId) || !positive(a.maxMinutes)
-    || node.publicOnly !== true || node.cost?.kind !== 'held')
+    || node.publicOnly !== true || node.cost?.kind !== 'associate-quoted')
     return deny('not-a-qualified-associate-ci-node');
   if (job?.visibility !== 'public' || job.effect !== false
     || !job.requires?.capabilities?.includes('swarm-ci-public'))
@@ -136,6 +136,9 @@ export function assessAssociateCiJob({ job, node, now, authorizeAssociateJob } =
   // inferred from the worker's online time or OAuth authentication.
   const t=g.trade;
   if(t?.kind!=='organizing.compute-contribution-contract.v1' ||
+    t.status!=='agreed-not-executed' ||
+    t.executionAuthorized!==false || t.leaseAuthorized!==false ||
+    t.earningPosted!==false || t.paymentAuthorized!==false ||
     t.instanceId!==a.instanceId || t.actorId!==a.actorId ||
     t.deviceId!==a.deviceId || t.workRef!==job.id ||
     !QUOTE.test(t.quoteId ?? '') || !isRef(t.offerRef) ||
@@ -154,6 +157,9 @@ export function assessAssociateCiJob({ job, node, now, authorizeAssociateJob } =
     grantRef:g.ref,sourceSha:g.sourceSha,trade:Object.freeze({
       quoteId:t.quoteId,offerRef:t.offerRef,budgetHoldRef:t.budgetHoldRef,
       currency:t.currency,unitRef:t.unitRef,
-      maximumTotalMicros:t.maximumTotalMicros
+      priceMicrosPerAcceptedUnit:t.priceMicrosPerAcceptedUnit,
+      maximumAcceptedUnits:t.maximumAcceptedUnits,
+      maximumTotalMicros:t.maximumTotalMicros,
+      expiresAt:t.expiresAt
     }),dispatchAuthorized:false});
 }
