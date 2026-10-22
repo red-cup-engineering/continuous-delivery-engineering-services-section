@@ -1,5 +1,7 @@
-// Place a job on the node that can run it at the lowest price. Unknown quantities are intervals
-// (min 0, max unbounded), never zero. Price is minutes of wall time plus scarcity.
+// Place work against measured resource and provider scarcity. Unknown quantities
+// are intervals (min 0, max unbounded), never zero. The scheduling score is
+// wall time and scarcity, NOT a comparable money price across currencies.
+
 import { minutePrice, quoteBudget, budgetAvailable, hold, holdBudget } from './allowance.mjs';
 import { assessAssociateCiJob } from './associate-ci.mjs';
 import { observeSharedCapacity, sharedPoolFit } from './shared-capacity.mjs';
@@ -21,11 +23,13 @@ export function fetchMinutes(job, node) {
 
 export function assess(job, node, { ledger = null, budgets = {}, now, authorizeAssociateJob = null, readSharedCapacity = null, sharedCapacityReadings = null }) {
   const why = [];
+  let associateTrade=null;
   // Untrusted associate devices must pass both original admission and exact Work gates.
   // This remains a planning verdict; a real dispatcher must revalidate on dispatch.
   if (typeof node?.id === 'string' && (node.id.startsWith('associate-ci-') || node.associateCi !== undefined)) {
     const gate = assessAssociateCiJob({ job, node, now, authorizeAssociateJob });
     if (!gate.ok) why.push('swarm-ci:' + gate.reason);
+    else associateTrade=gate.trade;
   }
   if (job.mustRunOn && !job.mustRunOn.includes(node.id)) why.push('job-names-other-nodes');
   if (!['up','intermittent'].includes(node.state)) why.push('node-not-observed-up');
@@ -103,7 +107,20 @@ export function assess(job, node, { ledger = null, budgets = {}, now, authorizeA
           value/Math.max(available[unit],1e-9)));
       }
     }
-  } else if(node.cost?.kind!=='held')
+  } else if(node.cost?.kind==='associate-quoted'){
+    if(!associateTrade)why.push('no-originally-accepted-and-budgeted-compute-trade');
+    else budgetHold={
+      kind:'associate-quote',scope:node.associateCi.instanceId,
+      quoteId:associateTrade.quoteId,
+      offerRef:associateTrade.offerRef,
+      budgetHoldRef:associateTrade.budgetHoldRef,
+      currency:associateTrade.currency,unitRef:associateTrade.unitRef,
+      priceMicrosPerAcceptedUnit:associateTrade.priceMicrosPerAcceptedUnit,
+      maximumAcceptedUnits:associateTrade.maximumAcceptedUnits,
+      maximumTotalMicros:associateTrade.maximumTotalMicros,
+      expiresAt:associateTrade.expiresAt,
+    };
+  }else if(node.cost?.kind!=='held')
     why.push('unsupported-or-unpriced-provider');
   if (why.length) return { nodeId: node.id, feasible: false, why };
   const fetch = fetchMinutes(job, node);
@@ -159,6 +176,10 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssoci
   const sharedResidual=new Map([...sharedCapacityReadings.pools].map(([id,value])=>[id,{...value}]));
   const provisionalLedger=ledger===null?null:structuredClone(ledger);
   const provisionalBudgets=structuredClone(budgets);
+  // One original reserved monetary budget cannot fund two separate Work
+  // requests in a batch, even when multiple advertised runners match.
+  const proposedAssociateBudgetRefs=new Set();
+  const associateBudgetKey=hold=>JSON.stringify([hold.scope,hold.budgetHoldRef]);
   const placements=[],pending=[],probes=[];
   for(const job of jobs){
     // An effectful office operation requires a separate authenticated
@@ -195,12 +216,20 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssoci
     // resources can acquire provisional capacity. Possible measurements
     // request probes; a chosen node name alone is never dispatch authority.
     const candidate=view.candidates.find(c=>c.certainty==='certain'&&
-      Number.isFinite(c.price.max)&&provisionalNodes.some(n=>{
+      Number.isFinite(c.price.max)&&
+      !(c.budgetHold?.kind==='associate-quote' &&
+        proposedAssociateBudgetRefs.has(associateBudgetKey(c.budgetHold))) &&
+      provisionalNodes.some(n=>{
         if(n.id!==c.nodeId)return false;
         return dimensions.every(k=>typeof n[k]==='number'&&
           Number.isFinite(n[k])&&n[k]>=job.needs[k]);
       }));
     if(!candidate){
+      if(view.candidates.some(c=>c.budgetHold?.kind==='associate-quote' &&
+        proposedAssociateBudgetRefs.has(associateBudgetKey(c.budgetHold)))) {
+        pending.push({jobId:job.id,reason:'original-associate-budget-hold-already-proposed'});
+        continue;
+      }
       if(view.candidates.some(c=>c.certainty!=='certain'||!Number.isFinite(c.price.max)))
         probes.push({jobId:job.id,reason:'measure-original-node-resources-or-transfer-time',
           nodeIds:view.candidates.map(c=>c.nodeId)});
@@ -234,6 +263,18 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssoci
         pending.push({jobId:job.id,reason:held.reason});
         continue;
       }
+    }else if(node.cost?.kind==='associate-quoted'){
+      if(candidate.budgetHold?.kind!=='associate-quote' ||
+        typeof candidate.budgetHold.budgetHoldRef!=='string') {
+        pending.push({jobId:job.id,reason:'original-accepted-price-and-budget-hold-missing'});
+        continue;
+      }
+      const key=associateBudgetKey(candidate.budgetHold);
+      if(proposedAssociateBudgetRefs.has(key)){
+        pending.push({jobId:job.id,reason:'original-associate-budget-hold-already-proposed'});
+        continue;
+      }
+      proposedAssociateBudgetRefs.add(key);
     }
     const resourceHold=Object.fromEntries(dimensions.map(k=>[k,job.needs[k]]));
     for(const key of dimensions)node[key]-=resourceHold[key];
