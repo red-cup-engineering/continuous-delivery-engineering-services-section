@@ -108,6 +108,20 @@
         }
       ],
       "verificationBoundary": "Required integration acceptance cases, not claims that placement unit tests or public artifact CI exercise a durable provider dispatcher. Existing tests remain scoped source evidence. This requirement change is not test-only and retains ordinary review and the applicable machine integration gate."
+    },
+    "sessionExecution": {
+      "status": "source-preflight-only-not-installed",
+      "architecture": "README.md#session-bound-runner-preflight-and-its-receiving-boundary",
+      "owner": "Existing Continuous Delivery placement and lease owners; Operations and the original host retain admission, credentials, registration and lifecycle.",
+      "requirement": "An opt-in session job and session node must bind the exact original repository ID/name/head, workspace, observed session identity and provenance. Measured bytes and inodes, foreground single-job lifecycle and bounded maximum duration must fit a genuinely observed lifetime. Missing or mismatched evidence must refuse before authority lookup or dispatch.",
+      "admission": "An independently installed host evidence reader must authenticate issuer and exact subject, verifier source revision, current source review, lifecycle, isolation, no-job-secrets policy, freshness and expiry. Raw JSON, tool presence and true callback results are not admission. The CLI supplies no admission reader.",
+      "modes": {
+        "local-qualification": "Independently reviewed original source without job secrets; not a registered runner or an arbitrary-code isolation claim.",
+        "github-jit": "Separately received repository-bound ephemeral runner identity and clean-one-job isolation. Registration, credentials and security changes remain separate controlled operations."
+      },
+      "effects": "effect:false excludes consequential external effects, not ordinary authorized local test filesystem writes. This preflight never registers, creates credentials, installs, dispatches or changes security settings.",
+      "receiving": "Original durable attempt, lease/fence, source/configuration, provider IDs, logs and artifact receipts remain required. Unknown outcomes stay unresolved at their original destination; session termination cannot grant replay.",
+      "verification": "test/placement.test.mjs exercises resource, identity, expiry, absent/invalid admission, local-versus-JIT distinction and one-job/inode reservation. Synthetic evidence is not installed host acceptance. Runtime source changes retain ordinary review and machine gates."
     }
   },
   "code": "src/placement/",

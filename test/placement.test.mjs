@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { newLedger, hold, settle, remainingMinutes, minutePrice, paceMinutes,
   newObservedBudget, quoteBudget, holdBudget, settleBudget, budgetAvailable }
   from '../src/placement/allowance.mjs';
-import { place, assess, planFleet } from '../src/placement/place.mjs';
+import { place, assess, planFleet, preflightSessionExecution } from '../src/placement/place.mjs';
 import { newTable, grant, renew, accept, expired } from '../src/placement/lease.mjs';
 import { compareBuilds, publishable } from '../src/placement/settle.mjs';
 
@@ -14,6 +14,166 @@ const job = () => read('jobs/kalshi-trading-closure-build.json');
 const nodes = () => fs.readdirSync(new URL('../data/placement/nodes/', import.meta.url)).map(f => read(`nodes/${f}`));
 const ledger = (used = 0) => newLedger({ plan: 'free', month: '2026-10',
   usedMinutes: used, observedAt: NOW });
+
+// Synthetic evidence tests the receiving interface, not installed authority.
+function sessionFixture(mode='local-qualification') {
+  const source={repository:'fixture/original-owner',repositoryId:42,commit:'a'.repeat(40)};
+  const sessionId='fixture-session', workspacePath='/workspace/one-job',scope='fixture:host-custody';
+  const job={id:'bounded-source-test',effect:false,visibility:'public',minutes:1,maxMinutes:5,
+    closure:[],needs:{cores:1,memoryGb:0.1,freeDiskGb:0.01,freeInodes:100},
+    requires:{capabilities:['node']},sessionExecution:{mode,scope,sessionId,source,workspacePath}};
+  const node={id:'fixture-node',state:'up',observedAt:NOW,cores:4,memoryGb:4,freeDiskGb:2,
+    freeInodes:1000,bandwidthMbps:100,startupMinutes:0,queuedMinutes:0,capabilities:['node'],closureCache:[],cost:{kind:'held'},
+    sessionExecution:{scope,sessionId,source:{...source},workspacePath,checkoutHead:source.commit,checkoutClean:true,
+      observationRef:'fixture:observed-session',observedAt:NOW,expiresAt:'2026-10-15T05:00:00Z',
+      lifecycle:'foreground-single-job',maxJobs:1,activeJobs:0,completedJobs:0}};
+  const readSessionAdmission=subject=>({kind:'session-execution-admission.v1',state:'received',subject,
+    issuer:'fixture:host-owner',evidenceRef:'fixture:original-receipt',verifierRevision:'b'.repeat(40),
+    reviewRef:'fixture:exact-source-review',lifecycleRef:'fixture:bounded-lifetime',
+    isolationRef:'fixture:independent-boundary',credentialPolicy:'no-job-secrets',
+    isolation:mode==='github-jit'?'clean-one-job':'reviewed-local-source',
+    observedAt:NOW,expiresAt:'2026-10-15T05:00:00Z',
+    ...(mode==='github-jit'?{runner:{id:7,repositoryId:42,ephemeral:true,
+      scope:'trusted-exact-head',evidenceRef:'fixture:provider-runner'}}:{})});
+  return {job,node,ctx:{now:NOW,readSessionAdmission}};
+}
+
+test('session preflight preserves ordinary placement and cannot turn a local result into registration',()=>{
+  assert.equal(preflightSessionExecution(job(),nodes()[0],{now:NOW}),null);
+  const f=sessionFixture(), before=structuredClone([f.job,f.node]);
+  const result=place(f.job,[f.node],f.ctx);
+  assert.equal(result.chosen,f.node.id);
+  assert.equal(result.candidates[0].sessionExecution.mode,'local-qualification');
+  assert.equal(result.candidates[0].sessionExecution.executed,false);
+  assert.equal(result.candidates[0].sessionExecution.leaseRequired,true);
+  assert.equal(result.candidates[0].sessionExecution.runner,undefined);
+  assert.deepEqual([f.job,f.node],before);
+});
+
+test('session capacity includes inodes and exact workspace, head, freshness and finite lifetime',()=>{
+  const changes=[
+    [f=>{f.node.freeInodes=0;},'too-small:freeInodes'],
+    [f=>{delete f.node.freeInodes;},'session-inode-capacity-unmeasured'],
+    [f=>{f.job.needs.freeInodes=0;},'session-inode-capacity-unmeasured'],
+    [f=>{f.node.memoryGb=null;},'session-resource-unmeasured:memoryGb'],
+    [f=>{f.node.memoryGb=0;},'too-small:memoryGb'],
+    [f=>{f.node.cores=0;},'too-small:cores'],
+    [f=>{f.node.freeDiskGb=0;},'too-small:freeDiskGb'],
+    [f=>{f.node.sessionExecution.checkoutHead='c'.repeat(40);},'session-source-head-or-workspace-differs'],
+    [f=>{f.node.sessionExecution.source.repositoryId=43;},'session-source-head-or-workspace-differs'],
+    [f=>{f.node.sessionExecution.checkoutClean=false;},'session-source-head-or-workspace-differs'],
+    [f=>{f.node.sessionExecution.workspacePath='/workspace/other';},'session-source-head-or-workspace-differs'],
+    [f=>{f.node.sessionExecution.sessionId='different-session';},'session-source-head-or-workspace-differs'],
+    [f=>{f.node.sessionExecution.scope='different-custody';},'session-source-head-or-workspace-differs'],
+    [f=>{f.node.sessionExecution.observationRef='';},'session-observation-stale-or-absent'],
+    [f=>{f.node.sessionExecution.observedAt='2026-10-15T03:00:00Z';},'session-observation-stale-or-absent'],
+    [f=>{delete f.node.sessionExecution.expiresAt;},'session-lifetime-does-not-cover-job'],
+    [f=>{f.node.sessionExecution.expiresAt='2026-10-15T04:54:59Z';},'session-lifetime-does-not-cover-job'],
+    [f=>{f.job.maxMinutes=Infinity;},'session-maximum-runtime-required'],
+    [f=>{f.node.queuedMinutes=5;},'session-maximum-does-not-cover-placement-time'],
+    [f=>{f.node.startupMinutes=5;},'session-maximum-does-not-cover-placement-time'],
+    [f=>{delete f.node.queuedMinutes;},'session-placement-time-unmeasured'],
+    [f=>{f.job.closure=[{id:'uncached',sizeMb:1000}];f.node.bandwidthMbps=1;},'session-maximum-does-not-cover-placement-time'],
+    [f=>{f.node.state='intermittent';},'session-placement-time-unmeasured'],
+    [f=>{f.job.effect='publish';},'session-external-effect-free-job-required'],
+    [f=>{delete f.job.effect;},'session-external-effect-free-job-required'],
+    [f=>{f.node.sessionExecution.activeJobs=1;},'session-single-job-lifecycle-unreceived'],
+    [f=>{f.node.sessionExecution.completedJobs=1;},'session-single-job-lifecycle-unreceived'],
+    [f=>{f.node.sessionExecution.lifecycle='persistent-service';},'session-single-job-lifecycle-unreceived'],
+    [f=>{delete f.job.sessionExecution;},'session-job-identity-required'],
+    [f=>{delete f.node.sessionExecution;},'session-observation-stale-or-absent'],
+  ];
+  for(const [change,reason] of changes){
+    const f=sessionFixture();change(f);let reads=0;
+    const r=place(f.job,[f.node],{...f.ctx,readSessionAdmission:()=>{reads++;throw Error('unexpected');}});
+    assert.equal(r.chosen,null,reason);assert.ok(r.refused[0].why.includes(reason),reason);
+    assert.equal(reads,0,reason);
+  }
+});
+
+test('session admission must be independently read and revision, subject, issuer and expiry bound',()=>{
+  const f=sessionFixture();
+  assert.deepEqual(place(f.job,[f.node],{now:NOW}).refused[0].why,['session-admission-unreceived']);
+  for(const reading of [true,{},null,Promise.resolve(true)]){
+    assert.equal(place(f.job,[f.node],{now:NOW,readSessionAdmission:()=>reading}).chosen,null);
+  }
+  const alterations=[r=>{r.issuer='';},r=>{r.verifierRevision='main';},r=>{r.reviewRef='';},
+    r=>{r.isolationRef='';},r=>{r.lifecycleRef='';},r=>{r.credentialPolicy='inherited-secrets';},
+    r=>{r.expiresAt='2026-10-15T04:54:59Z';},r=>{r.subject.source.commit='c'.repeat(40);},
+    r=>{r.subject.nodeId='other';},r=>{r.subject.jobId='other';},r=>{r.subject.observationRef='fixture:other';},
+    r=>{r.subject.jobDigest='c'.repeat(64);},
+    r=>{r.observedAt='2026-10-15T03:00:00Z';},r=>{r.isolation='bwrap-installed';}];
+  for(const alter of alterations){
+    const read=subject=>{const r=f.ctx.readSessionAdmission(subject);alter(r);return r;};
+    assert.equal(place(f.job,[f.node],{now:NOW,readSessionAdmission:read}).chosen,null);
+  }
+  const failed=place(f.job,[f.node],{now:NOW,readSessionAdmission:()=>{throw Error('offline');}});
+  assert.deepEqual(failed.refused[0].why,['session-admission-read-failed']);
+});
+
+test('JIT preflight requires original registration receiving and clean one-job isolation',()=>{
+  const f=sessionFixture('github-jit');
+  assert.equal(place(f.job,[f.node],f.ctx).chosen,f.node.id);
+  for(const alter of [r=>{delete r.runner;},r=>{r.runner.repositoryId=99;},
+    r=>{r.runner.ephemeral=false;},r=>{r.runner.scope='all-branches';},
+    r=>{r.runner.evidenceRef='';},r=>{r.isolation='reviewed-local-source';}]){
+    const read=subject=>{const r=f.ctx.readSessionAdmission(subject);alter(r);return r;};
+    assert.equal(place(f.job,[f.node],{now:NOW,readSessionAdmission:read}).chosen,null);
+  }
+});
+
+test('fleet session preflight reserves inodes and one job without mutating original custody',()=>{
+  const f=sessionFixture(),before=structuredClone(f.node);
+  const result=planFleet([f.job,{...f.job,id:'second-job'}],[f.node],f.ctx);
+  assert.equal(result.proposed,1);assert.equal(result.executed,0);
+  assert.equal(result.placements[0].resourceHold.freeInodes,100);
+  assert.equal(result.residualResources[0].freeInodes,900);
+  assert.ok(result.pending[0].refused[0].why.includes('session-single-job-lifecycle-unreceived'));
+  assert.deepEqual(f.node,before);
+  // A label cannot bypass the session preflight by dropping the job request.
+  assert.equal(place({...f.job,sessionExecution:undefined},[f.node],f.ctx).chosen,null);
+  const aliases=planFleet([f.job,{...f.job,id:'second-job'}],[f.node,{...structuredClone(f.node),id:'alias-node'}],f.ctx);
+  assert.equal(aliases.proposed,1);
+  assert.ok(aliases.pending[0].refused.every(r=>r.why.includes('session-single-job-lifecycle-unreceived')));
+  const invalidAlias=structuredClone(f.node);invalidAlias.id='invalid-alias';invalidAlias.sessionExecution.activeJobs=-1;
+  assert.equal(planFleet([f.job,{...f.job,id:'second-job'}],[f.node,invalidAlias],f.ctx).proposed,1);
+  const other=structuredClone(f.node);other.id='other-custody-node';other.sessionExecution.scope='fixture:other-host';
+  const otherJob=structuredClone(f.job);otherJob.id='other-custody-job';otherJob.sessionExecution.scope='fixture:other-host';
+  assert.equal(planFleet([f.job,otherJob],[f.node,other],f.ctx).proposed,2);
+});
+
+test('session receiving binds changed commands, closure and needs under the same original job ID',()=>{
+  const f=sessionFixture();let prior;
+  place(f.job,[f.node],{...f.ctx,readSessionAdmission:subject=>{prior=f.ctx.readSessionAdmission(subject);return prior;}});
+  for(const job of [{...f.job,command:['node','other-test.mjs']},
+    {...f.job,needs:{...f.job.needs,freeInodes:101}},
+    {...f.job,closure:[{id:'changed-input',sizeMb:0}]}]){
+    const result=place(job,[f.node],{now:NOW,readSessionAdmission:()=>prior});
+    assert.equal(result.chosen,null);
+    assert.ok(result.refused[0].why.includes('session-admission-identity-or-evidence-unreceived'));
+  }
+  const changedNode=structuredClone(f.node);changedNode.freeInodes++;
+  assert.equal(place(f.job,[changedNode],{now:NOW,readSessionAdmission:()=>prior}).chosen,null);
+});
+
+test('session transfer bounds cannot be reduced by negative, inverted or unmeasured intervals',()=>{
+  for(const sizeMb of [-750,{min:-1,max:1},{min:10,max:1},{min:0,max:Infinity},undefined]){
+    const f=sessionFixture();f.job.closure=[{id:'uncached',sizeMb}];
+    if(sizeMb===undefined) delete f.job.closure[0].sizeMb;
+    let reads=0;const result=place(f.job,[f.node],{...f.ctx,readSessionAdmission:()=>{reads++;}});
+    assert.equal(result.chosen,null);assert.equal(reads,0);
+  }
+  for(const bandwidthMbps of [-1,0,{min:-1,max:100},{min:100,max:1},undefined]){
+    const f=sessionFixture();f.job.closure=[{id:'uncached',sizeMb:1}];f.node.bandwidthMbps=bandwidthMbps;
+    if(bandwidthMbps===undefined) delete f.node.bandwidthMbps;
+    assert.equal(place(f.job,[f.node],f.ctx).chosen,null);
+  }
+  const f=sessionFixture();f.node.startupMinutes=10;f.node.bandwidthMbps=1;
+  f.job.closure=[{id:'positive',sizeMb:100},{id:'negative',sizeMb:-750}];
+  assert.equal(place(f.job,[f.node],f.ctx).chosen,null);
+  f.node.startupMinutes=0;f.job.closure=[{id:'bounded',sizeMb:{min:0,max:1}}];
+  assert.equal(place(f.job,[f.node],f.ctx).chosen,f.node.id);
+});
 
 test('the Kalshi closure goes to the node that already holds it', () => {
   const r = place(job(), nodes(), { ledger: ledger(), now: NOW });

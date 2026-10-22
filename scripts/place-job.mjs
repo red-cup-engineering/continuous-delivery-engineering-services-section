@@ -49,6 +49,11 @@ if(args['budget-stdin']){
   if(Object.keys(budgets).length!==records.length)
     throw new Error('duplicate original provider scope in current budget observations');
 }
+// Session jobs can be described by the original job/node JSON, but this CLI is
+// not an authenticated host-admission reader. Do not accept an admission file,
+// executable callback path, environment flag or boolean as a substitute. Its
+// session proposals therefore retain session-admission-unreceived until the
+// existing owning host composes the read-only receiver with place/planFleet.
 const ctx={ledger,budgets,now:at};
 const proposal=args.jobs?planFleet(input,nodes,ctx):place(input,nodes,ctx);
 process.stdout.write(JSON.stringify(proposal,(_k,v)=>v===Infinity?'unbounded':v,2)+'\n');
