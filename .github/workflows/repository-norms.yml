@@ -6,9 +6,9 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: 'Runner labels as JSON'
+        description: 'Runner labels as JSON, e.g. ''["ubuntu-24.04"]'''
         type: string
-        default: '["ubuntu-24.04"]'
+        required: true
       warn:
         description: 'Report findings without failing'
         type: boolean
