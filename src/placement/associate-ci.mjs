@@ -64,7 +64,9 @@ export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}
     || !isRef(a.sandbox.policyRef) || !recent(a.sandbox.verifiedAt, time, 86_400_000))
     return refuse('ephemeral-isolation-not-verified');
   if (a.observation?.state !== 'up' || !isRef(a.observation.witnessRef)
-    || !recent(a.observation.observedAt, time, 120_000))
+    || !isId(a.observation.physicalPoolId) ||
+    !isRef(a.observation.poolWitnessRef) ||
+    !recent(a.observation.observedAt, time, 120_000))
     return refuse('capacity-not-independently-fresh');
   // One authenticated original market reading relates an actor's current
   // unwithdrawn offer and its stable receipt to this very device. Neither
@@ -97,6 +99,10 @@ export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}
     id:'associate-ci-'+createHash('sha256')
       .update(JSON.stringify([instance,actor,id])).digest('hex').slice(0,32),
     state: 'up', observedAt: measured.observedAt,
+    // A real device has one original physical carrier even if multiple
+    // worlds/OAuth memberships advertise it. The scheduler's independent
+    // physical-pool observer must measure that carrier, or placement refuses.
+    sharedCapacityPool:measured.physicalPoolId,
     // AOE offers milli-cores and MiB; the existing placement resource
     // coordinates use cores and GiB for memory/disk. Never round upward.
     cores: Math.min(measured.cores, limits.cores, offered.coresMilli / 1000),
@@ -107,7 +113,8 @@ export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}
     cost: { kind: 'associate-quoted' },
     associateCi: Object.freeze({admissionRef,witnessRef:a.witnessRef,
       instanceId:instance,instanceOrigin:origin,oauthAudience:audience,
-      actorId:actor,deviceId:id,workClass:'public-ci',
+      actorId:actor,deviceId:id,physicalPoolWitnessRef:measured.poolWitnessRef,
+      workClass:'public-ci',
       offerRef:a.marketOfferRef,offerId:offer.offerId,
       offerCurrency:offer.ask.currency,unitRef:offer.ask.unitRef,
       minimumPriceMicros:offer.ask.microsPerAcceptedUnit,
