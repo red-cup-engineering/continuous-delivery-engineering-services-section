@@ -1,0 +1,43 @@
+name: repository-norms
+# The 561 Group's repository norms for the calling repository: its section name carries its organization's domain,
+# and every submodule is declared once, from a house https URL, in a directory named for it.
+# Norms and checker: https://github.com/red-cup-engineering/repository-norms
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Runner labels as JSON'
+        type: string
+        default: '["ubuntu-24.04"]'
+      warn:
+        description: 'Report findings without failing'
+        type: boolean
+        default: false
+      norms-ref:
+        description: 'repository-norms commit'
+        type: string
+        default: 'e3a484b2e68126fad308251eae9cf1bd079d9abd'
+permissions:
+  contents: read
+jobs:
+  norms:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: red-cup-engineering/repository-norms
+          ref: ${{ inputs.norms-ref }}
+          path: .repository-norms
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+      - name: Check the repository norms
+        env:
+          WARN: ${{ inputs.warn && '--warn' || '' }}
+        run: node .repository-norms/bin/repository-norms.mjs check . $WARN
