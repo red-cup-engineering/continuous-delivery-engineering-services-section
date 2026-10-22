@@ -1,6 +1,7 @@
 // Place a job on the node that can run it at the lowest price. Unknown quantities are intervals
 // (min 0, max unbounded), never zero. Price is minutes of wall time plus scarcity.
 import { minutePrice, quoteBudget, budgetAvailable, hold, holdBudget } from './allowance.mjs';
+import { assessAssociateCiJob } from './associate-ci.mjs';
 
 const iv = q => q == null ? { min: 0, max: Infinity } : typeof q === 'number' ? { min: q, max: q } : { min: q.min ?? 0, max: q.max ?? Infinity };
 const add = (a, b) => ({ min: a.min + b.min, max: a.max + b.max });
@@ -17,8 +18,14 @@ export function fetchMinutes(job, node) {
   return { missing: missing.map(m => m.id), minutes: { min: div(mb.min, bw.max), max: div(mb.max, bw.min) } };
 }
 
-export function assess(job, node, { ledger = null, budgets = {}, now }) {
+export function assess(job, node, { ledger = null, budgets = {}, now, authorizeAssociateJob = null }) {
   const why = [];
+  // Untrusted associate devices must pass both original admission and exact Work gates.
+  // This remains a planning verdict; a real dispatcher must revalidate on dispatch.
+  if (typeof node?.id === 'string' && (node.id.startsWith('associate-ci-') || node.associateCi !== undefined)) {
+    const gate = assessAssociateCiJob({ job, node, now, authorizeAssociateJob });
+    if (!gate.ok) why.push('swarm-ci:' + gate.reason);
+  }
   if (job.mustRunOn && !job.mustRunOn.includes(node.id)) why.push('job-names-other-nodes');
   if (!['up','intermittent'].includes(node.state)) why.push('node-not-observed-up');
   const nowMs=Date.parse(now),nodeAt=Date.parse(node.observedAt);
@@ -121,7 +128,7 @@ export function place(job, nodes, ctx) {
  * a single-writer original budget hold and fencing token before execution.
  * Job ordering is the caller's independently governed priority ordering.
  */
-export function planFleet(jobs,nodes,{ledger=null,budgets={},now}={}){
+export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssociateJob=null}={}){
   if(!Array.isArray(jobs)||!Array.isArray(nodes)||!jobs.length||
     !Number.isFinite(Date.parse(now))||jobs.length>1000||nodes.length>256)
     throw new TypeError('bounded original jobs, nodes and observation time required');
@@ -161,7 +168,7 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now}={}){
       continue;
     }
     const view=place(job,provisionalNodes,
-      {now,ledger:provisionalLedger,budgets:provisionalBudgets});
+      {now,ledger:provisionalLedger,budgets:provisionalBudgets,authorizeAssociateJob});
     // Only candidates with finite worst-case runtime and *certain* measured
     // resources can acquire provisional capacity. Possible measurements
     // request probes; a chosen node name alone is never dispatch authority.
