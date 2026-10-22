@@ -66,6 +66,25 @@ export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}
   if (a.observation?.state !== 'up' || !isRef(a.observation.witnessRef)
     || !recent(a.observation.observedAt, time, 120_000))
     return refuse('capacity-not-independently-fresh');
+  // One authenticated original market reading relates an actor's current
+  // unwithdrawn offer and its stable receipt to this very device. Neither
+  // the worker's own report nor a historical offer row can revive consent.
+  const offer=a.marketOffer;
+  const offered=offer?.limits;
+  if(offer?.kind!=='organizing.compute-contribution-offer.v1' ||
+    offer.event!=='offered' || a.marketOfferCurrent!==true ||
+    !QUOTE.test(a.marketOfferRef ?? '') ||
+    offer.instance!==instance || offer.by!==actor ||
+    offer.deviceId!==id || offer.workClass!=='public-ci' ||
+    !active(offer.expiresAt,time) ||
+    !Number.isSafeInteger(offered?.coresMilli) || offered.coresMilli<1 ||
+    !Number.isSafeInteger(offered?.memoryMiB) || offered.memoryMiB<1 ||
+    !Number.isSafeInteger(offered?.diskMiB) || offered.diskMiB<1 ||
+    !Number.isSafeInteger(offered?.maxMinutes) ||
+    offered.maxMinutes<1 || offered.maxMinutes>60 ||
+    !/^[A-Z]{3,5}$/u.test(offer.ask?.currency ?? '') ||
+    !isRef(offer.ask?.unitRef) || !positiveMicro(offer.ask?.microsPerAcceptedUnit))
+    return refuse('current-priced-original-market-offer-unverified');
   // At offer/admission time capacity is not yet sold and no buyer liability
   // exists. A held bilateral quote and buyer reservation are mandatory at
   // the individual Work gate, not a prerequisite to listing one's capacity.
@@ -78,16 +97,22 @@ export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}
     id:'associate-ci-'+createHash('sha256')
       .update(JSON.stringify([instance,actor,id])).digest('hex').slice(0,32),
     state: 'up', observedAt: measured.observedAt,
-    cores: Math.min(measured.cores, limits.cores),
-    memoryGb: Math.min(measured.memoryGb, limits.memoryGb),
-    freeDiskGb: Math.min(measured.freeDiskGb, limits.freeDiskGb),
+    // AOE offers milli-cores and MiB; the existing placement resource
+    // coordinates use cores and GiB for memory/disk. Never round upward.
+    cores: Math.min(measured.cores, limits.cores, offered.coresMilli / 1000),
+    memoryGb: Math.min(measured.memoryGb, limits.memoryGb, offered.memoryMiB / 1024),
+    freeDiskGb: Math.min(measured.freeDiskGb, limits.freeDiskGb, offered.diskMiB / 1024),
     bandwidthMbps: measured.bandwidthMbps, closureCache: [],
     capabilities: ['node', 'git', 'swarm-ci-public'], publicOnly: true,
     cost: { kind: 'associate-quoted' },
     associateCi: Object.freeze({admissionRef,witnessRef:a.witnessRef,
       instanceId:instance,instanceOrigin:origin,oauthAudience:audience,
       actorId:actor,deviceId:id,workClass:'public-ci',
-      maxMinutes:limits.maxMinutes,commercialState:'unsold-no-budget-hold'}),
+      offerRef:a.marketOfferRef,offerId:offer.offerId,
+      offerCurrency:offer.ask.currency,unitRef:offer.ask.unitRef,
+      minimumPriceMicros:offer.ask.microsPerAcceptedUnit,
+      maxMinutes:Math.min(limits.maxMinutes,offered.maxMinutes),
+      commercialState:'unsold-no-budget-hold'}),
   });
   return Object.freeze({kind:'swarm-ci-node-proposal.v2',admitted:true,node,
     status:'placement-candidate-only',dispatchAuthorized:false});
@@ -106,7 +131,10 @@ export function assessAssociateCiJob({ job, node, now, authorizeAssociateJob } =
   if (!a || a.workClass !== 'public-ci' || !isRef(a.admissionRef)
     || !isRef(a.witnessRef) || !isRef(a.instanceId) ||
     !HTTPS(a.instanceOrigin) || !isRef(a.oauthAudience) ||
-    !isRef(a.actorId) || !isId(a.deviceId) || !positive(a.maxMinutes)
+    !isRef(a.actorId) || !isId(a.deviceId) || !positive(a.maxMinutes) ||
+    !QUOTE.test(a.offerRef ?? '') || !isId(a.offerId) ||
+    !/^[A-Z]{3,5}$/u.test(a.offerCurrency ?? '') ||
+    !isRef(a.unitRef) || !positiveMicro(a.minimumPriceMicros)
     || node.publicOnly !== true || node.cost?.kind !== 'associate-quoted')
     return deny('not-a-qualified-associate-ci-node');
   if (job?.visibility !== 'public' || job.effect !== false
@@ -141,7 +169,10 @@ export function assessAssociateCiJob({ job, node, now, authorizeAssociateJob } =
     t.earningPosted!==false || t.paymentAuthorized!==false ||
     t.instanceId!==a.instanceId || t.actorId!==a.actorId ||
     t.deviceId!==a.deviceId || t.workRef!==job.id ||
-    !QUOTE.test(t.quoteId ?? '') || !isRef(t.offerRef) ||
+    !QUOTE.test(t.quoteId ?? '') || t.offerRef!==a.offerRef ||
+    t.currency!==a.offerCurrency || t.unitRef!==a.unitRef ||
+    !positiveMicro(t.priceMicrosPerAcceptedUnit) ||
+    BigInt(t.priceMicrosPerAcceptedUnit)<BigInt(a.minimumPriceMicros) ||
     !isRef(t.buyerAcceptanceRef) || !isRef(t.supplierAcceptanceRef) ||
     t.buyerAcceptanceRef===t.supplierAcceptanceRef ||
     !isRef(t.budgetHoldRef) || !isRef(t.unitRef) ||
