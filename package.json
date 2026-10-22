@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "test:public-source-contract": "node --check generator/generate-ci.mjs && node --test test/generate-ci.test.mjs test/retained-runner.test.mjs test/node-package-options.test.mjs test/cloudbuild-native.test.mjs test/cloudbuild-trigger-operations.test.mjs test/circleci-free-source.test.mjs test/circleci-private-inference-source.test.mjs test/circleci-private-x402-source.test.mjs test/circleci-public-source.test.mjs test/placement.test.mjs test/submodule-pr.test.mjs test/lockfile-caller.test.mjs test/retired-intake-fleet.test.mjs test/release.test.mjs && node generator/generate-ci.mjs . --audit-runners --public-repo"
+    "test:public-source-contract": "node --check generator/generate-ci.mjs && node --test test/generate-ci.test.mjs test/retained-runner.test.mjs test/node-package-options.test.mjs test/cloudbuild-native.test.mjs test/cloudbuild-trigger-operations.test.mjs test/circleci-free-source.test.mjs test/circleci-private-inference-source.test.mjs test/circleci-private-x402-source.test.mjs test/circleci-public-source.test.mjs test/placement.test.mjs test/associate-ci.test.mjs test/shared-capacity.test.mjs test/submodule-pr.test.mjs test/lockfile-caller.test.mjs test/retired-intake-fleet.test.mjs test/release.test.mjs && node generator/generate-ci.mjs . --audit-runners --public-repo"
   },
   "dependencies": {
     "yaml": "2.8.3"
