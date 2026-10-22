@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { projectAssociateCiNode, assessAssociateCiJob } from '../src/placement/associate-ci.mjs';
 import { assess, place, planFleet } from '../src/placement/place.mjs';
 
@@ -7,6 +8,18 @@ const NOW = '2026-10-21T22:00:00Z';
 const REF = 'swarm-admission-witness-1', SHA = 'a'.repeat(40);
 const INSTANCE = {id:'metroplat:world-one',origin:'https://world-one.561.group/',oauthAudience:'https://world-one.561.group/mcp',oauthIssuer:'https://accounts.google.com'};
 const ACTOR = 'https://world-one.561.group/actors/associate-1';
+const POOL='independently-witnessed-host-one';
+const secondActor='https://world-two.561.group/actors/associate-1';
+const nodeId=(instance,actor,device)=>'associate-ci-'+createHash('sha256')
+  .update(JSON.stringify([instance,actor,device])).digest('hex').slice(0,32);
+const readSharedCapacity=({poolId})=>({
+  kind:'observed-physical-compute-pool.v1',id:poolId,
+  state:'up',witnessRef:'independent-physical-resource-witness-1',
+  nodeIds:[nodeId(INSTANCE.id,ACTOR,'device-1'),
+    nodeId('metroplat:world-two',secondActor,'device-1')],
+  observedAt:'2026-10-21T21:59:50Z',
+  cores:8,memoryGb:24,freeDiskGb:50,
+});
 
 const admission = () => ({
   kind: 'metroplat.instance-compute-admission.v1', ref: REF, witnessRef: 'independent-source-witness-1',
@@ -22,7 +35,8 @@ const admission = () => ({
     verifiedAt:'2026-10-21T21:59:00Z'},
   observation: {deviceId:'device-1',instanceId:INSTANCE.id,state:'up', witnessRef:'independent-capacity-witness',
     observedAt:'2026-10-21T21:59:50Z',
-    cores:8, memoryGb:24, freeDiskGb:50, bandwidthMbps:30},
+    cores:8, memoryGb:24, freeDiskGb:50, bandwidthMbps:30,
+    physicalPoolId:POOL,poolWitnessRef:'original-physical-host-identification'},
   marketOfferCurrent:true,marketOfferRef:'sha256:'+'c'.repeat(64),
   marketOffer:{
     kind:'organizing.compute-contribution-offer.v1',event:'offered',
@@ -68,7 +82,7 @@ const workGrant = ({job,node}) => ({kind:'swarm.ci-job-grant.v1',
   trade:acceptedTrade({job,node})});
 
 test('no trusted admission reader or source witness means no volunteer node',()=>{
-  assert.equal(projectAssociateCiNode({now:NOW}).admitted,false);
+  assert.equal(projectAssociateCiNode({now:NOW,readSharedCapacity}).admitted,false);
   assert.equal(projectAssociateCiNode({admissionRef:REF,now:NOW,readAdmission:()=>({})}).reason,
     'admission-not-source-verified');
   assert.equal(projectAssociateCiNode({admissionRef:REF,now:NOW,readAdmission:()=>{throw Error('offline')}}).reason,
@@ -88,6 +102,7 @@ test('approved OAuth Actor for a specific MetroPlat world can advertise bounded 
   assert.equal(out.node.cost.kind,'associate-quoted');
   assert.equal(out.node.associateCi.commercialState,'unsold-no-budget-hold');
   assert.equal(out.node.associateCi.offerRef,'sha256:'+'c'.repeat(64));
+  assert.equal(out.node.sharedCapacityPool,POOL);
   assert.equal(Object.hasOwn(out.node.associateCi,'creditHoldRef'),false);
   assert.equal(out.node.publicOnly,true);
   assert.deepEqual(out.node.capabilities,['node','git','swarm-ci-public']);
@@ -114,6 +129,8 @@ test('unverified isolation, stale independent measurements and excessive resourc
     [a=>a.sandbox.network='open','ephemeral-isolation-not-verified'],
     [a=>a.observation.observedAt='2026-10-21T21:50:00Z','capacity-not-independently-fresh'],
     [a=>a.sandbox.instanceId='metroplat:neighbor','instance-actor-device-custody-mismatch'],
+    [a=>{a.observation.physicalPoolId='';},'capacity-not-independently-fresh'],
+    [a=>{a.observation.poolWitnessRef='';},'capacity-not-independently-fresh'],
     [a=>{a.marketOfferCurrent=false;},'current-priced-original-market-offer-unverified'],
     [a=>{a.marketOffer.event='withdrawn';},'current-priced-original-market-offer-unverified'],
     [a=>{a.marketOffer.by='unrelated:other';},'current-priced-original-market-offer-unverified'],
@@ -126,22 +143,22 @@ test('unverified isolation, stale independent measurements and excessive resourc
 
 test('qualified public immutable pure work needs an exact independent original grant',()=>{
   const node=projection().node,j=job();
-  assert.equal(assessAssociateCiJob({job:j,node,now:NOW}).reason,'trusted-work-grant-required');
-  assert.equal(assess(j,node,{now:NOW}).why.includes('swarm-ci:trusted-work-grant-required'),true);
-  const granted=assessAssociateCiJob({job:j,node,now:NOW,authorizeAssociateJob:workGrant});
+  assert.equal(assessAssociateCiJob({job:j,node,now:NOW,readSharedCapacity}).reason,'trusted-work-grant-required');
+  assert.equal(assess(j,node,{now:NOW,readSharedCapacity}).why.includes('swarm-ci:trusted-work-grant-required'),true);
+  const granted=assessAssociateCiJob({job:j,node,now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
   assert.equal(granted.ok,true);
   assert.equal(granted.dispatchAuthorized,false);
   assert.equal(granted.trade.budgetHoldRef,'original-budget-held-ref');
   assert.equal(granted.trade.maximumTotalMicros,'500000');
-  assert.equal(assess(j,node,{now:NOW,authorizeAssociateJob:workGrant}).feasible,true);
-  const r=place(j,[node],{now:NOW,authorizeAssociateJob:workGrant});
+  assert.equal(assess(j,node,{now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant}).feasible,true);
+  const r=place(j,[node],{now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
   assert.equal(r.chosen,node.id);
   assert.equal(r.needsLeaderWords,false);
-  const planned=planFleet([j],[node],{now:NOW,authorizeAssociateJob:workGrant});
+  const planned=planFleet([j],[node],{now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
   assert.equal(planned.proposed,1);
   assert.equal(planned.executed,0);
   assert.equal(planned.leaseReceived,false);
-  assert.equal(planFleet([j],[node],{now:NOW}).proposed,0);
+  assert.equal(planFleet([j],[node],{now:NOW,readSharedCapacity}).proposed,0);
 });
 
 test('private, effectful, pull request, unpinned, over-limit or untagged job is refused',()=>{
@@ -154,7 +171,7 @@ test('private, effectful, pull request, unpinned, over-limit or untagged job is 
     job({requires:{capabilities:['node']}}),
     job({maxMinutes:11}),
   ]) {
-    const r=place(j,[node],{now:NOW,authorizeAssociateJob:workGrant});
+    const r=place(j,[node],{now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
     assert.equal(r.chosen,null,JSON.stringify(j));
     assert.ok(r.refused[0].why.some(x=>x.startsWith('swarm-ci:')),JSON.stringify(j));
   }
@@ -164,7 +181,7 @@ test('a fabricated associate node marker cannot silently become generic held com
   const r=place(job(),[{id:'associate-ci-device-evil',state:'up',observedAt:NOW,
     publicOnly:true,capabilities:['swarm-ci-public','node'],cores:4,
     memoryGb:8,freeDiskGb:100,bandwidthMbps:100,cost:{kind:'held'},closureCache:[]}],
-    {now:NOW,authorizeAssociateJob:workGrant});
+    {now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
   assert.equal(r.chosen,null);
   assert.equal(r.refused[0].why.includes('swarm-ci:not-a-qualified-associate-ci-node'),true);
 });
@@ -196,11 +213,11 @@ test('an unsold capacity advert remains valid but unaccepted pricing cannot auth
       change(g.trade);
       return g;
     };
-    const verdict=place(j,[node],{now:NOW,authorizeAssociateJob:grant});
+    const verdict=place(j,[node],{now:NOW,readSharedCapacity,authorizeAssociateJob:grant});
     assert.equal(verdict.chosen,null);
     assert.ok(verdict.refused[0].why.includes('swarm-ci:bilateral-priced-work-and-reserved-budget-required'));
   }
-  assert.equal(place(j,[node],{now:NOW,authorizeAssociateJob:workGrant}).chosen,node.id);
+  assert.equal(place(j,[node],{now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant}).chosen,node.id);
 });
 
 test('same device name enrolled in different OAuth worlds receives a different scoped node identity',()=>{
@@ -230,18 +247,18 @@ test('a paid associate is never a generic zero-cost provider before Work accepts
   assert.equal(node.cost.kind,'associate-quoted');
   assert.equal(node.associateCi.commercialState,'unsold-no-budget-hold');
   const j=job();
-  const before=assess(j,node,{now:NOW});
+  const before=assess(j,node,{now:NOW,readSharedCapacity});
   assert.equal(before.feasible,false);
   assert.ok(before.why.some(reason=>reason.startsWith('swarm-ci:')));
-  const approved=assess(j,node,{now:NOW,authorizeAssociateJob:workGrant});
+  const approved=assess(j,node,{now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
   assert.equal(approved.feasible,true);
   assert.equal(approved.budgetHold.kind,'associate-quote');
   assert.equal(approved.budgetHold.maximumTotalMicros,'500000');
   assert.equal(approved.budgetHold.currency,'CRED');
   assert.equal(approved.budgetHold.budgetHoldRef,'original-budget-held-ref');
   assert.equal(approved.budgetHold.scope,INSTANCE.id);
-  assert.equal(place(j,[node],{now:NOW}).chosen,null);
-  const plan=planFleet([j],[node],{now:NOW,authorizeAssociateJob:workGrant});
+  assert.equal(place(j,[node],{now:NOW,readSharedCapacity}).chosen,null);
+  const plan=planFleet([j],[node],{now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
   assert.equal(plan.placements[0].budgetHold.kind,'associate-quote');
   assert.equal(plan.providerBudgetHeld,false);
   assert.equal(plan.executed,0);
@@ -250,7 +267,7 @@ test('a paid associate is never a generic zero-cost provider before Work accepts
 test('fleet will not spend one original buyer hold twice across distinct CI Work',()=>{
   const node=projection().node;
   const jobs=[job({id:'first-ci-job'}),job({id:'second-ci-job'})];
-  const plan=planFleet(jobs,[node],{now:NOW,authorizeAssociateJob:workGrant});
+  const plan=planFleet(jobs,[node],{now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
   assert.equal(plan.proposed,1);
   assert.equal(plan.unplaced,1);
   assert.equal(plan.placements[0].jobId,'first-ci-job');
@@ -259,7 +276,7 @@ test('fleet will not spend one original buyer hold twice across distinct CI Work
   assert.equal(plan.leaseReceived,false);
   // Independent original reserve receipts, even in the same instance,
   // give the other workload a separate lawful budget in a proposal.
-  const two=planFleet(jobs,[node],{now:NOW,authorizeAssociateJob:args=>{
+  const two=planFleet(jobs,[node],{now:NOW,readSharedCapacity,authorizeAssociateJob:args=>{
     const g=workGrant(args);
     g.trade.budgetHoldRef='budget-reservation-'+args.job.id;
     return g;
@@ -268,6 +285,22 @@ test('fleet will not spend one original buyer hold twice across distinct CI Work
   assert.equal(two.unplaced,0);
 });
 
+
+
+test('one enrolled physical computer never becomes independently counted capacity in a second world',()=>{
+  const node=projection().node;
+  const absent=place(job(),[node],{now:NOW,authorizeAssociateJob:workGrant});
+  assert.equal(absent.chosen,null);
+  assert.ok(absent.refused[0].why.includes('trusted-shared-capacity-reader-required'));
+  const selected=place(job(),[node],
+    {now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant});
+  assert.equal(selected.chosen,node.id);
+  const bad=place(job(),[node],{now:NOW,
+    readSharedCapacity:()=>({...readSharedCapacity({poolId:POOL}),nodeIds:['someone-else']}),
+    authorizeAssociateJob:workGrant});
+  assert.equal(bad.chosen,null);
+  assert.ok(bad.refused[0].why.includes('shared-capacity-custody-unverified'));
+});
 
 test('original participant limits beat claimed capacity, and never round MiB upward',()=>{
   const a=admission();
@@ -282,5 +315,5 @@ test('original participant limits beat claimed capacity, and never round MiB upw
   assert.equal(result.node.freeDiskGb,2.5);
   assert.equal(result.node.associateCi.maxMinutes,5);
   assert.equal(place(job({maxMinutes:7}),[result.node],
-    {now:NOW,authorizeAssociateJob:workGrant}).chosen,null);
+    {now:NOW,readSharedCapacity,authorizeAssociateJob:workGrant}).chosen,null);
 });
