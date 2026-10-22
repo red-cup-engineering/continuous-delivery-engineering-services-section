@@ -23,6 +23,15 @@ const admission = () => ({
   observation: {deviceId:'device-1',instanceId:INSTANCE.id,state:'up', witnessRef:'independent-capacity-witness',
     observedAt:'2026-10-21T21:59:50Z',
     cores:8, memoryGb:24, freeDiskGb:50, bandwidthMbps:30},
+  marketOfferCurrent:true,marketOfferRef:'sha256:'+'c'.repeat(64),
+  marketOffer:{
+    kind:'organizing.compute-contribution-offer.v1',event:'offered',
+    instance:INSTANCE.id,by:ACTOR,deviceId:'device-1',
+    offerId:'offer-device-1',workClass:'public-ci',
+    expiresAt:'2026-10-22T00:00:00Z',
+    limits:{coresMilli:2000,memoryMiB:3072,diskMiB:5120,maxMinutes:10},
+    ask:{currency:'CRED',unitRef:'work:accepted-ci-unit',microsPerAcceptedUnit:'250000'}
+  }
 });
 
 const projection = (change = null) => {
@@ -45,7 +54,7 @@ const acceptedTrade = ({job,node})=>({
   leaseAuthorized:false,earningPosted:false,paymentAuthorized:false,
   instanceId:node.associateCi.instanceId,actorId:node.associateCi.actorId,
   deviceId:node.associateCi.deviceId,workRef:job.id,
-  quoteId:'sha256:'+'b'.repeat(64),offerRef:'market-original-offer-1',
+  quoteId:'sha256:'+'b'.repeat(64),offerRef:node.associateCi.offerRef,
   buyerAcceptanceRef:'buyer-acceptance-witness',
   supplierAcceptanceRef:'supplier-acceptance-witness',
   budgetHoldRef:'original-budget-held-ref',unitRef:'work:accepted-ci-unit',
@@ -78,6 +87,7 @@ test('approved OAuth Actor for a specific MetroPlat world can advertise bounded 
   assert.equal(out.node.freeDiskGb,5);
   assert.equal(out.node.cost.kind,'associate-quoted');
   assert.equal(out.node.associateCi.commercialState,'unsold-no-budget-hold');
+  assert.equal(out.node.associateCi.offerRef,'sha256:'+'c'.repeat(64));
   assert.equal(Object.hasOwn(out.node.associateCi,'creditHoldRef'),false);
   assert.equal(out.node.publicOnly,true);
   assert.deepEqual(out.node.capabilities,['node','git','swarm-ci-public']);
@@ -104,6 +114,11 @@ test('unverified isolation, stale independent measurements and excessive resourc
     [a=>a.sandbox.network='open','ephemeral-isolation-not-verified'],
     [a=>a.observation.observedAt='2026-10-21T21:50:00Z','capacity-not-independently-fresh'],
     [a=>a.sandbox.instanceId='metroplat:neighbor','instance-actor-device-custody-mismatch'],
+    [a=>{a.marketOfferCurrent=false;},'current-priced-original-market-offer-unverified'],
+    [a=>{a.marketOffer.event='withdrawn';},'current-priced-original-market-offer-unverified'],
+    [a=>{a.marketOffer.by='unrelated:other';},'current-priced-original-market-offer-unverified'],
+    [a=>{a.marketOffer.instance='metroplat:neighbor';},'current-priced-original-market-offer-unverified'],
+    [a=>{a.marketOffer.ask.microsPerAcceptedUnit='0';},'current-priced-original-market-offer-unverified'],
     [a=>a.consent.limits.maxMinutes=61,'bounded-resource-limits-required'],
     [a=>a.observation.cores=0,'bounded-resource-limits-required'],
   ]) assert.equal(projection(change).reason,expected);
@@ -165,6 +180,10 @@ test('an unsold capacity advert remains valid but unaccepted pricing cannot auth
     t=>{t.quoteId='not-a-sha256-digest';},
     t=>{t.budgetHoldRef='';},
     t=>{t.status='revoked';},
+    t=>{t.offerRef='sha256:'+'d'.repeat(64);},
+    t=>{t.currency='USD';},
+    t=>{t.unitRef='work:other-units';},
+    t=>{t.priceMicrosPerAcceptedUnit='200000';},
     t=>{t.leaseAuthorized=true;},
     t=>{t.earningPosted=true;},
     t=>{t.buyerAcceptanceRef=t.supplierAcceptanceRef;},
@@ -244,4 +263,21 @@ test('fleet will not spend one original buyer hold twice across distinct CI Work
   }});
   assert.equal(two.proposed,2);
   assert.equal(two.unplaced,0);
+});
+
+
+test('original participant limits beat claimed capacity, and never round MiB upward',()=>{
+  const a=admission();
+  a.marketOffer.limits.coresMilli=1250;
+  a.marketOffer.limits.memoryMiB=1536;
+  a.marketOffer.limits.diskMiB=2560;
+  a.marketOffer.limits.maxMinutes=5;
+  const result=projectAssociateCiNode({admissionRef:REF,now:NOW,readAdmission:()=>a});
+  assert.equal(result.admitted,true);
+  assert.equal(result.node.cores,1.25);
+  assert.equal(result.node.memoryGb,1.5);
+  assert.equal(result.node.freeDiskGb,2.5);
+  assert.equal(result.node.associateCi.maxMinutes,5);
+  assert.equal(place(job({maxMinutes:7}),[result.node],
+    {now:NOW,authorizeAssociateJob:workGrant}).chosen,null);
 });
