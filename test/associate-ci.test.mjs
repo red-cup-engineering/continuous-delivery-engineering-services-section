@@ -41,6 +41,8 @@ const job = (change = {}) => ({
 });
 const acceptedTrade = ({job,node})=>({
   kind:'organizing.compute-contribution-contract.v1',
+  status:'agreed-not-executed',executionAuthorized:false,
+  leaseAuthorized:false,earningPosted:false,paymentAuthorized:false,
   instanceId:node.associateCi.instanceId,actorId:node.associateCi.actorId,
   deviceId:node.associateCi.deviceId,workRef:job.id,
   quoteId:'sha256:'+'b'.repeat(64),offerRef:'market-original-offer-1',
@@ -74,7 +76,7 @@ test('approved OAuth Actor for a specific MetroPlat world can advertise bounded 
   assert.equal(out.node.cores,2);
   assert.equal(out.node.memoryGb,3);
   assert.equal(out.node.freeDiskGb,5);
-  assert.equal(out.node.cost.kind,'held');
+  assert.equal(out.node.cost.kind,'associate-quoted');
   assert.equal(out.node.associateCi.commercialState,'unsold-no-budget-hold');
   assert.equal(Object.hasOwn(out.node.associateCi,'creditHoldRef'),false);
   assert.equal(out.node.publicOnly,true);
@@ -115,6 +117,7 @@ test('qualified public immutable pure work needs an exact independent original g
   assert.equal(granted.ok,true);
   assert.equal(granted.dispatchAuthorized,false);
   assert.equal(granted.trade.budgetHoldRef,'original-budget-held-ref');
+  assert.equal(granted.trade.maximumTotalMicros,'500000');
   assert.equal(assess(j,node,{now:NOW,authorizeAssociateJob:workGrant}).feasible,true);
   const r=place(j,[node],{now:NOW,authorizeAssociateJob:workGrant});
   assert.equal(r.chosen,node.id);
@@ -161,6 +164,9 @@ test('an unsold capacity advert remains valid but unaccepted pricing cannot auth
     t=>{t.actorId='oidc:unrelated';},
     t=>{t.quoteId='not-a-sha256-digest';},
     t=>{t.budgetHoldRef='';},
+    t=>{t.status='revoked';},
+    t=>{t.leaseAuthorized=true;},
+    t=>{t.earningPosted=true;},
     t=>{t.buyerAcceptanceRef=t.supplierAcceptanceRef;},
     t=>{t.maximumTotalMicros='500001';},
     t=>{t.priceMicrosPerAcceptedUnit='0';},
@@ -194,4 +200,48 @@ test('same device name enrolled in different OAuth worlds receives a different s
   assert.equal(other.admitted,true);
   assert.notEqual(first.node.id,other.node.id);
   assert.equal(other.node.associateCi.instanceId,target.id);
+});
+
+
+test('a paid associate is never a generic zero-cost provider before Work accepts one reserved trade',()=>{
+  const node=projection().node;
+  assert.equal(node.cost.kind,'associate-quoted');
+  assert.equal(node.associateCi.commercialState,'unsold-no-budget-hold');
+  const j=job();
+  const before=assess(j,node,{now:NOW});
+  assert.equal(before.feasible,false);
+  assert.ok(before.why.some(reason=>reason.startsWith('swarm-ci:')));
+  const approved=assess(j,node,{now:NOW,authorizeAssociateJob:workGrant});
+  assert.equal(approved.feasible,true);
+  assert.equal(approved.budgetHold.kind,'associate-quote');
+  assert.equal(approved.budgetHold.maximumTotalMicros,'500000');
+  assert.equal(approved.budgetHold.currency,'CRED');
+  assert.equal(approved.budgetHold.budgetHoldRef,'original-budget-held-ref');
+  assert.equal(approved.budgetHold.scope,INSTANCE.id);
+  assert.equal(place(j,[node],{now:NOW}).chosen,null);
+  const plan=planFleet([j],[node],{now:NOW,authorizeAssociateJob:workGrant});
+  assert.equal(plan.placements[0].budgetHold.kind,'associate-quote');
+  assert.equal(plan.providerBudgetHeld,false);
+  assert.equal(plan.executed,0);
+});
+
+test('fleet will not spend one original buyer hold twice across distinct CI Work',()=>{
+  const node=projection().node;
+  const jobs=[job({id:'first-ci-job'}),job({id:'second-ci-job'})];
+  const plan=planFleet(jobs,[node],{now:NOW,authorizeAssociateJob:workGrant});
+  assert.equal(plan.proposed,1);
+  assert.equal(plan.unplaced,1);
+  assert.equal(plan.placements[0].jobId,'first-ci-job');
+  assert.equal(plan.pending[0].reason,'original-associate-budget-hold-already-proposed');
+  assert.equal(plan.providerBudgetHeld,false);
+  assert.equal(plan.leaseReceived,false);
+  // Independent original reserve receipts, even in the same instance,
+  // give the other workload a separate lawful budget in a proposal.
+  const two=planFleet(jobs,[node],{now:NOW,authorizeAssociateJob:args=>{
+    const g=workGrant(args);
+    g.trade.budgetHoldRef='budget-reservation-'+args.job.id;
+    return g;
+  }});
+  assert.equal(two.proposed,2);
+  assert.equal(two.unplaced,0);
 });
