@@ -2,6 +2,7 @@
 // (min 0, max unbounded), never zero. Price is minutes of wall time plus scarcity.
 import { minutePrice, quoteBudget, budgetAvailable, hold, holdBudget } from './allowance.mjs';
 import { assessAssociateCiJob } from './associate-ci.mjs';
+import { observeSharedCapacity, sharedPoolFit } from './shared-capacity.mjs';
 
 const iv = q => q == null ? { min: 0, max: Infinity } : typeof q === 'number' ? { min: q, max: q } : { min: q.min ?? 0, max: q.max ?? Infinity };
 const add = (a, b) => ({ min: a.min + b.min, max: a.max + b.max });
@@ -18,7 +19,7 @@ export function fetchMinutes(job, node) {
   return { missing: missing.map(m => m.id), minutes: { min: div(mb.min, bw.max), max: div(mb.max, bw.min) } };
 }
 
-export function assess(job, node, { ledger = null, budgets = {}, now, authorizeAssociateJob = null }) {
+export function assess(job, node, { ledger = null, budgets = {}, now, authorizeAssociateJob = null, readSharedCapacity = null, sharedCapacityReadings = null }) {
   const why = [];
   // Untrusted associate devices must pass both original admission and exact Work gates.
   // This remains a planning verdict; a real dispatcher must revalidate on dispatch.
@@ -44,7 +45,14 @@ export function assess(job, node, { ledger = null, budgets = {}, now, authorizeA
   }
   for (const c of job.requires?.capabilities ?? []) if (!(node.capabilities ?? []).includes(c)) why.push(`lacks-capability:${c}`);
   const n = job.needs ?? {};
+  const reading=sharedCapacityReadings ?? observeSharedCapacity([node],{now,readSharedCapacity});
+  const shared=sharedPoolFit(node,reading);
+  if(shared.reason)why.push(shared.reason);
+  // An advertised logical runner never owns more capacity than the original
+  // physical host actually has; unknown individual node dimensions stay unknown.
   const f = { cores: fit(node.cores, n.cores ?? 0), memoryGb: fit(node.memoryGb, n.memoryGb ?? 0), freeDiskGb: fit(node.freeDiskGb, n.freeDiskGb ?? 0) };
+  if(shared.capacity)for(const k of ['cores','memoryGb','freeDiskGb'])
+    f[k]=worst(f[k],fit(shared.capacity[k],n[k]??0));
   for (const [k, v] of Object.entries(f)) if (v === 'no') why.push(`too-small:${k}`);
   let scarcity = 0, budgetHold = null;
   if (node.cost?.kind === 'hosted-minutes') {
@@ -109,7 +117,9 @@ const rank = a => [a.certainty === 'certain' ? 0 : 1, Number.isFinite(a.price.ma
 const cmp = (a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
 
 export function place(job, nodes, ctx) {
-  const assessed = nodes.map(n => assess(job, n, ctx));
+  const sharedCapacityReadings=ctx.sharedCapacityReadings ??
+    observeSharedCapacity(nodes,{now:ctx.now,readSharedCapacity:ctx.readSharedCapacity});
+  const assessed = nodes.map(n => assess(job, n, {...ctx,sharedCapacityReadings}));
   const candidates = assessed.filter(a => a.feasible).sort(cmp);
   const chosen = candidates[0] ?? null;
   return {
@@ -128,7 +138,7 @@ export function place(job, nodes, ctx) {
  * a single-writer original budget hold and fencing token before execution.
  * Job ordering is the caller's independently governed priority ordering.
  */
-export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssociateJob=null}={}){
+export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssociateJob=null,readSharedCapacity=null}={}){
   if(!Array.isArray(jobs)||!Array.isArray(nodes)||!jobs.length||
     !Number.isFinite(Date.parse(now))||jobs.length>1000||nodes.length>256)
     throw new TypeError('bounded original jobs, nodes and observation time required');
@@ -145,6 +155,8 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssoci
     locations.add(node.id);
   }
   const provisionalNodes=structuredClone(nodes);
+  const sharedCapacityReadings=observeSharedCapacity(nodes,{now,readSharedCapacity});
+  const sharedResidual=new Map([...sharedCapacityReadings.pools].map(([id,value])=>[id,{...value}]));
   const provisionalLedger=ledger===null?null:structuredClone(ledger);
   const provisionalBudgets=structuredClone(budgets);
   const placements=[],pending=[],probes=[];
@@ -167,8 +179,18 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssoci
       pending.push({jobId:job.id,reason:'explicit-compute-footprint-required'});
       continue;
     }
-    const view=place(job,provisionalNodes,
-      {now,ledger:provisionalLedger,budgets:provisionalBudgets,authorizeAssociateJob});
+    // Capacity held by another logical runner on the same physical machine
+    // is not free: reduce every sibling's effective dimensions in this
+    // hypothetical plan before calling the one existing placement algorithm.
+    const effectiveNodes=provisionalNodes.map(node=>{
+      const shared=sharedResidual.get(node.sharedCapacityPool);
+      if(!shared)return node;
+      return {...node,...Object.fromEntries(dimensions.map(k=>[k,
+        typeof node[k]==='number'?Math.min(node[k],shared[k]):node[k]]))};
+    });
+    const view=place(job,effectiveNodes,
+      {now,ledger:provisionalLedger,budgets:provisionalBudgets,
+        authorizeAssociateJob,sharedCapacityReadings});
     // Only candidates with finite worst-case runtime and *certain* measured
     // resources can acquire provisional capacity. Possible measurements
     // request probes; a chosen node name alone is never dispatch authority.
@@ -215,6 +237,8 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssoci
     }
     const resourceHold=Object.fromEntries(dimensions.map(k=>[k,job.needs[k]]));
     for(const key of dimensions)node[key]-=resourceHold[key];
+    const pool=sharedResidual.get(node.sharedCapacityPool);
+    if(pool)for(const key of dimensions)pool[key]-=resourceHold[key];
     placements.push({jobId:job.id,nodeId:node.id,resourceHold,
       budgetHold:candidate.budgetHold,price:candidate.price,
       state:'proposed-not-executed',leaseRequired:true});
@@ -224,5 +248,6 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now,authorizeAssoci
     executed:0,providerBudgetHeld:false,leaseReceived:false,
     // Remaining are temporary hypothetical amounts, not provider readback.
     residualResources:provisionalNodes.map(n=>({nodeId:n.id,
-      cores:n.cores,memoryGb:n.memoryGb,freeDiskGb:n.freeDiskGb}))};
+      cores:n.cores,memoryGb:n.memoryGb,freeDiskGb:n.freeDiskGb})),
+    residualSharedCapacity:[...sharedResidual.values()].map(p=>({...p}))};
 }
