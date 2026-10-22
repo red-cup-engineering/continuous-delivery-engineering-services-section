@@ -10,7 +10,7 @@
     "yaml": "2.8.3"
   },
   "peerDependencies": {
-    "@red-cup-engineering/git-services-section": ">=4.1.1"
+    "@red-cup-engineering/git-services-section": ">=0.1.12"
   },
   "license": "MIT",
   "funding": {
@@ -20,5 +20,8 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/red-cup-engineering/continuous-delivery-services-section.git"
+  },
+  "devDependencies": {
+    "@red-cup-engineering/git-services-section": "0.1.12"
   }
 }
