@@ -1,4 +1,5 @@
-// Trusted SWARM associate admission to original Continuous Delivery placement.
+// Trusted per-MetroPlat-instance associate admission to original CI placement.
+import { createHash } from 'node:crypto';
 // Pure read-only projection: does NOT authenticate, dispatch, mint credits or
 // register a GitHub runner. Only original server-side authorities may attest.
 
@@ -8,7 +9,14 @@ const positive = v => typeof v === 'number' && Number.isFinite(v) && v > 0;
 const date = v => typeof v === 'string' ? Date.parse(v) : NaN;
 const active = (v, now) => Number.isFinite(date(v)) && date(v) > now;
 const recent = (v, now, limit) => Number.isFinite(date(v)) && date(v) <= now && now - date(v) <= limit;
-const refuse = reason => Object.freeze({ kind: 'swarm-ci-node-proposal.v1', admitted: false, reason });
+const HTTPS = value => {
+  try { const u = new URL(value);return u.protocol==='https:' && !u.username &&
+    !u.password && !u.hash && Boolean(u.hostname); }catch{return false;}
+};
+const positiveMicro = value => typeof value==='string' &&
+  /^[1-9][0-9]{0,14}$/u.test(value);
+const QUOTE = /^sha256:[a-f0-9]{64}$/u;
+const refuse = reason => Object.freeze({kind:'swarm-ci-node-proposal.v2',admitted:false,reason});
 
 /** Convert independently verified member + machine evidence into a prospective
  * original placement node. readAdmission MUST be supplied by a trusted original
@@ -24,17 +32,26 @@ export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}
   let a;
   try { a = readAdmission({ admissionRef, now }); }
   catch { return refuse('admission-unavailable'); }
-  if (a?.kind !== 'swarm.associate-ci-admission.v1' || a.ref !== admissionRef || !isRef(a.witnessRef))
+  if (a?.kind !== 'metroplat.instance-compute-admission.v1' ||
+    a.ref !== admissionRef || !isRef(a.witnessRef))
     return refuse('admission-not-source-verified');
-
-  const actor = a.member?.actorId, id = a.device?.id;
-  if (typeof actor !== 'string' || !/^https:\/\/swarm\.561\.group\/actors\/[a-z0-9-]+$/u.test(actor)
-    || !isId(id) || a.device?.actorId !== actor || a.session?.actorId !== actor
-    || a.consent?.actorId !== actor || a.consent?.deviceId !== id
-    || a.sandbox?.deviceId !== id || a.observation?.deviceId !== id)
-    return refuse('actor-device-custody-mismatch');
-  if (a.session?.state !== 'authenticated' || a.session?.provider !== 'google'
-    || !active(a.session.expiresAt, time)) return refuse('no-current-login');
+  // Original host/issuer are authenticated by the upstream reader; a login on
+  // one MetroPlat instance never delegates compute rights to a neighbor.
+  const actor=a.member?.actorId, id=a.device?.id, instance=a.instance?.id;
+  const origin=a.instance?.origin, audience=a.instance?.oauthAudience;
+  if (!isRef(instance) || !HTTPS(origin) || new URL(origin).href !== new URL(origin).origin+'/' ||
+      !HTTPS(a.instance.oauthIssuer) || !isRef(audience) ||
+      !audience.startsWith(origin) || !isRef(actor) || !isId(id) ||
+      a.member?.instanceId!==instance || a.session?.instanceId!==instance ||
+      a.device?.instanceId!==instance || a.consent?.instanceId!==instance ||
+      a.sandbox?.instanceId!==instance || a.observation?.instanceId!==instance ||
+      a.device?.actorId !== actor || a.session?.actorId !== actor ||
+      a.consent?.actorId !== actor || a.consent?.deviceId !== id ||
+      a.sandbox?.deviceId !== id || a.observation?.deviceId !== id)
+    return refuse('instance-actor-device-custody-mismatch');
+  if (a.session?.state!=='authenticated' || a.session?.method!=='oauth' ||
+    a.session?.issuer!==a.instance.oauthIssuer || a.session?.audience!==audience ||
+    !active(a.session.expiresAt,time)) return refuse('no-current-oauth-session');
   if (a.member?.state !== 'approved' || !active(a.member.expiresAt, time))
     return refuse('no-current-associate-enrollment');
   if (a.device?.mode !== 'native-desktop' || a.device?.state !== 'connected')
@@ -49,29 +66,31 @@ export function projectAssociateCiNode({ admissionRef, now, readAdmission } = {}
   if (a.observation?.state !== 'up' || !isRef(a.observation.witnessRef)
     || !recent(a.observation.observedAt, time, 120_000))
     return refuse('capacity-not-independently-fresh');
-  if (a.creditHold?.state !== 'held' || a.creditHold?.workClass !== 'public-ci'
-    || !isRef(a.creditHold.ref) || !active(a.creditHold.expiresAt, time))
-    return refuse('original-credit-liability-not-held');
-
+  // At offer/admission time capacity is not yet sold and no buyer liability
+  // exists. A held bilateral quote and buyer reservation are mandatory at
+  // the individual Work gate, not a prerequisite to listing one's capacity.
   const limits = a.consent.limits, measured = a.observation;
   if (!limits || !['cores','memoryGb','freeDiskGb','maxMinutes'].every(k => positive(limits[k]))
     || !['cores','memoryGb','freeDiskGb','bandwidthMbps'].every(k => positive(measured[k]))
     || limits.maxMinutes > 60) return refuse('bounded-resource-limits-required');
 
   const node = Object.freeze({
-    id: 'associate-ci-' + id, state: 'up', observedAt: measured.observedAt,
+    id:'associate-ci-'+createHash('sha256')
+      .update(JSON.stringify([instance,actor,id])).digest('hex').slice(0,32),
+    state: 'up', observedAt: measured.observedAt,
     cores: Math.min(measured.cores, limits.cores),
     memoryGb: Math.min(measured.memoryGb, limits.memoryGb),
     freeDiskGb: Math.min(measured.freeDiskGb, limits.freeDiskGb),
     bandwidthMbps: measured.bandwidthMbps, closureCache: [],
     capabilities: ['node', 'git', 'swarm-ci-public'], publicOnly: true,
     cost: { kind: 'held' },
-    associateCi: Object.freeze({ admissionRef, witnessRef: a.witnessRef,
-      actorId: actor, deviceId: id, workClass: 'public-ci',
-      maxMinutes: limits.maxMinutes, creditHoldRef: a.creditHold.ref }),
+    associateCi: Object.freeze({admissionRef,witnessRef:a.witnessRef,
+      instanceId:instance,instanceOrigin:origin,oauthAudience:audience,
+      actorId:actor,deviceId:id,workClass:'public-ci',
+      maxMinutes:limits.maxMinutes,commercialState:'unsold-no-budget-hold'}),
   });
-  return Object.freeze({ kind: 'swarm-ci-node-proposal.v1', admitted: true, node,
-    status: 'placement-candidate-only', dispatchAuthorized: false });
+  return Object.freeze({kind:'swarm-ci-node-proposal.v2',admitted:true,node,
+    status:'placement-candidate-only',dispatchAuthorized:false});
 }
 
 const sha40 = v => typeof v === 'string' && /^[a-f0-9]{40}$/u.test(v);
@@ -85,8 +104,9 @@ const sha40 = v => typeof v === 'string' && /^[a-f0-9]{40}$/u.test(v);
 export function assessAssociateCiJob({ job, node, now, authorizeAssociateJob } = {}) {
   const a = node?.associateCi, deny = reason => Object.freeze({ok: false, reason});
   if (!a || a.workClass !== 'public-ci' || !isRef(a.admissionRef)
-    || !isRef(a.witnessRef) || !isRef(a.creditHoldRef)
-    || !isId(a.deviceId) || !positive(a.maxMinutes)
+    || !isRef(a.witnessRef) || !isRef(a.instanceId) ||
+    !HTTPS(a.instanceOrigin) || !isRef(a.oauthAudience) ||
+    !isRef(a.actorId) || !isId(a.deviceId) || !positive(a.maxMinutes)
     || node.publicOnly !== true || node.cost?.kind !== 'held')
     return deny('not-a-qualified-associate-ci-node');
   if (job?.visibility !== 'public' || job.effect !== false
@@ -111,6 +131,29 @@ export function assessAssociateCiJob({ job, node, now, authorizeAssociateJob } =
     || g.admissionRef !== a.admissionRef || g.sourceSha !== job.source.commitSha
     || !active(g.expiresAt, time))
     return deny('exact-ci-work-not-authorized');
-  return Object.freeze({ok:true, kind:'swarm.ci-placement-eligibility.v1',
-    grantRef:g.ref, sourceSha:g.sourceSha, dispatchAuthorized:false});
+  // Both market parties must accept the same source-priced bounded quote.
+  // This must be read from the original Work/Organizing/ledger owners, not
+  // inferred from the worker's online time or OAuth authentication.
+  const t=g.trade;
+  if(t?.kind!=='organizing.compute-contribution-contract.v1' ||
+    t.instanceId!==a.instanceId || t.actorId!==a.actorId ||
+    t.deviceId!==a.deviceId || t.workRef!==job.id ||
+    !QUOTE.test(t.quoteId ?? '') || !isRef(t.offerRef) ||
+    !isRef(t.buyerAcceptanceRef) || !isRef(t.supplierAcceptanceRef) ||
+    t.buyerAcceptanceRef===t.supplierAcceptanceRef ||
+    !isRef(t.budgetHoldRef) || !isRef(t.unitRef) ||
+    !/^[A-Z]{3,5}$/u.test(t.currency ?? '') ||
+    !positiveMicro(t.priceMicrosPerAcceptedUnit) ||
+    !Number.isSafeInteger(t.maximumAcceptedUnits) ||
+    t.maximumAcceptedUnits<1 || t.maximumAcceptedUnits>1_000_000 ||
+    typeof t.maximumTotalMicros!=='string' || !/^[1-9][0-9]{0,18}$/u.test(t.maximumTotalMicros) ||
+    BigInt(t.maximumTotalMicros)!==BigInt(t.priceMicrosPerAcceptedUnit)*BigInt(t.maximumAcceptedUnits) ||
+    !active(t.expiresAt,time))
+    return deny('bilateral-priced-work-and-reserved-budget-required');
+  return Object.freeze({ok:true,kind:'swarm.ci-placement-eligibility.v2',
+    grantRef:g.ref,sourceSha:g.sourceSha,trade:Object.freeze({
+      quoteId:t.quoteId,offerRef:t.offerRef,budgetHoldRef:t.budgetHoldRef,
+      currency:t.currency,unitRef:t.unitRef,
+      maximumTotalMicros:t.maximumTotalMicros
+    }),dispatchAuthorized:false});
 }
