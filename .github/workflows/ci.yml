@@ -60,3 +60,25 @@ jobs:
       - name: Check standalone public source contracts
         run: |
           npm run test:public-source-contract
+  # The whole suite: 54 tests failed unseen for a week while only the contract subset ran here.
+  full-suite:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+      - name: Identify the committer of test-made repositories
+        run: |
+          git config --global user.name "continuous-delivery ci"
+          git config --global user.email "ci@continuous-delivery.invalid"
+      - name: Install
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Test
+        run: npm test
