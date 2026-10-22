@@ -214,6 +214,9 @@ test('same device name enrolled in different OAuth worlds receives a different s
     second[key].instanceId=target.id;
   for(const key of ['member','session','device','consent'])second[key].actorId=otherActor;
   second.session.audience=target.oauthAudience;
+  second.marketOffer.instance=target.id;
+  second.marketOffer.by=otherActor;
+  second.marketOfferRef='sha256:'+'e'.repeat(64);
   const other=projectAssociateCiNode({admissionRef:REF,now:NOW,readAdmission:()=>second});
   assert.equal(first.admitted,true);
   assert.equal(other.admitted,true);
