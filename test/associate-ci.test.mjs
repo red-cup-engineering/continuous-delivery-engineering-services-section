@@ -5,24 +5,24 @@ import { assess, place, planFleet } from '../src/placement/place.mjs';
 
 const NOW = '2026-10-21T22:00:00Z';
 const REF = 'swarm-admission-witness-1', SHA = 'a'.repeat(40);
-const ACTOR = 'https://swarm.561.group/actors/associate-1';
+const INSTANCE = {id:'metroplat:world-one',origin:'https://world-one.561.group/',oauthAudience:'https://world-one.561.group/mcp',oauthIssuer:'https://accounts.google.com'};
+const ACTOR = 'https://world-one.561.group/actors/associate-1';
 
 const admission = () => ({
-  kind: 'swarm.associate-ci-admission.v1', ref: REF, witnessRef: 'independent-source-witness-1',
-  member: {actorId: ACTOR, state:'approved', expiresAt:'2026-11-21T00:00:00Z'},
-  session: {actorId: ACTOR, provider:'google', state:'authenticated', expiresAt:'2026-10-21T23:00:00Z'},
-  device: {actorId: ACTOR, id:'device-1', mode:'native-desktop', state:'connected'},
-  consent: {actorId:ACTOR, deviceId:'device-1', state:'active', workClasses:['public-ci'],
+  kind: 'metroplat.instance-compute-admission.v1', ref: REF, witnessRef: 'independent-source-witness-1',
+  instance:{...INSTANCE},
+  member: {actorId: ACTOR,instanceId:INSTANCE.id,state:'approved', expiresAt:'2026-11-21T00:00:00Z'},
+  session: {actorId: ACTOR,instanceId:INSTANCE.id,method:'oauth',issuer:INSTANCE.oauthIssuer,audience:INSTANCE.oauthAudience,state:'authenticated', expiresAt:'2026-10-21T23:00:00Z'},
+  device: {actorId: ACTOR,instanceId:INSTANCE.id,id:'device-1', mode:'native-desktop', state:'connected'},
+  consent: {actorId:ACTOR,instanceId:INSTANCE.id,deviceId:'device-1', state:'active', workClasses:['public-ci'],
     expiresAt:'2026-10-22T00:00:00Z',
     limits: {cores:2, memoryGb:3, freeDiskGb:5, maxMinutes:10}},
-  sandbox: {deviceId:'device-1', kind:'ephemeral-vm', hostMounts:false,
+  sandbox: {deviceId:'device-1',instanceId:INSTANCE.id,kind:'ephemeral-vm', hostMounts:false,
     secretMounts:false, network:'restricted', policyRef:'sandbox-policy-witness',
     verifiedAt:'2026-10-21T21:59:00Z'},
-  observation: {deviceId:'device-1', state:'up', witnessRef:'independent-capacity-witness',
+  observation: {deviceId:'device-1',instanceId:INSTANCE.id,state:'up', witnessRef:'independent-capacity-witness',
     observedAt:'2026-10-21T21:59:50Z',
     cores:8, memoryGb:24, freeDiskGb:50, bandwidthMbps:30},
-  creditHold: {state:'held', workClass:'public-ci',
-    ref:'original-credit-hold-ref', expiresAt:'2026-10-21T23:00:00Z'},
 });
 
 const projection = (change = null) => {
@@ -39,10 +39,22 @@ const job = (change = {}) => ({
     visibility:'public',trigger:'trusted-push',commitSha:SHA},
   ...change,
 });
+const acceptedTrade = ({job,node})=>({
+  kind:'organizing.compute-contribution-contract.v1',
+  instanceId:node.associateCi.instanceId,actorId:node.associateCi.actorId,
+  deviceId:node.associateCi.deviceId,workRef:job.id,
+  quoteId:'sha256:'+'b'.repeat(64),offerRef:'market-original-offer-1',
+  buyerAcceptanceRef:'buyer-acceptance-witness',
+  supplierAcceptanceRef:'supplier-acceptance-witness',
+  budgetHoldRef:'original-budget-held-ref',unitRef:'work:accepted-ci-unit',
+  currency:'CRED',priceMicrosPerAcceptedUnit:'250000',
+  maximumAcceptedUnits:2,maximumTotalMicros:'500000',expiresAt:'2026-10-21T22:08:00Z'
+});
 const workGrant = ({job,node}) => ({kind:'swarm.ci-job-grant.v1',
   allowed:true, ref:'trusted-original-work-grant-1',jobId:job.id,
   nodeId:node.id,admissionRef:node.associateCi.admissionRef,
-  sourceSha:job.source.commitSha, expiresAt:'2026-10-21T22:10:00Z'});
+  sourceSha:job.source.commitSha, expiresAt:'2026-10-21T22:10:00Z',
+  trade:acceptedTrade({job,node})});
 
 test('no trusted admission reader or source witness means no volunteer node',()=>{
   assert.equal(projectAssociateCiNode({now:NOW}).admitted,false);
@@ -52,37 +64,44 @@ test('no trusted admission reader or source witness means no volunteer node',()=
     'admission-unavailable');
 });
 
-test('approved Google Actor, consented desktop and isolation only advertise bounded candidate',()=>{
+test('approved OAuth Actor for a specific MetroPlat world can advertise bounded desktop compute',()=>{
   const out=projection();
   assert.equal(out.admitted,true);
   assert.equal(out.dispatchAuthorized,false);
-  assert.equal(out.node.id,'associate-ci-device-1');
+  assert.match(out.node.id,/^associate-ci-[a-f0-9]{32}$/);
+  assert.equal(out.node.associateCi.instanceId,INSTANCE.id);
+  assert.equal(out.node.associateCi.oauthAudience,INSTANCE.oauthAudience);
   assert.equal(out.node.cores,2);
   assert.equal(out.node.memoryGb,3);
   assert.equal(out.node.freeDiskGb,5);
   assert.equal(out.node.cost.kind,'held');
+  assert.equal(out.node.associateCi.commercialState,'unsold-no-budget-hold');
+  assert.equal(Object.hasOwn(out.node.associateCi,'creditHoldRef'),false);
   assert.equal(out.node.publicOnly,true);
   assert.deepEqual(out.node.capabilities,['node','git','swarm-ci-public']);
 });
 
 test('revoked login, membership, consent and device are individually refused',()=>{
   for (const [change, expected] of [
-    [a=>a.session.expiresAt='2026-10-21T21:00:00Z','no-current-login'],
+    [a=>a.session.expiresAt='2026-10-21T21:00:00Z','no-current-oauth-session'],
     [a=>a.member.state='revoked','no-current-associate-enrollment'],
     [a=>a.consent.state='paused','public-ci-not-consented'],
     [a=>a.consent.workClasses=['public-wasm'],'public-ci-not-consented'],
     [a=>a.device.state='disconnected','desktop-agent-not-connected'],
     [a=>a.device.mode='browser-tab','desktop-agent-not-connected'],
-    [a=>a.consent.actorId='https://swarm.561.group/actors/other','actor-device-custody-mismatch'],
+    [a=>a.consent.actorId='https://world-one.561.group/actors/other','instance-actor-device-custody-mismatch'],
+    [a=>a.member.instanceId='metroplat:neighbor','instance-actor-device-custody-mismatch'],
+    [a=>a.session.audience='https://neighbor.561.group/mcp','no-current-oauth-session'],
+    [a=>a.session.issuer='https://malicious.example','no-current-oauth-session'],
   ]) assert.equal(projection(change).reason,expected);
 });
 
-test('unverified sandbox, stale measurements, missing credit hold, large caps refuse',()=>{
+test('unverified isolation, stale independent measurements and excessive resources refuse',()=>{
   for (const [change, expected] of [
     [a=>a.sandbox.hostMounts=true,'ephemeral-isolation-not-verified'],
     [a=>a.sandbox.network='open','ephemeral-isolation-not-verified'],
     [a=>a.observation.observedAt='2026-10-21T21:50:00Z','capacity-not-independently-fresh'],
-    [a=>a.creditHold.state='unverified','original-credit-liability-not-held'],
+    [a=>a.sandbox.instanceId='metroplat:neighbor','instance-actor-device-custody-mismatch'],
     [a=>a.consent.limits.maxMinutes=61,'bounded-resource-limits-required'],
     [a=>a.observation.cores=0,'bounded-resource-limits-required'],
   ]) assert.equal(projection(change).reason,expected);
@@ -95,6 +114,7 @@ test('qualified public immutable pure work needs an exact independent original g
   const granted=assessAssociateCiJob({job:j,node,now:NOW,authorizeAssociateJob:workGrant});
   assert.equal(granted.ok,true);
   assert.equal(granted.dispatchAuthorized,false);
+  assert.equal(granted.trade.budgetHoldRef,'original-budget-held-ref');
   assert.equal(assess(j,node,{now:NOW,authorizeAssociateJob:workGrant}).feasible,true);
   const r=place(j,[node],{now:NOW,authorizeAssociateJob:workGrant});
   assert.equal(r.chosen,node.id);
@@ -129,4 +149,49 @@ test('a fabricated associate node marker cannot silently become generic held com
     {now:NOW,authorizeAssociateJob:workGrant});
   assert.equal(r.chosen,null);
   assert.equal(r.refused[0].why.includes('swarm-ci:not-a-qualified-associate-ci-node'),true);
+});
+
+test('an unsold capacity advert remains valid but unaccepted pricing cannot authorize any CI job',()=>{
+  const node=projection().node,j=job();
+  const noPrice=assessAssociateCiJob({job:j,node,now:NOW,
+    authorizeAssociateJob:args=>({...workGrant(args),trade:undefined})});
+  assert.equal(noPrice.reason,'bilateral-priced-work-and-reserved-budget-required');
+  for(const change of [
+    t=>{t.instanceId='metroplat:neighbor';},
+    t=>{t.actorId='oidc:unrelated';},
+    t=>{t.quoteId='not-a-sha256-digest';},
+    t=>{t.budgetHoldRef='';},
+    t=>{t.buyerAcceptanceRef=t.supplierAcceptanceRef;},
+    t=>{t.maximumTotalMicros='500001';},
+    t=>{t.priceMicrosPerAcceptedUnit='0';},
+    t=>{t.expiresAt='2026-10-21T21:00:00Z';},
+  ]){
+    const grant=args=>{
+      const g=workGrant(args);
+      change(g.trade);
+      return g;
+    };
+    const verdict=place(j,[node],{now:NOW,authorizeAssociateJob:grant});
+    assert.equal(verdict.chosen,null);
+    assert.ok(verdict.refused[0].why.includes('swarm-ci:bilateral-priced-work-and-reserved-budget-required'));
+  }
+  assert.equal(place(j,[node],{now:NOW,authorizeAssociateJob:workGrant}).chosen,node.id);
+});
+
+test('same device name enrolled in different OAuth worlds receives a different scoped node identity',()=>{
+  const first=projection();
+  const second=admission();
+  const target={id:'metroplat:world-two',origin:'https://world-two.561.group/',
+    oauthAudience:'https://world-two.561.group/mcp',oauthIssuer:'https://accounts.google.com'};
+  second.instance=target;
+  const otherActor='https://world-two.561.group/actors/associate-1';
+  for(const key of ['member','session','device','consent','sandbox','observation'])
+    second[key].instanceId=target.id;
+  for(const key of ['member','session','device','consent'])second[key].actorId=otherActor;
+  second.session.audience=target.oauthAudience;
+  const other=projectAssociateCiNode({admissionRef:REF,now:NOW,readAdmission:()=>second});
+  assert.equal(first.admitted,true);
+  assert.equal(other.admitted,true);
+  assert.notEqual(first.node.id,other.node.id);
+  assert.equal(other.node.associateCi.instanceId,target.id);
 });
