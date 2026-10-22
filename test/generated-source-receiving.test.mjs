@@ -75,7 +75,7 @@ async function lockfileProvider(t) {
   const p = provider(t, { [lockfilePath]: lockfileSource, 'untouched.txt': 'keep\n' });
   p.state.repository = { id: 1, visibility: 'private', full_name: repo, default_branch: 'main' };
   const supplier = provider(t, Object.fromEntries(['generator/generate-ci.mjs', 'generator/open-pr.mjs',
-    'generator/retained-runner.mjs'].map(file => [file, fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8')])));
+    'generator/retained-runner.mjs', 'src/placement/plan-allowances.mjs'].map(file => [file, fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8')])));
   const module = await import(pathToFileURL(path.join(supplier.root, 'generator/generate-ci.mjs')).href);
   return { p, supplier, module, options: { root: p.root, repo, request: p.request, runsOn: houseRunsOn, ...lockfileBindings, workflows: ['lockfile-fresh'] } };
 }
@@ -249,6 +249,7 @@ test('actual caller binds source and supplier, receives and verifies its regener
   'generator/generate-ci.mjs':fs.readFileSync(new URL('../generator/generate-ci.mjs',import.meta.url),'utf8'),
   'generator/open-pr.mjs':fs.readFileSync(new URL('../generator/open-pr.mjs',import.meta.url),'utf8'),
   'generator/retained-runner.mjs':fs.readFileSync(new URL('../generator/retained-runner.mjs',import.meta.url),'utf8'),
+  'src/placement/plan-allowances.mjs':fs.readFileSync(new URL('../src/placement/plan-allowances.mjs',import.meta.url),'utf8'),
  });
  const {receiveGeneratedCaller}=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
  const result=await receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']});assert.equal(result.status,'proposed');
@@ -262,6 +263,7 @@ test('later build consumes retained commit proposal, reruns the producer and rej
   'generator/generate-ci.mjs':fs.readFileSync(new URL('../generator/generate-ci.mjs',import.meta.url),'utf8'),
   'generator/open-pr.mjs':fs.readFileSync(new URL('../generator/open-pr.mjs',import.meta.url),'utf8'),
   'generator/retained-runner.mjs':fs.readFileSync(new URL('../generator/retained-runner.mjs',import.meta.url),'utf8'),
+  'src/placement/plan-allowances.mjs':fs.readFileSync(new URL('../src/placement/plan-allowances.mjs',import.meta.url),'utf8'),
  });
  const module=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
  const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']});
@@ -281,6 +283,7 @@ for (const forgedPath of ['.github/workflows/ci.yml','untouched.txt']) test(`lat
   'generator/generate-ci.mjs':fs.readFileSync(new URL('../generator/generate-ci.mjs',import.meta.url),'utf8'),
   'generator/open-pr.mjs':fs.readFileSync(new URL('../generator/open-pr.mjs',import.meta.url),'utf8'),
   'generator/retained-runner.mjs':fs.readFileSync(new URL('../generator/retained-runner.mjs',import.meta.url),'utf8'),
+  'src/placement/plan-allowances.mjs':fs.readFileSync(new URL('../src/placement/plan-allowances.mjs',import.meta.url),'utf8'),
  });
  const module=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
  const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']});
@@ -295,6 +298,7 @@ test('independent: counterfeit manifest outputs cannot excuse altered committed 
   'generator/generate-ci.mjs':fs.readFileSync(new URL('../generator/generate-ci.mjs',import.meta.url),'utf8'),
   'generator/open-pr.mjs':fs.readFileSync(new URL('../generator/open-pr.mjs',import.meta.url),'utf8'),
   'generator/retained-runner.mjs':fs.readFileSync(new URL('../generator/retained-runner.mjs',import.meta.url),'utf8'),
+  'src/placement/plan-allowances.mjs':fs.readFileSync(new URL('../src/placement/plan-allowances.mjs',import.meta.url),'utf8'),
  });
  const module=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
  const result=await module.receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']});

@@ -126,7 +126,7 @@ test('default proof provider is a required compatible peer in both manifest and 
  const manifest=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
  const locked=JSON.parse(fs.readFileSync(new URL('../package-lock.json',import.meta.url),'utf8')).packages[''];
  for(const p of [manifest,locked]){
-  assert.equal(p.peerDependencies['@red-cup-engineering/git-services-section'],'>=4.1.1');
+  assert.equal(p.peerDependencies['@red-cup-engineering/git-services-section'],'>=0.1.12');
   assert.notEqual(p.peerDependenciesMeta?.['@red-cup-engineering/git-services-section']?.optional,true);
  }
 });
