@@ -325,6 +325,17 @@ export async function reconcileRetiredIntakeFleet({organizations,apply=false,max
     if(!completed)throw new Error('fleet organization pagination incomplete');
   }
   const path=RETIRED_BRANCH_INTAKE_PATH;
+  // Organization enumeration gives a stable numeric repository ID; every
+  // later owner/name request must still address that SAME repository.
+  // A transfer/reuse between the first census and a GitHub Contents DELETE
+  // cannot turn matching bytes and a branch name into legal effect authority.
+  const sourceRepositoryIsCurrent=async item=>{
+    const actual=await request('GET','/repos/'+item.repository);
+    return actual?.id===item.id&&actual.full_name===item.repository
+      &&actual.owner?.login===item.repository.split('/')[0]
+      &&actual.default_branch===item.branch
+      &&actual.archived!==true&&actual.disabled!==true&&actual.fork!==true;
+  };
   const observe=async item=>{
     const prefix='/repos/'+item.repository;
     const object=await request('GET',prefix+'/contents/'+path+'?ref='+encodeURIComponent(item.branch));
@@ -337,6 +348,8 @@ export async function reconcileRetiredIntakeFleet({organizations,apply=false,max
     const blob=hash('sha1',Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes]));
     if(blob!==object.sha||!legacyIntake(bytes.toString('utf8')))
       return {...item,status:'unrecognized'};
+    if(!await sourceRepositoryIsCurrent(item))
+      return {...item,status:'unread'};
     const ref=await request('GET',prefix+'/git/ref/heads/'+encodeURIComponent(item.branch));
     if(ref?.ref!=='refs/heads/'+item.branch||!sha(ref.object?.sha))
       return {...item,status:'unread'};
@@ -360,6 +373,7 @@ export async function reconcileRetiredIntakeFleet({organizations,apply=false,max
     const filePath=prefix+'/contents/'+path+'?ref='+encodeURIComponent(row.branch);
     let mutation;
     try {
+      if(!await sourceRepositoryIsCurrent(row))return 'refused';
       const before=await request('GET',refPath);
       if(before?.ref!=='refs/heads/'+row.branch||before.object?.sha!==row.head)
         return 'refused';
