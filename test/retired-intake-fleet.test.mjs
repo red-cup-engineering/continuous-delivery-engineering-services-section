@@ -5,14 +5,17 @@ import {reconcileRetiredIntakeFleet,RETIRED_BRANCH_INTAKE_PATH} from '../generat
 
 const ORG='red-cup-engineering';
 const OLD = "name: Agent work\non:\n  push:\n    branches: ['**']\n  pull_request_target:\n    types: [opened, reopened, synchronize, closed]\npermissions:\n  contents: read\n  issues: write\n  pull-requests: write\nconcurrency:\n  group: agent-work-\${{ github.event.pull_request.head.ref || github.ref_name }}\n  cancel-in-progress: false\njobs:\n  receive:\n    if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)\n    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@9941b91847d4c5e7947fb044faeb4e77476dc17d\n";
+// Exact committed source from BCF @ 7eb1ba8, not a guessed legacy workflow.
+const HISTORICAL_BCF_AGENT_INTAKE = "name: Agent work\non:\n  push:\n    branches: ['**']\n  pull_request_target:\n    types: [opened, reopened, synchronize, closed]\npermissions:\n  contents: read\n  issues: write\n  pull-requests: write\nconcurrency:\n  group: agent-work-${{ github.event.pull_request.head.ref || github.ref_name }}\n  cancel-in-progress: false\njobs:\n  receive:\n    if: github.event_name != 'push' || (github.ref_name != github.event.repository.default_branch && !github.event.deleted)\n    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@82e8d64729f7bd3e8626014150c159738e243fd9\n";
 const oid = text=>{const bytes=Buffer.from(text);return createHash('sha1').update(Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes])).digest('hex');};
 assert.equal(oid(OLD),'ee077700dcdde1e71be3da2f8982c2ceae15b21e');
 const file=(text=OLD)=>({type:'file',path:RETIRED_BRANCH_INTAKE_PATH,encoding:'base64',sha:oid(text),content:Buffer.from(text).toString('base64')});
-function fixture({count=2,foreign=false,blockedRead=-1,deniedWrite=-1,staleRef=-1,archived=-1}={}) {
+function fixture({count=2,foreign=false,blockedRead=-1,deniedWrite=-1,staleRef=-1,archived=-1,sourceTexts=null}={}) {
   const owners=Array.from({length:count},(_,i)=>({id:i+111,name:'repo-'+i,
     full_name:ORG+'/repo-'+i,owner:{login:ORG},default_branch:'main',
     archived:i===archived,disabled:false,fork:false}));
-  const source=new Map(owners.map((o,i)=>[o.full_name,file(i===1&&foreign?'name: custom workflow\n':OLD)]));
+  const source=new Map(owners.map((o,i)=>[o.full_name,
+    file(sourceTexts?.[i]??(i===1&&foreign?'name: custom workflow\n':OLD))]));
   const writes=[],queries=[],preflights=new Map();
   const request=async(method,path,body)=>{
     queries.push([method,path]);
@@ -43,6 +46,31 @@ function fixture({count=2,foreign=false,blockedRead=-1,deniedWrite=-1,staleRef=-
   };
   return {request,writes,queries,source};
 }
+
+test('historical BCF @82e8 retired agent-intake exact Git blob is admissible but custom code is not',async()=>{
+ assert.equal(oid(HISTORICAL_BCF_AGENT_INTAKE),'bc943f320a79903a7b262b0efe3e7240b70ddc31');
+ assert.match(HISTORICAL_BCF_AGENT_INTAKE,/agent-work\.yml@82e8d64729f7bd3e8626014150c159738e243fd9/u);
+ const f=fixture({count:4,sourceTexts:[
+  HISTORICAL_BCF_AGENT_INTAKE,OLD,'name: custom workflow\n',HISTORICAL_BCF_AGENT_INTAKE,
+ ]});
+ const plan=await reconcileRetiredIntakeFleet({organizations:[ORG]},{request:f.request});
+ assert.deepEqual({
+  mode:plan.mode,repositories:plan.repositories,
+  eligible:plan.eligible,unrecognized:plan.unrecognized,removed:plan.removed,
+ },{mode:'plan',repositories:4,eligible:3,unrecognized:1,removed:0});
+ assert.deepEqual(f.writes,[],'read-only original receiving cannot delete a caller');
+ const applied=await reconcileRetiredIntakeFleet({organizations:[ORG],apply:true},{request:f.request});
+ assert.equal(applied.removed,3);
+ assert.equal(applied.refused,0);
+ assert.equal(applied.unrecognized,1);
+ assert.deepEqual(f.writes.map(x=>x.body.sha).sort(),[
+  oid(HISTORICAL_BCF_AGENT_INTAKE),oid(OLD),oid(HISTORICAL_BCF_AGENT_INTAKE),
+ ].sort());
+ assert.equal(f.source.has(ORG+'/repo-2'),true,'foreign authored workflow is retained');
+ assert.equal(f.source.has(ORG+'/repo-0'),false);
+ assert.equal(f.source.has(ORG+'/repo-1'),false);
+ assert.equal(f.source.has(ORG+'/repo-3'),false);
+});
 
 test('read-only inventory qualifies real Git blob, not repository name or a substring',async()=>{
   const f=fixture({count:3,foreign:true});
