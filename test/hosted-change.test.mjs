@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync,copyFileSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,copyFileSync,symlinkSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
@@ -55,4 +55,67 @@ test('an immutable controller is not admitted merely because its SHA is well for
   writeFileSync(file,JSON.stringify({kind:'guix.reviewed-source-controllers.v2',controllers:[{commit,tree:commit,verifierBlob:commit}]}));
   assert.equal(admitSourceController(helper,commit).commit,commit);
   assert.throws(()=>admitSourceController(helper,'c'.repeat(40)),/not reviewed/);
+});
+
+
+const rosterSha1=n=>n.toString(16).padStart(40,'0');
+function v3Roster(){
+  return {kind:'guix.reviewed-source-controllers.v3',
+    controllers:[{commit:rosterSha1(10),tree:rosterSha1(11),
+      sourceVerifierGitBlobSha1:rosterSha1(12)}]};
+}
+test('source-owned reviewed controller v3 is typed, schema-described and read by the actual hosted helper',t=>{
+  const {helper}=fixture(t),document=v3Roster();
+  const schema=JSON.parse(readFileSync(new URL('../scripts/reviewed-source-controllers.schema.json',import.meta.url),'utf8'));
+  const canonical=JSON.parse(readFileSync(new URL('../scripts/reviewed-source-controllers.json',import.meta.url),'utf8'));
+  assert.equal(schema.$schema,'https://json-schema.org/draft/2020-12/schema');
+  assert.equal(schema.properties.kind.const,document.kind);
+  assert.equal(schema.properties.controllers.items.properties.sourceVerifierGitBlobSha1.$ref,'#/$defs/gitSha1');
+  assert.deepEqual(Object.keys(document.controllers[0]).sort(),schema.properties.controllers.items.required.toSorted());
+  assert.equal(canonical.kind,document.kind);
+  assert.deepEqual(Object.keys(canonical.controllers[0]).sort(),Object.keys(document.controllers[0]).sort());
+  assert.equal(canonical.controllers[0].sourceVerifierGitBlobSha1,'2d889845a1f6a5dc41211fc9e93dd35e2b554062');
+  const selectedFile=join(helper,'reviewed-source-controllers.json');
+  writeFileSync(selectedFile,JSON.stringify(document));
+  assert.deepEqual(admitSourceController(helper,document.controllers[0].commit),document.controllers[0]);
+});
+test('old v2 pinned helper sources still read, but expose normalized unambiguous Git verifier identity',t=>{
+  const {helper}=fixture(t),row={commit:rosterSha1(10),tree:rosterSha1(11),verifierBlob:rosterSha1(12)};
+  writeFileSync(join(helper,'reviewed-source-controllers.json'),JSON.stringify({
+    kind:'guix.reviewed-source-controllers.v2',controllers:[row]}));
+  assert.deepEqual(admitSourceController(helper,row.commit),{
+    commit:row.commit,tree:row.tree,sourceVerifierGitBlobSha1:row.verifierBlob});
+});
+test('malformed, duplicate, unknown, mixed-version and forged source fields refuse without selecting controller',t=>{
+  const {helper}=fixture(t),path=join(helper,'reviewed-source-controllers.json'),v3=v3Roster();
+  const run=data=>{writeFileSync(path,JSON.stringify(data));return ()=>admitSourceController(helper,v3.controllers[0].commit)};
+  const row=v3.controllers[0];
+  for(const invalid of [
+    {...v3,unexpectedGrant:true},
+    {...v3,kind:'guix.reviewed-source-controllers.v4'},
+    {...v3,controllers:[]},
+    {...v3,controllers:{[row.commit]:row}},
+    {...v3,controllers:[row,{...row,tree:rosterSha1(29)}]},
+    {...v3,controllers:[{...row,originalWorkReceived:true}]},
+    {...v3,controllers:[{...row,verifierBlob:row.sourceVerifierGitBlobSha1}]},
+    {...v3,controllers:[{...row,sourceVerifierGitBlobSha1:undefined}]},
+    {...v3,controllers:[{...row,sourceVerifierGitBlobSha1:'blake3:unknown'}]},
+    {...v3,controllers:Array.from({length:65},(_,i)=>({
+      ...row,commit:rosterSha1(i+1)}))},
+    {kind:'guix.reviewed-source-controllers.v2',
+      controllers:[{commit:row.commit,tree:row.tree,
+        sourceVerifierGitBlobSha1:row.sourceVerifierGitBlobSha1}]},
+  ])assert.throws(run(invalid),/not reviewed/,JSON.stringify(invalid).slice(0,120));
+  writeFileSync(path,JSON.stringify(v3));
+  assert.throws(()=>admitSourceController(helper,rosterSha1(999)),/not reviewed/);
+});
+test('unread, redirected or oversized reviewed source roster cannot be called empty or approved',t=>{
+  const {helper,root}=fixture(t),path=join(helper,'reviewed-source-controllers.json'),original=join(root,'outside.json');
+  const ref=v3Roster().controllers[0].commit;
+  assert.throws(()=>admitSourceController(helper,ref),/ENOENT/);
+  writeFileSync(original,JSON.stringify(v3Roster()));
+  symlinkSync(original,path);
+  assert.throws(()=>admitSourceController(helper,ref),/not reviewed/);
+  rmSync(path);writeFileSync(path,' '.repeat(8193));
+  assert.throws(()=>admitSourceController(helper,ref),/not reviewed/);
 });

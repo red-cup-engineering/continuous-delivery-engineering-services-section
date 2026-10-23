@@ -10,13 +10,39 @@ import {SOURCE_CONTRACT,sourceExpectation,validateExpectation,verdictSourceError
 
 const SHA=/^[a-f0-9]{40}(?![\s\S])/u, DIGEST=/^[a-f0-9]{64}(?![\s\S])/u;
 const closedEnvironment=()=>({PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/tmp',LANG:'C.UTF-8',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_LAZY_FETCH:'1',GIT_NO_REPLACE_OBJECTS:'1',GIT_ALLOW_PROTOCOL:'file'});
+/** 
+ * Source-owned controller roster is a bounded immutable Git-object declaration.
+ * Revision v3 names the actual SHA-1 Git blob object; earlier retained v2
+ * helper snapshots are readable but cannot manufacture v3 source authority.
+ * Git commit, tree and blob OIDs are source identities, not Work or grant receipts.
+ */
 export function admitSourceController(helper,commit){
-  if(!SHA.test(commit))throw new Error('reviewed immutable source controller required');
-  const allowed=JSON.parse(readFileSync(join(helper,'reviewed-source-controllers.json'),'utf8'));
-  const entry=allowed.controllers?.find(row=>row.commit===commit);
-  if(allowed.kind!=='guix.reviewed-source-controllers.v2'||!entry||!SHA.test(entry.tree)||!SHA.test(entry.verifierBlob))
-    throw new Error('source controller is not reviewed by this immutable delivery helper');
-  return entry;
+  const refused=()=>{throw new Error('source controller is not reviewed by this immutable delivery helper');};
+  if(!SHA.test(commit))refused();
+  const file=join(helper,'reviewed-source-controllers.json');
+  const stat=lstatSync(file);
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.size<1||stat.size>8192)refused();
+  const allowed=JSON.parse(readFileSync(file,'utf8'));
+  const exactKeys=(item,fields)=>item!==null&&typeof item==='object'&&!Array.isArray(item)
+    &&Object.keys(item).length===fields.length&&fields.every(key=>Object.hasOwn(item,key));
+  if(!exactKeys(allowed,['kind','controllers'])||
+    !['guix.reviewed-source-controllers.v2','guix.reviewed-source-controllers.v3'].includes(allowed.kind)||
+    !Array.isArray(allowed.controllers)||allowed.controllers.length<1||allowed.controllers.length>64)refused();
+  const legacy=allowed.kind==='guix.reviewed-source-controllers.v2';
+  const fields=legacy?['commit','tree','verifierBlob']:['commit','tree','sourceVerifierGitBlobSha1'];
+  const seen=new Set();
+  let selected=null;
+  for(const row of allowed.controllers){
+    const verifier=legacy?row?.verifierBlob:row?.sourceVerifierGitBlobSha1;
+    if(!exactKeys(row,fields)||!SHA.test(row.commit)||!SHA.test(row.tree)||
+      !SHA.test(verifier)||seen.has(row.commit))refused();
+    seen.add(row.commit);
+    if(row.commit===commit)selected=Object.freeze({
+      commit:row.commit,tree:row.tree,sourceVerifierGitBlobSha1:verifier,
+    });
+  }
+  if(!selected)refused();
+  return selected;
 }
 export async function verifyController(controller,helper,commit,execute=spawnSync){
   const entry=admitSourceController(helper,commit);controller=directory(controller);
@@ -27,7 +53,7 @@ export async function verifyController(controller,helper,commit,execute=spawnSyn
   // imported without resolving any unchecked checkout dependencies.
   const file=join(controller,'scripts/verify-release-source.mjs'),stat=lstatSync(file),bytes=readFileSync(file);
   if(!stat.isFile()||stat.isSymbolicLink()||realpathSync(file)!==file
-    ||createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')!==entry.verifierBlob)
+    ||createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')!==entry.sourceVerifierGitBlobSha1)
     throw new Error('trusted controller verifier bytes differ');
   const {verifyCommittedSource}=await import('data:text/javascript;base64,'+bytes.toString('base64'));
   const gitExecutable=invoke('which',['git'],{env},execute).trim();
