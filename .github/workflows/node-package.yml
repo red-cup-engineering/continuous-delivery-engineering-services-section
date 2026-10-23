@@ -25,6 +25,37 @@ on:
         description: 'npm script to run for tests (default remains test)'
         type: string
         default: 'test'
+      package-manager:
+        description: 'npm preserves existing callers; pnpm requires a source-owned exact version'
+        type: string
+        default: 'npm'
+      pnpm-version:
+        description: 'Exact stable source-owned PNPM pin; optional only when packageManager supplies the same pin'
+        type: string
+        default: ''
+      supplier-ref:
+        description: 'Exact CD source commit for the PNPM install implementation'
+        type: string
+        default: ''
+      source-commit:
+        description: 'Exact reviewed source commit; required for PNPM receiving'
+        type: string
+        default: ''
+      registry-url:
+        description: 'Explicit HTTPS registry origin/path for optional read authentication'
+        type: string
+        default: ''
+      registry-username:
+        description: 'Named registry account when password authentication is used'
+        type: string
+        default: ''
+    secrets:
+      registry-token:
+        description: 'Optional read credential, confined to installation'
+        required: false
+      registry-password:
+        description: 'Optional named account password, confined to installation'
+        required: false
 jobs:
   discover:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
@@ -32,6 +63,9 @@ jobs:
       dirs: ${{ steps.d.outputs.dirs }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source-commit || github.sha }}
+          persist-credentials: false
       - id: d
         env:
           PATHS: ${{ inputs.paths }}
@@ -55,17 +89,55 @@ jobs:
         working-directory: ${{ matrix.dir }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source-commit || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
+      - name: Validate package manager and source supplier
+        env:
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+          SUPPLIER_REF: ${{ inputs.supplier-ref }}
+          SOURCE_COMMIT: ${{ inputs.source-commit }}
+        run: |
+          case "$PACKAGE_MANAGER" in
+            npm) ;;
+            pnpm)
+              [[ "$SUPPLIER_REF" =~ ^[a-f0-9]{40}$ ]] || { echo '::error::Exact CD supplier-ref required'; exit 1; }
+              [[ "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || { echo '::error::Exact reviewed source-commit required'; exit 1; }
+              test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" || { echo '::error::Source checkout differs'; exit 1; }
+              ;;
+            *) echo '::error::Unsupported package manager'; exit 1 ;;
+          esac
+      - name: Receive exact PNPM installer source
+        if: inputs.install && inputs.package-manager == 'pnpm'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          ref: ${{ inputs.supplier-ref }}
+          path: .ci-supplier
+          persist-credentials: false
+      - name: Install original frozen PNPM graph
+        if: inputs.install && inputs.package-manager == 'pnpm'
+        env:
+          PNPM_VERSION: ${{ inputs.pnpm-version }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_USERNAME: ${{ inputs.registry-username }}
+          REGISTRY_TOKEN: ${{ secrets.registry-token }}
+          REGISTRY_PASSWORD: ${{ secrets.registry-password }}
+        run: node "$GITHUB_WORKSPACE/.ci-supplier/scripts/node-package-install.mjs"
       - name: Install dependencies when needed
-        if: inputs.install
+        if: inputs.install && inputs.package-manager == 'npm'
         run: if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
       - name: Check package when requested
         if: inputs.check
+        env:
+          NODE_OPTIONS: ${{ inputs.package-manager == 'pnpm' && '--max-old-space-size=512' || '' }}
         run: npm run --if-present check
       - name: Run selected named test script
         env:
+          NODE_OPTIONS: ${{ inputs.package-manager == 'pnpm' && '--max-old-space-size=512' || '' }}
           TEST_SCRIPT: ${{ inputs.test-script }}
         run: |
           case "$TEST_SCRIPT" in

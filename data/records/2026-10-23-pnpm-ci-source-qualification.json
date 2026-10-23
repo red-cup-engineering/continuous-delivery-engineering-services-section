@@ -1,0 +1,41 @@
+{
+  "kind": "continuous-delivery.pnpm-ci-source-qualification",
+  "version": 1,
+  "sourceBase": "5a584886407eee8bedc38e55b4eb017626a5dd07",
+  "contracts": [
+    "NP-1",
+    "NP-2",
+    "NP-3",
+    "NP-4",
+    "NP-5",
+    "NP-6",
+    "NP-7"
+  ],
+  "sourceChecks": {
+    "command": "npm run test:public-source-contract",
+    "tests": 193,
+    "pass": 193,
+    "fail": 0,
+    "runnerAuditFindings": 0
+  },
+  "nativeFixture": {
+    "pnpmVersion": "11.28.5",
+    "pinSource": "workflow",
+    "packageManagerField": false,
+    "dependencies": 0,
+    "frozen": true,
+    "lifecycleScripts": false,
+    "sourceBytesUnchanged": true,
+    "credentialMaterialized": false
+  },
+  "downstreamReceiving": {
+    "state": "pending",
+    "conditions": [
+      "independent exact-source receiving",
+      "named CI read credential consumer through original custody",
+      "fresh original host byte/inode/physical and memory admission",
+      "actual scoped GitHub registration/labels/listening",
+      "accepted exact consumer source and completed native CI job"
+    ]
+  }
+}

@@ -86,10 +86,42 @@ const job = (id, file, withs = {}, ref = REF, condition) => {
     + `    uses: ${REUSABLE}/${file}@${revision(ref)}\n` + (w ? `    with:\n${w}` : '');
 };
 
-export function renderCi(sel, { ref = REF, runsOn } = {}) {
+export function renderCi(sel, { ref = REF, runsOn, nodePackage } = {}) {
   const jobs = [];
   const runner = {'runs-on': runnerLabels(runsOn)};
-  if (sel.node) jobs.push(job('node-package', 'node-package.yml', runner, ref));
+  if (sel.node) {
+    let withs=runner, secrets='';
+    if(nodePackage!==undefined){
+      if(!nodePackage || nodePackage.packageManager!=='pnpm' || !Array.isArray(nodePackage.paths)
+          || !nodePackage.paths.length || nodePackage.paths.some(p=>typeof p!=='string'||!p||p.startsWith('/')||p.split('/').includes('..')))
+        throw new TypeError('explicit source-owned PNPM package paths required');
+      const secret=nodePackage.registryPasswordSecret??nodePackage.registryTokenSecret;
+      if(nodePackage.registryPasswordSecret&&nodePackage.registryTokenSecret)
+        throw new TypeError('one named registry credential required');
+      if(secret && !/^[A-Z_][A-Z0-9_]*$/.test(secret))throw new TypeError('literal named registry secret required');
+      if(secret && (!nodePackage.registryUrl || (nodePackage.registryPasswordSecret&&!nodePackage.registryUsername)))
+        throw new TypeError('registry identity required for its named credential');
+      withs={...runner,'package-manager':'pnpm','supplier-ref':revision(ref),
+        'source-commit':"'${{ github.sha }}'",paths:JSON.stringify(JSON.stringify(nodePackage.paths)),concurrency:1};
+      if(nodePackage.pnpmVersion!==undefined){
+        if(!/^\d+\.\d+\.\d+$/.test(nodePackage.pnpmVersion))throw new TypeError('exact source-owned PNPM version required');
+        withs['pnpm-version']=JSON.stringify(nodePackage.pnpmVersion);
+      }
+      if(nodePackage.testScript!==undefined){
+        if(!/^[a-zA-Z0-9:._-]+$/.test(nodePackage.testScript))throw new TypeError('named source-owned test script required');
+        withs['test-script']=JSON.stringify(nodePackage.testScript);
+      }
+      if(nodePackage.registryUrl){
+        const url=new URL(nodePackage.registryUrl);
+        if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash)
+          throw new TypeError('credential-free HTTPS registry required');
+        withs['registry-url']=JSON.stringify(nodePackage.registryUrl);
+      }
+      if(nodePackage.registryUsername)withs['registry-username']=JSON.stringify(nodePackage.registryUsername);
+      if(secret)secrets='    secrets:\n      registry-'+(nodePackage.registryPasswordSecret?'password':'token')+': ${{ secrets.'+secret+' }}\n';
+    }
+    jobs.push(job('node-package','node-package.yml',withs,ref)+secrets);
+  }
   sel.lean.forEach(d => jobs.push(job(
     d === '.' ? 'lean' : 'lean-' + d.replace(/[^A-Za-z0-9]+/g, '-'), 'lean.yml', { 'working-directory': d, ...runner }, ref)));
   if (sel.content) jobs.push(job('content', 'content.yml', runner, ref));
