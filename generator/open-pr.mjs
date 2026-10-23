@@ -253,10 +253,21 @@ export async function openPullRequest({ repo, files, sourceCommit, inputs, token
  * Reuses the existing githubRequest(token) port and owns no credentials.
  */
 export const RETIRED_BRANCH_INTAKE_PATH = '.github/workflows/agent-work-intake.yml';
-const retiredIntakeBlobs = new Set([
+// Each entry is an ORIGINAL Git blob ID (SHA-1), never a loose regex match.
+// The first three are the existing reviewed retired caller editions.
+// BCF tag archive/engineer-one-home-per-package-20261022 at exact historical
+// commit 7eb1ba89486c6c1593e5d97b04d89158078ed0f2 carries a fourth
+// independently read retired caller, pinned to the former CD agent-work
+// workflow@82e8d64729f7bd3e8626014150c159738e243fd9. Its original
+// source blob bc943f3 was absent from this owner's exact identity gate.
+// Current CD main no longer serves that legacy workflow; the original
+// fleet reconciliation still requires read-only preflight, immutable blob,
+// current default head, explicit --apply, effect and absent-file readback.
+const retiredAgentWorkIntakeGitBlobIds = new Set([
   'ee077700dcdde1e71be3da2f8982c2ceae15b21e',
   '1acb8b98d60959a7a42260b24f5aa946741a3c54',
   '1788f2c08b0fe190bcd41770d85cef54171cd837',
+  'bc943f320a79903a7b262b0efe3e7240b70ddc31',
 ]);
 const fleetOrgs = new Set(['red-cup-engineering','lenticule-science','561-group','coesite-operations','causeway-services']);
 // red-cup-engineering alone holds more than 800 repositories; the census stays complete up to this bound.
@@ -321,7 +332,7 @@ export async function reconcileRetiredIntakeFleet({organizations,apply=false,max
     if(object?.type!=='file'||object.path!==path||!sha(object.sha)
       ||object.encoding!=='base64'||typeof object.content!=='string')
       return {...item,status:'unrecognized'};
-    if(!retiredIntakeBlobs.has(object.sha))return {...item,status:'unrecognized'};
+    if(!retiredAgentWorkIntakeGitBlobIds.has(object.sha))return {...item,status:'unrecognized'};
     const bytes=Buffer.from(object.content.replace(/\s/g,''),'base64');
     const blob=hash('sha1',Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes]));
     if(blob!==object.sha||!legacyIntake(bytes.toString('utf8')))
