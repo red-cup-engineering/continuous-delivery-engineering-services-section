@@ -9,12 +9,13 @@
     "NP-4",
     "NP-5",
     "NP-6",
-    "NP-7"
+    "NP-7",
+    "NP-9"
   ],
   "sourceChecks": {
     "command": "npm run test:public-source-contract",
-    "tests": 193,
-    "pass": 193,
+    "tests": 197,
+    "pass": 197,
     "fail": 0,
     "runnerAuditFindings": 0
   },
@@ -37,5 +38,20 @@
       "accepted exact consumer source and completed native CI job"
     ],
     "credentialCondition": "Use existing anonymous read where received; require an explicit original-custody read consumer only if the native read actually refuses."
+  },
+  "nativeNodeTest": {
+    "originalScript": "node --test \"test/**/*.test.mjs\"",
+    "descriptor": {
+      "expectedScript": "node --test \"test/**/*.test.mjs\"",
+      "files": [
+        "test/**/*.test.mjs"
+      ],
+      "concurrency": 1
+    },
+    "actualFiles": 2,
+    "concurrentOverlapControl": "refused EEXIST",
+    "boundedNativeResult": "pass 2/2",
+    "lifecycleHooksSkipped": false,
+    "sourceBytesChanged": false
   }
 }

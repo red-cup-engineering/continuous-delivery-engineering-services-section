@@ -111,6 +111,24 @@ export function renderCi(sel, { ref = REF, runsOn, nodePackage } = {}) {
         if(!/^[a-zA-Z0-9:._-]+$/.test(nodePackage.testScript))throw new TypeError('named source-owned test script required');
         withs['test-script']=JSON.stringify(nodePackage.testScript);
       }
+      if(nodePackage.testArguments!==undefined){
+        const args=nodePackage.testArguments;
+        if(!Array.isArray(args)||args.length>32||args.some(value=>typeof value!=='string'||value.length>4096||/[\r\n\0]/.test(value)))
+          throw new TypeError('bounded literal named test argument vector required');
+        withs['test-arguments']=JSON.stringify(JSON.stringify(args));
+      }
+      if(nodePackage.nodeTest!==undefined){
+        const descriptor=nodePackage.nodeTest;
+        if(!descriptor||Array.isArray(descriptor)||Object.keys(descriptor).sort().join(',')!=='concurrency,expectedScript,files'
+            ||!Array.isArray(descriptor.files)||!descriptor.files.length||descriptor.files.length>32
+            ||descriptor.files.some(file=>typeof file!=='string'||file.length>1024||!/^[A-Za-z0-9_./*?-]+$/.test(file)
+              ||file.startsWith('/')||file.startsWith('-')||file.split('/').includes('..'))
+            ||!Number.isInteger(descriptor.concurrency)||descriptor.concurrency<1||descriptor.concurrency>16
+            ||descriptor.expectedScript!=='node --test '+descriptor.files.map(file=>JSON.stringify(file)).join(' ')
+            ||(nodePackage.testArguments?.length))
+          throw new TypeError('exact source-owned native Node test descriptor required');
+        withs['node-test']=JSON.stringify(JSON.stringify(descriptor));
+      }
       if(nodePackage.registryUrl){
         const url=new URL(nodePackage.registryUrl);
         if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash)
