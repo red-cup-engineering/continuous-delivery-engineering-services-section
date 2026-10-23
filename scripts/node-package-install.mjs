@@ -44,17 +44,16 @@ export function installPnpm(options,{run=spawnSync,environment=process.env}={}){
   const plan=planPnpmInstall(options);
   const stage=fs.mkdtempSync(path.join(plan.base,'node-package-install-'));
   fs.chmodSync(stage,0o700);
-  const userconfig=path.join(stage,'registry.npmrc'), bootstrap=path.join(stage,'bootstrap.npmrc');
+  const userconfig=path.join(stage,'registry.npmrc');
   const store=path.join(plan.base,'node-package-store'), cache=path.join(plan.base,'node-package-cache');
   const redact = text => [options.token,options.password,options.password&&Buffer.from(options.password).toString('base64')]
     .filter(Boolean).reduce((s,secret)=>s.split(secret).join('[redacted]'),String(text??''));
   try{
     fs.writeFileSync(userconfig,plan.config,{mode:0o600});
-    fs.writeFileSync(bootstrap,'registry=https://registry.npmjs.org/\n',{mode:0o600});
     const env={...environment,NODE_OPTIONS:'--max-old-space-size=512',XDG_CACHE_HOME:cache};
     for(const key of Object.keys(env))if(/^(?:REGISTRY_(?:TOKEN|PASSWORD)|NODE_AUTH_TOKEN|NPM_TOKEN|NPM_PUBLISHER_PASSWORD|UNION_PRIVATE_NPM_REGISTRY_PASSWORD)$/i.test(key))delete env[key];
-    const args=['exec','--yes','--registry=https://registry.npmjs.org/','--cache='+path.join(cache,'bootstrap'),
-      '--userconfig='+bootstrap,'--package=pnpm@'+plan.version,'--','pnpm','install','--frozen-lockfile','--ignore-scripts',
+    const args=['exec','--yes','--ignore-scripts','--cache='+path.join(cache,'bootstrap'),
+      '--userconfig='+userconfig,'--package=pnpm@'+plan.version,'--','pnpm','install','--frozen-lockfile','--ignore-scripts',
       '--network-concurrency=4','--child-concurrency=1','--store-dir='+store,'--config.cache-dir='+cache,'--config.userconfig='+userconfig];
     const result=run('npm',args,{cwd:plan.cwd,env,encoding:'utf8',maxBuffer:8*1024*1024});
     if(result.stdout)process.stdout.write(redact(result.stdout));

@@ -32,10 +32,10 @@
     "state": "pending",
     "conditions": [
       "independent exact-source receiving",
-      "named CI read credential consumer through original custody",
       "fresh original host byte/inode/physical and memory admission",
       "actual scoped GitHub registration/labels/listening",
       "accepted exact consumer source and completed native CI job"
-    ]
+    ],
+    "credentialCondition": "Use existing anonymous read where received; require an explicit original-custody read consumer only if the native read actually refuses."
   }
 }

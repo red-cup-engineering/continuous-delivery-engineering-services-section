@@ -27,6 +27,8 @@ test('exact source pin controls bounded original frozen install',()=>{
  const result=installPnpm(input,{environment:{PATH:'/fixture',NODE_OPTIONS:'--unsafe',NPM_TOKEN:'not-for-tests'},run:(command,args,options)=>{
   invoked++;assert.equal(command,'npm');
   for(const arg of ['--package=pnpm@11.28.5','--frozen-lockfile','--ignore-scripts','--network-concurrency=4','--child-concurrency=1'])assert.ok(args.includes(arg));
+  assert.ok(args.slice(0,args.indexOf('--')).includes('--ignore-scripts'));
+  assert.ok(!args.some(arg=>arg.startsWith('--registry=')),'the original native npm configuration selects the bootstrap registry');
   assert.equal(options.cwd,fs.realpathSync(input.directory));
   assert.equal(options.env.NODE_OPTIONS,'--max-old-space-size=512');
   assert.equal(options.env.NPM_TOKEN,undefined);
