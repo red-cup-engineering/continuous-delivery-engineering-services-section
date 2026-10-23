@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Guix reviewed immutable source controllers v3",
+  "description": "Native bounded data contract for source-owned trusted verifier Git blob identities. This JSON describes reviewed source identities, not Work admission, repository access or runtime deployment.",
+  "type": "object",
+  "required": [
+    "kind",
+    "controllers"
+  ],
+  "properties": {
+    "kind": {
+      "const": "guix.reviewed-source-controllers.v3"
+    },
+    "controllers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "description": "One record per immutable controller commit; admission separately rejects duplicate commit IDs, including unequal rows.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commit",
+          "tree",
+          "sourceVerifierGitBlobSha1"
+        ],
+        "properties": {
+          "commit": {
+            "$ref": "#/$defs/gitSha1",
+            "description": "Git SHA-1 commit object ID of the reviewed Guix release controller."
+          },
+          "tree": {
+            "$ref": "#/$defs/gitSha1",
+            "description": "Git SHA-1 root tree object ID of the same reviewed commit."
+          },
+          "sourceVerifierGitBlobSha1": {
+            "$ref": "#/$defs/gitSha1",
+            "description": "Git SHA-1 blob object ID of scripts/verify-release-source.mjs in the selected controller; native reader hashes its exact bytes before any dynamic import."
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "gitSha1": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    }
+  }
+}
