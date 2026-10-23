@@ -261,7 +261,7 @@ test('section CI exercises current caller contracts without retired intake files
   const step = job.steps.find(step => step.name === 'Check standalone public source contracts');
   assert.ok(step);
   assert.equal(step.run.trim(),'npm run test:public-source-contract');
-  assert.match(publicScript, /node --test test\/generate-ci\.test\.mjs test\/retained-runner\.test\.mjs test\/node-package-options\.test\.mjs test\/cloudbuild-native\.test\.mjs/);
+  assert.match(publicScript, /node --test test\/generate-ci\.test\.mjs test\/retained-runner\.test\.mjs test\/node-package-options\.test\.mjs test\/node-package-install\.test\.mjs test\/cloudbuild-native\.test\.mjs/);
   assert.match(publicScript, /test\/circleci-public-source\.test\.mjs/);
   assert.equal((publicScript.match(/test\/placement\.test\.mjs/g)||[]).length,1);
   assert.doesNotMatch(publicScript, /test\/generated-source-receiving\.test\.mjs/);
