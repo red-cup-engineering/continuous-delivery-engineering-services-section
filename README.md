@@ -40,6 +40,31 @@ No CI result is implied by a runner selector alone.
 
 The original `src/release/closure.mjs` and `scripts/release-pack.mjs` must preserve every declared runtime and optional dependency. A missing internal owner, unresolved local `workspace:`/`file:`/`link:` coordinate, or dependency cycle is an **actual refusal before packing or publication**, never an apparent success with a smaller manifest. The old `--drop` release shortcut and generated workflow input have been retired. Existing Code-owned npm publication/version-policy and the genuine registry remain the authoritative release tools; this CD source never invents an external version or grants registry writes. An exact packed archive only qualifies source preservation; a real registry write, native LAGOON construction, installed MetroPlat and market receiving remain distinct outcomes.
 
+## Reviewed Guix source-controller bindings
+
+The original `scripts/reviewed-source-controllers.json` is a **manually
+reviewed, versioned source-data declaration**, not executable code or an
+archive receipt. Its actual consumer is
+[`scripts/hosted-change.mjs#admitSourceController`](scripts/hosted-change.mjs)
+before importing any selected Guix verifier. To record a newly qualified
+controller, review its exact immutable original commit and tree and obtain
+the Git **blob** SHA-1 of the source `scripts/verify-release-source.mjs`
+from that controller (not a hash of a checkout path or a claimed approval).
+The live helper checks the verifier's bytes against that identity again.
+Git objects and validator results establish source identity only, not
+run authority, host availability or a machine's Work receiving.
+
+New source declarations use `guix.reviewed-source-controllers.v3` and the
+descriptive `sourceVerifierGitBlobSha1` property under the
+[Draft 2020-12 schema](scripts/reviewed-source-controllers.schema.json).
+The existing helper reader also accepts **exact historical v2** entries
+with `verifierBlob`, translating them into the same v3 result. It refuses
+mixed/unknown fields, duplicate commits, missing/oversized/symlinked input,
+unsupported versions and unread source; it does not rewrite retained
+historical records or manufacture a release-controller approval.
+[Native refusal tests](test/hosted-change.test.mjs) exercise this same
+reader alongside the existing source and worker tests.
+
 ## Native off-host artifact fabrication and independent receiving
 
 The original **public** Red Cup Continuous Delivery owner already has
