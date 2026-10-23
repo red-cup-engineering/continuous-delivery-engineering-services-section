@@ -10,18 +10,27 @@ const HISTORICAL_BCF_AGENT_INTAKE = "name: Agent work\non:\n  push:\n    branche
 const oid = text=>{const bytes=Buffer.from(text);return createHash('sha1').update(Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes])).digest('hex');};
 assert.equal(oid(OLD),'ee077700dcdde1e71be3da2f8982c2ceae15b21e');
 const file=(text=OLD)=>({type:'file',path:RETIRED_BRANCH_INTAKE_PATH,encoding:'base64',sha:oid(text),content:Buffer.from(text).toString('base64')});
-function fixture({count=2,foreign=false,blockedRead=-1,deniedWrite=-1,staleRef=-1,archived=-1,sourceTexts=null}={}) {
+function fixture({count=2,foreign=false,blockedRead=-1,deniedWrite=-1,staleRef=-1,archived=-1,sourceTexts=null,reusedId=-1,transferAfterPreflight=-1}={}) {
   const owners=Array.from({length:count},(_,i)=>({id:i+111,name:'repo-'+i,
     full_name:ORG+'/repo-'+i,owner:{login:ORG},default_branch:'main',
     archived:i===archived,disabled:false,fork:false}));
   const source=new Map(owners.map((o,i)=>[o.full_name,
     file(sourceTexts?.[i]??(i===1&&foreign?'name: custom workflow\n':OLD))]));
-  const writes=[],queries=[],preflights=new Map();
+  const writes=[],queries=[],preflights=new Map(),identityReads=new Map();
   const request=async(method,path,body)=>{
     queries.push([method,path]);
     if(method==='GET'&&path.startsWith('/orgs/'+ORG+'/repos?')) {
       const page=Number(new URLSearchParams(path.split('?')[1]).get('page'));
       return owners.slice((page-1)*100,page*100);
+    }
+    const namedRepo=/^\/repos\/([^/]+\/[^/]+)$/u.exec(path);
+    if(method==='GET'&&namedRepo) {
+      const repository=namedRepo[1],index=Number(repository.split('repo-')[1]);
+      const reads=identityReads.get(repository)??0;
+      identityReads.set(repository,reads+1);
+      const original=owners[index];
+      if(!original)throw Error('unavailable repository identity');
+      return {...original,id:index===reusedId||index===transferAfterPreflight&&reads>0?9000:original.id};
     }
     const match=/^\/repos\/([^/]+\/[^/]+)\/(.*)$/u.exec(path);
     if(!match)throw Error('unexpected remote operation');
@@ -94,6 +103,29 @@ test('one fleet invocation changes all verified owners and independently checks 
   }
   assert.equal(f.source.has(ORG+'/repo-1'),true);
   assert.equal(Object.values(result).some(value=>typeof value==='string'&&value.includes('repo-')),false);
+});
+
+test('original numeric repository ID is rechecked before eligibility and immediately before effects',async()=>{
+ const wrongBefore=fixture({count:2,reusedId:1});
+ await assert.rejects(
+  reconcileRetiredIntakeFleet({organizations:[ORG],apply:true},{request:wrongBefore.request}),
+  /preflight incomplete/u,
+ );
+ assert.equal(wrongBefore.writes.length,0,
+  'a reused name with a different numeric GitHub ID cannot enter fleet mutation');
+
+ const changedAfterPreflight=fixture({count:3,transferAfterPreflight:1});
+ const outcome=await reconcileRetiredIntakeFleet({organizations:[ORG],apply:true},{
+  request:changedAfterPreflight.request,
+ });
+ assert.equal(outcome.eligible,3);
+ assert.equal(outcome.removed,2);
+ assert.equal(outcome.refused,1);
+ assert.equal(changedAfterPreflight.writes.some(w=>w.repository===ORG+'/repo-1'),false);
+ assert.equal(changedAfterPreflight.source.has(ORG+'/repo-1'),true);
+ assert.equal(changedAfterPreflight.queries.filter(([method,path])=>
+  method==='GET'&&path==='/repos/'+ORG+'/repo-1').length,2,
+ 'numeric identity checked once before selection and again at effect boundary');
 });
 
 test('individual refusal is not retried and cannot be claimed successful',async()=>{
