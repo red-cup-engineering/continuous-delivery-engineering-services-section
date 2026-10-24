@@ -844,3 +844,18 @@ artifact transfer, receiving assertions and time limits remain intact. `HOME`
 and hosted action-internal supplier paths are not reconfigured. This is an
 authored-path admission, not confinement of arbitrary test programs or a claim
 that other reusable workflows have already received the same migration.
+
+**Bind content-addressed Work to its actual fenced lease.** A qualified
+SHP receiving engine derives `job.packetNi` from the *actual checked article*
+and includes the article NI and measured transfer size in `job.closure`.
+The original placer rejects a claim that the packet name is absent, malformed
+or inconsistent with this closure, and carries `packetNi` unchanged to its
+proposed placements. The existing `lease.grant/renew/accept` methods now
+optionally bind that NI to the original job identity, preserving old unbound
+callers but **refusing a packet-name downgrade or changed source under the
+same already leased job ID**. Expiry never makes a different packet for the
+same Work ID executable, and retry with the same NI still receives a new
+monotonic fencing token. Lease tables cannot have their prototypes changed
+by arbitrary JSON job names. This is source-level consistency, *not* an
+authenticated dispatch, byte-verification service, independent acceptance or
+a live production lease database: those remain with their original owners.

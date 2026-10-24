@@ -658,8 +658,9 @@ test('original fleet CLI reads bounded SHP-unpacked Work from stdin without a sh
       cores:2,memoryGb:4,freeDiskGb:8,bandwidthMbps:100,
       closureCache:[],capabilities:['node'],cost:{kind:'held'}};
     writeFileSync(join(nodes,'observed.json'),JSON.stringify(node));
+    const packetNi='ni:///sha-256;'+'a'.repeat(43);
     const job={id:'packet-original-unit-0',effect:false,visibility:'public',
-      minutes:2,maxMinutes:7,closure:[{id:'ni:///sha-256;source-checked-article',sizeMb:0.02}],
+      packetNi,minutes:2,maxMinutes:7,closure:[{id:packetNi,sizeMb:0.02}],
       needs:{cores:1,memoryGb:1,freeDiskGb:1},requires:{capabilities:['node']}};
     const jobs=[job,{...job,id:'packet-original-unit-1'}];
     const file=join(root,'verified-jobs.json');
@@ -677,6 +678,8 @@ test('original fleet CLI reads bounded SHP-unpacked Work from stdin without a sh
     assert.deepEqual(JSON.parse(fromStdin.stdout).placements.map(p=>p.jobId),
       ['packet-original-unit-0','packet-original-unit-1']);
     assert.equal(JSON.parse(fromStdin.stdout).executed,0);
+    assert.deepEqual(JSON.parse(fromStdin.stdout).placements.map(p=>p.packetNi),
+      [packetNi,packetNi]);
     const single=run(['--job','-','--nodes',nodes,'--now',NOW],
       JSON.stringify(job));
     assert.equal(single.status,0,single.stderr);
@@ -727,4 +730,72 @@ test('capacity recovery avoids needless replanning of denied and already optimal
   assert.equal(oversubscribed.capacityRecovery.reason,'no-useful-order-change');
   assert.equal(oversubscribed.capacityRecovery.effort.planningPasses,1);
   assert.equal(oversubscribed.capacityRecovery.effort.territoryAssessments,3);
+});
+
+
+test('source-bound packet NI survives planning and cannot be silently replaced under original leased Work',()=>{
+  const ni='ni:///sha-256;'+'a'.repeat(43);
+  const another='ni:///sha-256;'+'b'.repeat(43);
+  const now=NOW,later='2026-10-15T04:52:00Z';
+  const source={id:'original-source-work-1',visibility:'public',effect:false,
+    packetNi:ni,minutes:2,maxMinutes:7,closure:[{id:ni,sizeMb:0.02}],
+    needs:{cores:1,memoryGb:1,freeDiskGb:0.2},
+    requires:{capabilities:['node']}};
+  const node={id:'eligible-original-receiver',state:'up',
+    observedAt:now,cores:2,memoryGb:4,freeDiskGb:8,bandwidthMbps:10,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'}};
+  const plan=planFleet([source],[node],{now});
+  assert.equal(plan.proposed,1);
+  assert.equal(plan.placements[0].packetNi,ni);
+  assert.equal(place(source,[node],{now}).packetNi,ni);
+  const table=newTable();
+  const first=grant(table,{jobId:source.id,nodeId:node.id,packetNi:ni,
+    now,ttlMs:60_000});
+  assert.equal(first.ok,true);
+  assert.equal(table.jobs[source.id].packetNi,ni);
+  assert.equal(grant(table,{jobId:source.id,nodeId:'other',packetNi:another,
+    now:later,ttlMs:60_000}).reason,'changed-source-packet-under-original-job-id');
+  assert.equal(grant(table,{jobId:source.id,nodeId:'other',
+    now:later,ttlMs:60_000}).reason,'changed-source-packet-under-original-job-id');
+  assert.equal(table.counter,1,'invalid retries must not consume fencing tokens');
+  const second=grant(table,{jobId:source.id,nodeId:'other',packetNi:ni,
+    now:later,ttlMs:60_000});
+  assert.equal(second.ok,true);
+  assert.equal(second.token,2);
+  assert.equal(renew(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later,ttlMs:60_000}).reason,'packet-source-not-the-lease-bound-work');
+  assert.equal(renew(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later,ttlMs:60_000,packetNi:another}).reason,'packet-source-not-the-lease-bound-work');
+  assert.equal(renew(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later,ttlMs:60_000,packetNi:ni}).ok,true);
+  assert.equal(accept(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later}).reason,'packet-source-not-the-lease-bound-work');
+  assert.equal(accept(table,{jobId:source.id,nodeId:'other',token:first.token,
+    now:later,packetNi:ni}).reason,'stale-fencing-token');
+  assert.equal(accept(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later,packetNi:ni}).ok,true);
+  assert.equal(grant(table,{jobId:source.id,nodeId:'other',packetNi:ni,
+    now:later,ttlMs:60_000}).reason,'job-already-settled');
+  const malformed=place({...source,packetNi:'sha256:looks-valid'},[node],{now});
+  assert.equal(malformed.chosen,null);
+  assert.ok(malformed.refused[0].why.includes('packet-identity-not-bound-to-original-closure'));
+  const mismatched=place({...source,packetNi:another},[node],{now});
+  assert.equal(mismatched.chosen,null);
+  assert.ok(mismatched.refused[0].why.includes('packet-identity-not-bound-to-original-closure'));
+  assert.throws(()=>grant(newTable(),{jobId:'x',nodeId:'n',now,
+    ttlMs:5000,packetNi:'bad'}),/canonical packetNi/u);
+});
+
+test('lease table accepts arbitrary JSON job names as own properties without prototype mutation',()=>{
+  const t=newTable();
+  const prot=Object.getPrototypeOf(t.jobs);
+  const g=grant(t,{jobId:'__proto__',nodeId:'node',now:NOW,ttlMs:1000});
+  assert.equal(g.ok,true);
+  assert.equal(Object.getPrototypeOf(t.jobs),prot);
+  assert.equal(Object.hasOwn(t.jobs,'__proto__'),true);
+  assert.equal(t.jobs['__proto__'].token,g.token);
+  const received=JSON.parse(JSON.stringify(t));
+  assert.equal(Object.hasOwn(received.jobs,'__proto__'),true);
+  assert.equal(accept(received,{jobId:'__proto__',nodeId:'node',token:g.token,now:NOW}).ok,true);
+  assert.equal(grant(newTable(),{jobId:'toString',nodeId:'node',now:NOW,ttlMs:1000}).ok,true);
 });
