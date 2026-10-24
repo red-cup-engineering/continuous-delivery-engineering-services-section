@@ -987,6 +987,71 @@ test('optional recovery budget counts validated Work rather than inert denied ef
     selected.placements.some(row=>row.jobId===placed.jobId)));
 });
 
+test('finite Hall oracle exposes capacity regret without inventing a second production placer',t=>{
+  // Exhaust the 2^(3x3)=512 source-qualified eligibility graphs with
+  // 3 identical one-unit hosts, each Work needing one indivisible unit.
+  // Independent exhaustive assignment is a TEST oracle, scoped to the
+  // finite Hall setting of Obsmetrologia's established fleet/farm assay.
+  // The production candidates still come only from original planFleet.
+  const nodes=Array.from({length:3},(_,i)=>({
+    id:'n'+i,state:'up',observedAt:NOW,cores:1,memoryGb:1,
+    freeDiskGb:1,bandwidthMbps:100,closureCache:[],
+    capabilities:['node'],cost:{kind:'held'},
+  }));
+  const base={effect:false,minutes:1,maxMinutes:2,visibility:'public',
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const exactMaximumPreserving=(jobs,required)=>{
+    const walk=(index,used)=>{
+      if(index===jobs.length)return 0;
+      const job=jobs[index];
+      let best=required.has(job.id)?-Infinity:walk(index+1,used);
+      for(const id of job.mustRunOn){
+        const pos=Number(id.slice(1));
+        if(used&(1<<pos))continue;
+        best=Math.max(best,1+walk(index+1,used|(1<<pos)));
+      }
+      return best;
+    };
+    return walk(0,0);
+  };
+  let baselineTotal=0,recoveredTotal=0,allowedMaximumTotal=0;
+  let improved=0,unclosed=0;
+  for(let mask=0;mask<512;mask++){
+    const jobs=Array.from({length:3},(_,j)=>({
+      ...base,id:'w'+j,
+      mustRunOn:nodes.filter((_,n)=>Boolean(mask&(1<<(j*3+n))))
+        .map(n=>n.id),
+    }));
+    const original=planFleet(jobs,nodes,{now:NOW});
+    const recovered=recoverFleetCapacity(jobs,nodes,{now:NOW});
+    const eligibleBase=new Set(original.placements.map(p=>p.jobId));
+    const kept=new Set(recovered.placements.map(p=>p.jobId));
+    assert.ok([...eligibleBase].every(id=>kept.has(id)),
+      'original priority-preserved Work '+mask);
+    const optimum=exactMaximumPreserving(jobs,eligibleBase);
+    assert.ok(recovered.proposed<=optimum,
+      'actual original placer cannot exceed finite oracle '+mask);
+    assert.ok(recovered.proposed>=original.proposed,
+      'a speculative replan may not discard Work '+mask);
+    assert.ok(recovered.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096,
+      'global optional work budget held '+mask);
+    assert.equal(recovered.executed,0);
+    assert.equal(recovered.leaseReceived,false);
+    baselineTotal+=original.proposed;
+    recoveredTotal+=recovered.proposed;
+    allowedMaximumTotal+=optimum;
+    improved+=Number(recovered.proposed>original.proposed);
+    unclosed+=Number(recovered.proposed<optimum);
+  }
+  assert.ok(recoveredTotal>baselineTotal);
+  assert.ok(allowedMaximumTotal>=recoveredTotal);
+  t.diagnostic('512 finite three-by-three authorized unit-capacity cases: baseline '+
+    baselineTotal+' proposed, recovered '+recoveredTotal+', preserving-Hall-oracle '+
+    allowedMaximumTotal+', improved '+improved+' cases, remaining regret '+
+    unclosed+' cases; no native execution or customer acceptance');
+});
+
 test('bounded recovery preserves every baseline admission over 400 heterogeneous Work fixtures',t=>{
   let state=0x5612026;
   const random=()=>{
