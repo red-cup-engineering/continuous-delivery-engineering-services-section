@@ -149,6 +149,24 @@ fleet regression uses one owned host, a CircleCI Free node and an OCI A1
 node with bounded *test-only* observations; it confirms distribution and
 no shared-quota double booking without pretending those nodes are online.
 
+**Recover avoidable packet-work contention using the same placer.**
+The opt-in `recoverFleetCapacity(jobs,nodes,context)` and
+`scripts/place-job.mjs --jobs jobs.json --nodes ... --recover-capacity`
+accept the original planner's already-typed **source-declared independent
+Work units**, including SHA-256-addressed SHP packet dependencies in
+`job.closure`. The first pass keeps original caller priority and
+the existing cache/transfer/queue/scarcity cost (a generalized Voronoi
+cost partition). If that leaves Work unplaced, a bounded second plan tries
+jobs with fewer qualified host regions first. It may reassign a flexible job
+only when **every originally provisionally placed job remains placed** and
+the same fully requalified resources admit strictly more Work. The
+`capacityRecovery` report names the newly placeable and reassigned units.
+No new node, credential, workload schema, lease, provider charge or execution
+is inferred; default `planFleet` and `--jobs` stay unchanged. Tests include
+a cached packet on a single constrained node and an uncached idle alternative,
+effect refusal, no-regression, and native CLI readback.
+
+
 **Settle only independently observed spent minutes and independent
 build agreement.** The original GitHub hosted allowance now prices and
 reserves a job's *maximum* bounded duration; a missing maximum cannot turn
