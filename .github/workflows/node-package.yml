@@ -2,6 +2,10 @@ name: node-package
 on:
   workflow_call:
     inputs:
+      node-version:
+        description: 'Source-owned Node release; default retains existing callers'
+        type: string
+        default: '24'
       runs-on:
         description: 'Explicit JSON runner labels supplied by the caller'
         type: string
@@ -102,7 +106,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: 24
+          node-version: ${{ inputs.node-version }}
       - name: Validate package manager and source supplier
         env:
           PACKAGE_MANAGER: ${{ inputs.package-manager }}

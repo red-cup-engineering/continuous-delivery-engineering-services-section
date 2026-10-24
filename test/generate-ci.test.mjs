@@ -370,3 +370,21 @@ test('public runner audit admits singleton standard selectors but refuses larger
    assert.equal(auditRunnerRouting(root,{publicRepository:true}).length,admitted?0:1);
  }
 });
+
+
+test('public generated jobs gate provider-observed repository visibility before allocating a runner',()=>{
+ const parsed=YAML.parse(renderCiSource({node:true,lean:['.'],content:true},{runsOn:['ubuntu-24.04'],publicRepository:true}));
+ for(const job of Object.values(parsed.jobs))
+  assert.equal(job.if,"github.event.repository.visibility == 'public' && toJSON(github.event.repository.private) == 'false' && github.event.repository.full_name == github.repository");
+ const house=YAML.parse(renderCiSource({node:true,lean:['.'],content:true},{runsOn}));
+ for(const job of Object.values(house.jobs))assert.equal(job.if,undefined);
+});
+
+
+test('provider private-field JSON identity rejects missing, null, strings and numeric lookalikes',()=>{
+ // Truth table for the toJSON operand, not a claim to emulate GitHub allocation.
+ const canonical=value=>JSON.stringify(value)??'null';
+ assert.equal(canonical(false),'false');
+ for(const value of [undefined,null,0,'', 'false','0',true,{},[]])
+  assert.notEqual(canonical(value),'false');
+});

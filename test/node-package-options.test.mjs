@@ -159,3 +159,14 @@ test('structured arguments remain literal through native npm and malformed vecto
   cwd:root,encoding:'utf8',env:{...process.env,TEST_SCRIPT:'test',TEST_ARGUMENTS:'{"not":"argv"}'}});
  assert.notEqual(malformed.status,0);assert.equal(fs.existsSync(path.join(root,'received.json')),false);
 });
+
+
+test('exact Node supplier flows through original generator and reusable workflow without changing defaults',()=>{
+ assert.equal(workflow.on.workflow_call.inputs['node-version'].default,'24');
+ assert.equal(workflow.jobs.package.steps.find(s=>s.uses?.startsWith('actions/setup-node@')).with['node-version'],'${{ inputs.node-version }}');
+ const options={ref:'a'.repeat(40),runsOn:['ubuntu-24.04'],publicRepository:true,
+  nodePackage:{packageManager:'pnpm',pnpmVersion:'11.28.5',nodeVersion:'24.19.0',paths:['services/pnpm-services-section']}};
+ assert.equal(parse(renderCi({node:true,lean:[],content:false},options)).jobs['node-package'].with['node-version'],'24.19.0');
+ for(const version of ['24','latest','24.x','>=24.19.0','24.19.0; touch injected',['24.19.0'],null,{},24])
+  assert.throws(()=>renderCi({node:true,lean:[],content:false},{...options,nodePackage:{...options.nodePackage,nodeVersion:version}}));
+});
