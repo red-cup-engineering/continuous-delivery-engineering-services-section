@@ -853,8 +853,12 @@ test('augmentation effort is bounded for a large source Work batch',()=>{
   const result=recoverFleetCapacity(jobs,nodes,{now:NOW});
   assert.equal(result.proposed,8);
   assert.equal(result.capacityRecovery.effort.territoryAssessments,1200);
-  assert.ok(result.capacityRecovery.effort.planningPasses<=5);
-  assert.ok(result.capacityRecovery.effort.targetedReorders<=3);
+  // Include the full alternate-plan cost in the SAME 4,096 cap.
+  // The old 4,096 formula separately authorized extra full plans.
+  assert.equal(result.capacityRecovery.effort.assessmentBudget,4096);
+  assert.ok(result.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096);
+  assert.ok(result.capacityRecovery.effort.planningPasses<=3);
+  assert.ok(result.capacityRecovery.effort.targetedReorders<=2);
   assert.equal(result.executed,0);
 });
 
@@ -882,14 +886,44 @@ test('large Work fleets skip expensive optional territory search without losing 
   assert.deepEqual(recovered.pending,baseline.pending);
   assert.deepEqual(recovered.residualResources,baseline.residualResources);
   assert.equal(recovered.capacityRecovery.attempted,false);
-  assert.equal(recovered.capacityRecovery.reason,'territory-assessment-budget-exceeded');
+  assert.equal(recovered.capacityRecovery.reason,'optional-assessment-budget-insufficient-for-replan');
   assert.deepEqual(recovered.capacityRecovery.effort,{
     planningPasses:1,territoryAssessments:0,
+    assessmentBudget:4096,optionalAssessmentsUpperBound:0,
   });
   assert.equal(recovered.executed,0);
   assert.equal(recovered.leaseReceived,false);
   assert.equal(recovered.providerBudgetHeld,false);
   assert.deepEqual({nodes,jobs},before);
+});
+
+test('optional recovery budget counts validated Work rather than inert denied effects',()=>{
+  // Many unrelated denied effects should not make 4 meaningful Work units
+  // look like 66 machine-eligible jobs. The original planner still refuses
+  // the denied effects; the optional search meters only real assess calls.
+  const nodes=Array.from({length:65},(_,i)=>({
+    id:'host'+i,state:'up',observedAt:NOW,
+    cores:1,memoryGb:2,freeDiskGb:2,bandwidthMbps:100,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'},
+  }));
+  const base={minutes:1,maxMinutes:2,visibility:'public',effect:false,
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const work=[
+    ...Array.from({length:4},(_,i)=>({...base,id:'valid'+i,
+      ...(i===3?{mustRunOn:['host0']}:{} )})),
+    ...Array.from({length:62},(_,i)=>({...base,id:'effect'+i,
+      effect:{kind:'external-write'}})),
+  ];
+  const original=planFleet(work,nodes,{now:NOW});
+  const selected=recoverFleetCapacity(work,nodes,{now:NOW});
+  assert.equal(original.proposed,4);
+  assert.equal(selected.proposed,4);
+  assert.equal(selected.executed,0);
+  assert.equal(selected.capacityRecovery.attempted,false);
+  assert.equal(selected.capacityRecovery.reason,'no-capacity-related-pending-work');
+  assert.equal(selected.capacityRecovery.effort.optionalAssessmentsUpperBound,0);
+  assert.deepEqual(selected.pending,original.pending);
 });
 
 test('bounded recovery preserves every baseline admission over 400 heterogeneous Work fixtures',t=>{
@@ -928,6 +962,9 @@ test('bounded recovery preserves every baseline admission over 400 heterogeneous
     assert.equal(recovered.providerBudgetHeld,false);
     assert.ok(recovered.capacityRecovery.effort.planningPasses<=10,
       'bounded original plan passes in fixture '+fixture);
+    assert.equal(recovered.capacityRecovery.effort.assessmentBudget,4096);
+    assert.ok(recovered.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096,
+      'whole optional recovery assessment budget holds in fixture '+fixture);
     maxPasses=Math.max(maxPasses,recovered.capacityRecovery.effort.planningPasses);
     baselineProposed+=original.proposed;
     recoveredProposed+=recovered.proposed;
