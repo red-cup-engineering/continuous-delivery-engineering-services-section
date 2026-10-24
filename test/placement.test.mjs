@@ -5,6 +5,7 @@ import { newLedger, hold, settle, remainingMinutes, minutePrice, paceMinutes,
   newObservedBudget, quoteBudget, holdBudget, settleBudget, budgetAvailable }
   from '../src/placement/allowance.mjs';
 import { place, assess, planFleet } from '../src/placement/place.mjs';
+import { recoverFleetCapacity } from '../src/placement/recover.mjs';
 import { newTable, grant, renew, accept, expired } from '../src/placement/lease.mjs';
 import { compareBuilds, publishable } from '../src/placement/settle.mjs';
 
