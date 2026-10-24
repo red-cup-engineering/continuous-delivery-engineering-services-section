@@ -96,7 +96,7 @@ customer effects. No private data leaves its repository.
 
 **Receiving limits:** Artifact construction, artifact transfer and isolated
 package execution are genuine independent cloud results, but the tarball's
-mandatory `@red-cup-engineering/git-engineering-services-section` peer remains
+mandatory `@red-cup-engineering/git-services-section` peer remains
 unavailable to that public source-only installation. This does not qualify
 the full private Composition, Guix/LAGOON construction, runtime deployment,
 independent production actor Work, enterprise resource settlement or buyer
