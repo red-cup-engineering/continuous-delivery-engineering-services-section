@@ -164,6 +164,33 @@ export function recoverFleetCapacity(jobs, nodes, context) {
     propose(nextOrder);
   }
 
+  // Science-to-engineering small-fleet boundary: the original Obsmetrologia
+  // Hall assay covers finite indivisible agent/work assignment. On at most
+  // three jobs and nodes, there are at most six original job priority orders.
+  // Try any orders not already assessed, using exactly the same planFleet
+  // permission/price/resource checks and the one shared assessment budget.
+  // This can find a legal placement that neither a blocked-first nor a
+  // single interior insertion reveals, WITHOUT installing a matching solver.
+  // It is exhaustive over input ORDERINGS, not over heterogeneous physical
+  // placements, unknown permissions, or unreceived execution.
+  if (jobs.length <= 3 && nodes.length <= 3 && best.proposed < jobs.length) {
+    const orderings = [];
+    const enumerate = (prefix, remaining) => {
+      if (!remaining.length) { orderings.push(prefix); return; }
+      for (let i = 0; i < remaining.length; i++)
+        enumerate([...prefix, remaining[i]],
+          [...remaining.slice(0, i), ...remaining.slice(i + 1)]);
+    };
+    enumerate([], jobs);
+    for (const order of orderings) {
+      if (best.proposed === jobs.length ||
+          remainingOptionalAssessments < perPassUpperBound) break;
+      if (triedOrders.has(JSON.stringify(order.map(job => job.id)))) continue;
+      targetedReorders++;
+      propose(order);
+    }
+  }
+
   const improved = best.proposed > baseline.proposed;
   const chosen = improved ? {
     ...best,
