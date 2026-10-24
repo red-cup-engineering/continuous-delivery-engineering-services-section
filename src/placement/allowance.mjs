@@ -107,24 +107,35 @@ export function newObservedBudget({
 const decimalQuantity = value => {
   if(typeof value!=='number'||!Number.isFinite(value)||value<0)
     throw new TypeError('finite nonnegative observed free units required');
+  // Integral quotas (typically CI credits) are exact and overwhelmingly
+  // common. Keep them on the cheap native safe-integer path; use BigInt
+  // only when a source actually needs fractional/exponent arithmetic.
+  if(Number.isSafeInteger(value))return {digits:value,exponent:0};
   const [mantissa,power='0']=String(value).toLowerCase().split('e');
   const [whole,fraction='']=mantissa.split('.');
   return {digits:BigInt(whole+fraction),exponent:Number(power)-fraction.length};
 };
 const aligned = (left,right) => {
   const power=Math.min(left.exponent,right.exponent);
-  return [left.digits*10n**BigInt(left.exponent-power),
-    right.digits*10n**BigInt(right.exponent-power),power];
+  return [BigInt(left.digits)*10n**BigInt(left.exponent-power),
+    BigInt(right.digits)*10n**BigInt(right.exponent-power),power];
 };
 const difference = (left,right) => {
+  if(typeof left.digits==='number'&&typeof right.digits==='number'){
+    const delta=left.digits-right.digits;
+    if(Number.isSafeInteger(delta))return {digits:delta,exponent:0};
+  }
   const [a,b,power]=aligned(left,right);
   return {digits:a-b,exponent:power};
 };
 const largerThan = (left,right) => {
+  if(typeof left.digits==='number'&&typeof right.digits==='number')
+    return left.digits>right.digits;
   const [a,b]=aligned(left,right);
   return a>b;
 };
-const decimalNumber = value => Number(value.digits.toString()+'e'+value.exponent);
+const decimalNumber = value => typeof value.digits==='number'
+  ? value.digits : Number(value.digits.toString()+'e'+value.exponent);
 
 /** All earlier live holds must still fit the CURRENT observed provider balance.
  * The old Math.max(0, remaining - held) concealed a provider readback shortfall,
@@ -149,7 +160,7 @@ function observedHeadroom(b) {
         if(!amounts.has(unit))
           return {ok:false,reason:'provider-held-budget-unit-unobserved:'+unit};
         const rest=difference(amounts.get(unit),decimalQuantity(quantity));
-        if(rest.digits<0n)
+        if(rest.digits<0)
           return {ok:false,reason:'provider-held-budget-exceeds-observed-balance:'+unit};
         amounts.set(unit,rest);
       }
