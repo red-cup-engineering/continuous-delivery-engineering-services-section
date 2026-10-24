@@ -244,6 +244,33 @@ readback requires reconciliation; it must not create a negative OCI,
 GCP or Cloudflare free-quota balance or disguise a charge as zero cost.
 This is an accounting boundary, not an account connection or executed job.
 
+**Hard-stop free-capacity precision and refused-Work accounting (E12).**
+The same original `src/placement/allowance.mjs` provider-budget reader now
+rejects *every positive* claim above its source-observed remaining unit
+balance, even when the apparent excess is smaller than `1e-9` of that
+unit. The caller/provider must supply the correct native denomination and
+bounded precision; a floating comparison tolerance is **not** extra free
+quota. A `spent` result cannot use any more of a unit than this job held.
+For `void` and `refused`, a nonzero recorded resource consumption cannot
+be silently discarded to release that apparent free capacity: the original
+hold remains pending **real provider accounting/receiver reconciliation**.
+Explicit verified zero consumption and a genuine void remain available.
+The original `test/placement.test.mjs` distinguishes those cases, preserves
+the prior genuine equal-boundary positive case and demands no partial ledger
+mutation on refused settlement. These are source-native finite test obligations,
+not actual provider bill validation or an estimate of zero operating cost.
+
+This is particularly important for revenue-seeking distributed Work:
+independently accepted customer results, BOINC-style validation/credits,
+Akash leases/escrow, Golem invoices, and Slurm job/TRES usage have **separate**
+source-of-truth and standards-specific receiving obligations. Original Group
+[Computer Services Work #6](https://github.com/561-group/561-group-computer-services-section/issues/6),
+[zero-cash capacity campaign #390](https://github.com/561-group/561-group-services-section/issues/390),
+and the [earn-first economic roadmap #468](https://github.com/561-group/561-group-services-section/pull/468)
+remain the competent downstream Work, customer and commercial owners. A
+hypothetical `proposed-not-executed` placement is never capacity already
+installed or an earned dollar.
+
 **Read original quota before planning and hold before dispatch.** Provider
 adapters must authenticate fresh native, non-secret provider readback and
 supply an account-scoped free-only budget observation. Its `sourceRef`,
