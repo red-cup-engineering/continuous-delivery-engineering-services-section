@@ -173,7 +173,16 @@ export function recoverFleetCapacity(jobs, nodes, context) {
   // single interior insertion reveals, WITHOUT installing a matching solver.
   // It is exhaustive over input ORDERINGS, not over heterogeneous physical
   // placements, unknown permissions, or unreceived execution.
-  if (jobs.length <= 3 && nodes.length <= 3 && best.proposed < jobs.length) {
+  // One additive resource pool cannot admit an additional Work unit while
+  // preserving ALL previously placed units if the original plan already
+  // exhausted that pool. And a job with no eligible node cannot be fixed by
+  // permuting its priority. Neither condition merits a speculative plan.
+  const mayHaveUsefulTinyReorder = nodes.length > 1 &&
+    scarcity.some(row => row.slots > 0 &&
+      best.pending.some(p => p.jobId === row.job.id &&
+        p.reason === "no-finite-certain-original-placement"));
+  if (jobs.length <= 3 && nodes.length <= 3 &&
+      best.proposed < jobs.length && mayHaveUsefulTinyReorder) {
     const orderings = [];
     const enumerate = (prefix, remaining) => {
       if (!remaining.length) { orderings.push(prefix); return; }
