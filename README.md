@@ -3,7 +3,7 @@
 <!-- 561-group-standards:badges:start -->
 [![Red Cup Engineering](https://img.shields.io/badge/561%20Group-Red%20Cup%20Engineering-c0392b)](https://github.com/red-cup-engineering)
 [![License: MIT](https://img.shields.io/badge/license-MIT-c0392b)](LICENSE)
-[![change-test](https://github.com/red-cup-engineering/continuous-delivery-services-section/actions/workflows/change-test.yml/badge.svg)](https://github.com/red-cup-engineering/continuous-delivery-services-section/actions/workflows/change-test.yml)
+[![change-test](https://github.com/red-cup-engineering/continuous-delivery-engineering-services-section/actions/workflows/change-test.yml/badge.svg)](https://github.com/red-cup-engineering/continuous-delivery-engineering-services-section/actions/workflows/change-test.yml)
 [![Indigenous data: CARE](https://img.shields.io/badge/Indigenous%20data-CARE-4b6f44)](https://github.com/red-cup-engineering/.github/blob/main/GOVERNANCE.md)
 [![Tips welcome](https://img.shields.io/badge/tips-welcome-d4a017)](https://github.com/561-group/.github/blob/main/TIPS.md)
 <!-- 561-group-standards:badges:end -->
@@ -96,7 +96,7 @@ customer effects. No private data leaves its repository.
 
 **Receiving limits:** Artifact construction, artifact transfer and isolated
 package execution are genuine independent cloud results, but the tarball's
-mandatory `@red-cup-engineering/git-services-section` peer remains
+mandatory `@red-cup-engineering/git-engineering-services-section` peer remains
 unavailable to that public source-only installation. This does not qualify
 the full private Composition, Guix/LAGOON construction, runtime deployment,
 independent production actor Work, enterprise resource settlement or buyer
@@ -284,7 +284,7 @@ placements and genuine lease fencing.
 
 ## Free private CI without Google billing or GitHub-hosted minutes
 
-**Selected consumer:** private `red-cup-engineering/git-services-section`.
+**Selected consumer:** private `red-cup-engineering/git-engineering-services-section`.
 The native [CircleCI Free configuration](.circleci/config.yml) is held at its
 existing reusable **Red Cup Continuous Delivery** Engineering owner; the code
 and `npm run verify` remain in the actual private Git Services repository.
@@ -296,8 +296,8 @@ hosted route is **not** a substitute for bringing up Guix/LAGOON-owned compute.
 
 **One-time native provider receiving (requires authorized account action):**
 In CircleCI Free, install the CircleCI GitHub App with *repository-limited*
-access to `red-cup-engineering/continuous-delivery-services-section` (public
-configuration source) and `red-cup-engineering/git-services-section` (private
+access to `red-cup-engineering/continuous-delivery-engineering-services-section` (public
+configuration source) and `red-cup-engineering/git-engineering-services-section` (private
 checkout source). Create the project for the **private Git Services repository**.
 Select this Engineering owner's `.circleci/config.yml` at protected `main`
 as its **configuration source**, and the private Git Services repository as
@@ -506,7 +506,7 @@ name: ci
 on: [push, pull_request]
 jobs:
   ci:
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/node-package.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
+    uses: red-cup-engineering/continuous-delivery-engineering-services-section/.github/workflows/node-package.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
     with:
       runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
 ```
@@ -558,7 +558,7 @@ Lean with a directory:
 ```yaml
 jobs:
   ci:
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/lean.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
+    uses: red-cup-engineering/continuous-delivery-engineering-services-section/.github/workflows/lean.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
     with:
       working-directory: .
       runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
@@ -654,8 +654,8 @@ The received stage is **test-source qualification**, never machine
 `no-regression`. Tests included in a package remain changed artifact bytes.
 Later machine integration and operating acceptance retain their original
 Code/Guix/LAGOON obligations. The initial motivating proposal is
-[PR #74](https://github.com/red-cup-engineering/continuous-delivery-services-section/pull/74);
-its [independent source/artifact review](https://github.com/red-cup-engineering/continuous-delivery-services-section/pull/74#issuecomment-6222054562)
+[PR #74](https://github.com/red-cup-engineering/continuous-delivery-engineering-services-section/pull/74);
+its [independent source/artifact review](https://github.com/red-cup-engineering/continuous-delivery-engineering-services-section/pull/74#issuecomment-6222054562)
 predates this decision and did not itself waive the former gate.
 
 ### Approved non-executable source integration allocation (2026-10-16)
@@ -706,7 +706,7 @@ installation, pin advancement and integration retain their original gates.
 The Code/Guix/LAGOON obligations and applicable runtime comparison remain intact.
 A source-only result is never a machine `no-regression` verdict.
 The motivating requirement proposal is
-[PR #76](https://github.com/red-cup-engineering/continuous-delivery-services-section/pull/76);
+[PR #76](https://github.com/red-cup-engineering/continuous-delivery-engineering-services-section/pull/76);
 its independent consumer review is limited to its qualified source/build scope
 and does not qualify a durable executor or any downstream deployment.
 
@@ -735,7 +735,7 @@ name: change-test
 on: pull_request
 jobs:
   change-test:
-    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/change-test.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
+    uses: red-cup-engineering/continuous-delivery-engineering-services-section/.github/workflows/change-test.yml@d160dbac65a830ef89a9b51e06737cc0d9a92bd3
     with:
       machine: OWNER/MACHINE-REPOSITORY
       runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
