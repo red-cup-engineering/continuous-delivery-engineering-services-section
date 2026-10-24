@@ -168,10 +168,20 @@ augmenting reorder now also handles distinct CPU/memory footprints even when
 eligible-node counts are equal and a single cardinality sort cannot improve
 throughput. Every candidate is rechecked by original `planFleet`; it is
 accepted only when all previously provisionally admitted Work stays admitted
-and strictly more original units fit. Search considers at most eight targeted
-reorders, fewer on larger fleets according to `4096/(jobs × nodes)`. Its
-reported work and assessment counts are profiling measures, not measured
-wall time, energy savings, or accepted customer results.
+and strictly more original units fit. The optional eligibility scan and every alternate original `planFleet` call
+share ONE conservative upper bound of 4,096 `assess` operations beyond the
+baseline plan; the former per-phase formula could spend the claimed budget
+several times. Only original finite/effect-free jobs require assessments,
+so irrelevant rejected Work does not exhaust the optional budget. If a scan
+plus a full alternate placement cannot fit, recovery returns the untouched
+baseline without doing the expensive scan. `effort.assessmentBudget` and
+`effort.optionalAssessmentsUpperBound` make that invariant independently
+testable; at most eight augmenting reorders are considered within the
+remaining budget. This is an explicit bounded-search cost tradeoff analogous
+to Slurm's configured backfill scan limits, **not Slurm-compatible fairshare
+or API conformance** (source: https://slurm.schedmd.com/slurm.conf.html).
+Assessment counts are computational-work ceilings, not measured wall time,
+energy savings, available hardware, or accepted customer results.
 No new node, credential, workload schema, lease, provider charge or execution
 is inferred; default `planFleet` and `--jobs` stay unchanged. Tests include
 a cached packet on a single constrained node and an uncached idle alternative,
