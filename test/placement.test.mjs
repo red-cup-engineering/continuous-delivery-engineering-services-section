@@ -642,3 +642,52 @@ test('opt-in capacity recovery is callable through original placement command',a
       '--recover-capacity').status,0);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test('original fleet CLI reads bounded SHP-unpacked Work from stdin without a shadow jobs file', async()=>{
+  const {spawnSync}=await import('node:child_process');
+  const {mkdtempSync,mkdirSync,writeFileSync,rmSync}=await import('node:fs');
+  const {join}=await import('node:path');
+  const {tmpdir}=await import('node:os');
+  const root=mkdtempSync(join(tmpdir(),'original-work-stream-'));
+  try{
+    const nodes=join(root,'nodes');mkdirSync(nodes);
+    const node={id:'original-authorized-receiver',state:'up',observedAt:NOW,
+      cores:2,memoryGb:4,freeDiskGb:8,bandwidthMbps:100,
+      closureCache:[],capabilities:['node'],cost:{kind:'held'}};
+    writeFileSync(join(nodes,'observed.json'),JSON.stringify(node));
+    const job={id:'packet-original-unit-0',effect:false,visibility:'public',
+      minutes:2,maxMinutes:7,closure:[{id:'ni:///sha-256;source-checked-article',sizeMb:0.02}],
+      needs:{cores:1,memoryGb:1,freeDiskGb:1},requires:{capabilities:['node']}};
+    const jobs=[job,{...job,id:'packet-original-unit-1'}];
+    const file=join(root,'verified-jobs.json');
+    writeFileSync(file,JSON.stringify(jobs));
+    const script=new URL('../scripts/place-job.mjs',import.meta.url).pathname;
+    const run=(argv,input)=>spawnSync(process.execPath,[script,...argv],{
+      input,encoding:'utf8',timeout:10000,
+    });
+    const options=['--nodes',nodes,'--now',NOW,'--recover-capacity'];
+    const fromFile=run(['--jobs',file,...options]);
+    const fromStdin=run(['--jobs','-',...options],JSON.stringify(jobs));
+    assert.equal(fromFile.status,0,fromFile.stderr);
+    assert.equal(fromStdin.status,0,fromStdin.stderr);
+    assert.deepEqual(JSON.parse(fromStdin.stdout),JSON.parse(fromFile.stdout));
+    assert.deepEqual(JSON.parse(fromStdin.stdout).placements.map(p=>p.jobId),
+      ['packet-original-unit-0','packet-original-unit-1']);
+    assert.equal(JSON.parse(fromStdin.stdout).executed,0);
+    const single=run(['--job','-','--nodes',nodes,'--now',NOW],
+      JSON.stringify(job));
+    assert.equal(single.status,0,single.stderr);
+    assert.equal(JSON.parse(single.stdout).chosen,node.id);
+    const conflict=run(['--jobs','-',...options,'--budget-stdin'],
+      JSON.stringify(jobs));
+    assert.notEqual(conflict.status,0);
+    assert.match(conflict.stderr,/may not share stdin/u);
+    const oversized=run(['--jobs','-',...options],' '.repeat(8*1024*1024+1));
+    assert.notEqual(oversized.status,0);
+    assert.match(oversized.stderr,/exceeds 8 MiB/u);
+    const wrongShape=run(['--jobs','-',...options],JSON.stringify(job));
+    assert.notEqual(wrongShape.status,0);
+    assert.match(wrongShape.stderr,/input shape/u);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
