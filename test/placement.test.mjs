@@ -279,6 +279,54 @@ test('shared compute budget refuses zero holds and negative multi-unit settlemen
   assert.deepEqual(b.remaining,{ocpuHours:1,gbHours:7});
 });
 
+// Original four-peer compute Work must never turn a tiny positive amount
+// above a source-observed hard-stop quota into claimed zero-cash capacity.
+// Conservatively refuse even sub-nanounit overdraw; no floating tolerance may
+// mint a free allocation that the actual provider has not granted.
+test('free-only quota admits no epsilon overdraw or unmeasured fractional headroom',()=>{
+  const now='2026-10-15T04:50:00.000Z';
+  const b=newObservedBudget({provider:'oci-always-free-a1',scope:'oci/precision',
+    hardStop:true,sourceRef:'provider://oci/observed-quota',
+    observedAt:now,expiresAt:'2026-10-15T05:00:00.000Z',
+    remaining:{ocpuHours:1,gbHours:2}});
+  const demand={provider:b.provider,scope:b.scope,now,
+    units:{ocpuHours:1+5e-10,gbHours:1}};
+  const rejected=quoteBudget(b,demand);
+  assert.equal(rejected.ok,false);
+  assert.equal(rejected.reason,'would-overdraw-the-observed-free-allowance:ocpuHours');
+  assert.equal(holdBudget(b,{jobId:'too-much',...demand}).ok,false);
+  assert.equal(b.entries.length,0);
+  // The exact observed boundary is not an arbitrary epsilon haircut.
+  const exact={...demand,units:{ocpuHours:1,gbHours:2}};
+  assert.equal(holdBudget(b,{jobId:'exact',...exact}).ok,true);
+  assert.equal(budgetAvailable(b).ocpuHours,0);
+  assert.equal(quoteBudget(b,{...exact,units:{ocpuHours:5e-10,gbHours:0}}).ok,false);
+});
+
+test('refusal or void cannot erase actual resource consumption and spent cannot exceed held units',()=>{
+  const now='2026-10-15T04:50:00.000Z';
+  const b=newObservedBudget({provider:'oci-always-free-a1',scope:'oci/refusal',
+    hardStop:true,sourceRef:'provider://oci/provider-usage-evidence',
+    observedAt:now,expiresAt:'2026-10-15T05:00:00.000Z',
+    remaining:{ocpuHours:2,gbHours:3}});
+  const claim={provider:b.provider,scope:b.scope,now,
+    units:{ocpuHours:1,gbHours:1}};
+  assert.equal(holdBudget(b,{jobId:'original-work',...claim}).ok,true);
+  const before=structuredClone(b);
+  for(const state of ['refused','void']){
+    assert.throws(()=>settleBudget(b,{jobId:'original-work',state,
+      actualUnits:{ocpuHours:0.5,gbHours:0}}),/refusal-or-void-cannot-claim-consumed-free-units/);
+    assert.deepEqual(b,before,'failed non-spend must preserve all source custody');
+  }
+  assert.throws(()=>settleBudget(b,{jobId:'original-work',state:'spent',
+    actualUnits:{ocpuHours:1+5e-10,gbHours:1}}),/billed usage exceeds held free units/);
+  assert.deepEqual(b,before);
+  assert.equal(settleBudget(b,{jobId:'original-work',state:'spent',
+    actualUnits:{ocpuHours:1,gbHours:1}}).state,'spent');
+  assert.deepEqual(b.remaining,{ocpuHours:1,gbHours:2});
+  assert.equal(b.entries.length,1,'accepted original Work cannot double post');
+});
+
 test('budget receipt expires and provider may not silently switch denomination',()=>{
   const b=newObservedBudget({provider:'circleci-free-private',scope:'org/a',
     sourceRef:'provider://circleci/another-one',hardStop:true,
