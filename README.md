@@ -174,7 +174,16 @@ baseline 2/3, restored 3/3 with the earlier mandatory Work preserved; a
 genuinely infeasible missing-edge variant remains 2/3 and is refused. Hall's
 unit-capacity criterion is a **test oracle only** here: it is not a matching
 solver, a proof for heterogeneous resources, a new placement authority, or
-production Work. Every candidate is rechecked by original `planFleet`; it is
+production Work. A final, bounded source-only micro-fleet fallback enumerates
+at most six original Work priority orderings *only when 2–3 physical nodes,
+2–3 Work units and original eligible waiting Work make replanning meaningful*.
+Against **all 512** source-qualified three-by-three unit-capacity eligibility
+graphs, an independent finite assignment oracle retaining earlier admissions
+is the regression target; infeasible work remains rejected and no lease,
+machine or rights arise from this exercise. On larger/heterogeneous fleets the
+existing constrained/interior bounded heuristic applies; there is no claim of
+global optimality or Slurm-equivalent fairness. Every candidate is rechecked
+by original `planFleet`; it is
 accepted only when all previously provisionally admitted Work stays admitted
 and strictly more original units fit. The optional eligibility scan and every alternate original `planFleet` call
 share ONE conservative upper bound of 4,096 `assess` operations beyond the
