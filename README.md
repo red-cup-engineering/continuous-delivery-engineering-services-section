@@ -162,9 +162,16 @@ only when **every originally provisionally placed job remains placed** and
 the same fully requalified resources admit strictly more Work. The
 `capacityRecovery` report names the newly placeable and reassigned units,
 with deterministic planner-pass and eligibility-assessment counters to profile
-allocation overhead. If all Work is placed, if the only pending Work was
-refused for reasons unrelated to scarce compute, or if scarcity sorting cannot
-change the job order, the planner avoids the needless second pass.
+allocation overhead. If all Work is placed, or the only pending Work was refused for reasons
+unrelated to scarce compute, the planner avoids extra search. A bounded
+augmenting reorder now also handles distinct CPU/memory footprints even when
+eligible-node counts are equal and a single cardinality sort cannot improve
+throughput. Every candidate is rechecked by original `planFleet`; it is
+accepted only when all previously provisionally admitted Work stays admitted
+and strictly more original units fit. Search considers at most eight targeted
+reorders, fewer on larger fleets according to `4096/(jobs × nodes)`. Its
+reported work and assessment counts are profiling measures, not measured
+wall time, energy savings, or accepted customer results.
 No new node, credential, workload schema, lease, provider charge or execution
 is inferred; default `planFleet` and `--jobs` stay unchanged. Tests include
 a cached packet on a single constrained node and an uncached idle alternative,
