@@ -122,7 +122,7 @@ export function quoteBudget(b,{provider,scope,now,units}={}){
     if(!Object.hasOwn(available,unit)||typeof value!=='number'||
       !Number.isFinite(value)||value<0)
       return {ok:false,reason:'provider-usage-unit-unmeasured:'+unit};
-    if(value>available[unit]+1e-9)
+    if(value>available[unit])
       return {ok:false,reason:'would-overdraw-the-observed-free-allowance:'+unit};
   }
   if(!Object.values(units).some(value=>value>0))
@@ -148,7 +148,7 @@ export function settleBudget(b,{jobId,state,actualUnits={}}={}){
   if(state==='spent'){
     for(const [unit,amount] of Object.entries(actualUnits)){
       if(!Object.hasOwn(held.units,unit)||typeof amount!=='number'||
-        !Number.isFinite(amount)||amount<0||amount>held.units[unit]+1e-9)
+        !Number.isFinite(amount)||amount<0||amount>held.units[unit])
         throw new TypeError('billed usage exceeds held free units: '+unit);
     }
     for(const unit of Object.keys(held.units))
@@ -161,6 +161,17 @@ export function settleBudget(b,{jobId,state,actualUnits={}}={}){
         throw new TypeError('settlement exceeds observed remaining free units: '+unit);
     for(const [unit,amount] of Object.entries(actualUnits))
       b.remaining[unit]-=amount;
+  } else if (!actualUnits || Array.isArray(actualUnits) ||
+             typeof actualUnits !== 'object' ||
+             Object.entries(actualUnits).some(([unit, amount]) =>
+               !Object.hasOwn(held.units, unit) ||
+               typeof amount !== 'number' ||
+               !Number.isFinite(amount) || amount !== 0)) {
+    // A provider may consume compute before a Work/result is refused.
+    // Refusing or voiding the hold without accounting for that usage would
+    // advertise phantom free headroom to the next customer job. Keep this
+    // record held for the original resource/ledger receiver to reconcile.
+    throw new TypeError('refusal-or-void-cannot-claim-consumed-free-units');
   }
   held.state=state;
   if(state==='spent')held.actualUnits={...actualUnits};
