@@ -40,7 +40,7 @@ test("private x402 CI selects the original Code service and Free small runner, n
   ]) assert.equal(text.includes(forbidden), false, forbidden);
   const gitServices = readFileSync(new URL("../.circleci/config.yml", import.meta.url), "utf8");
   const inference = readFileSync(new URL("../.circleci/private-inference.yml", import.meta.url), "utf8");
-  assert.match(gitServices, /repository="red-cup-engineering\/git-services-section"/u);
+  assert.match(gitServices, /repository="red-cup-engineering\/git-engineering-services-section"/u);
   assert.match(inference, /repository="red-cup-engineering\/computer-inference-engine"/u);
   assert.doesNotMatch(gitServices, /x402-services-section/u);
   assert.doesNotMatch(inference, /x402-services-section/u);
@@ -66,7 +66,7 @@ test("exact private x402 Git commit and original checkout are both required", ()
       { CIRCLE_SHA1: "" }, { CIRCLE_SHA1: "HEAD" },
       { CIRCLE_SHA1: "a".repeat(40) }, { CIRCLE_SHA1: "wrong" },
     ]) assert.notEqual(receive(patch).status, 0);
-    git("remote", "set-url", "origin", "git@github.com:red-cup-engineering/git-services-section.git");
+    git("remote", "set-url", "origin", "git@github.com:red-cup-engineering/git-engineering-services-section.git");
     assert.notEqual(receive({}).status, 0);
     git("remote", "set-url", "origin", "https://unrelated.example/private.git");
     assert.notEqual(receive({}).status, 0);

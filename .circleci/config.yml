@@ -1,6 +1,9 @@
 # Red Cup Continuous Delivery's native CircleCI Free execution contract.
 # Select THIS repository as the configuration source; select the PRIVATE
 # consumer as CircleCI GitHub App checkout source. No public mirror or deploy.
+# GitHub canonical source identity: red-cup-engineering/git-engineering-services-section
+# (stable GitHub repository ID 1325533741). Historical git-services-section
+# alias must not replace the provider's actual current checkout identity.
 version: 2.1
 jobs:
   verify-original-git-source:
@@ -18,7 +21,7 @@ jobs:
 
             [[ "$CIRCLE_SHA1" =~ ^[a-f0-9]{40}$ ]] || { echo 'exact Git commit required' >&2; exit 78; }
             test "$(git rev-parse --verify HEAD)" = "$CIRCLE_SHA1" || { echo 'checked-out source commit differs from provider' >&2; exit 78; }
-            repository="red-cup-engineering/git-services-section"
+            repository="red-cup-engineering/git-engineering-services-section"
             remote="$(git remote get-url origin)"
             case "$remote" in
               "git@github.com:${repository}"|"git@github.com:${repository}.git"|"https://github.com/${repository}"|"https://github.com/${repository}.git"|"ssh://git@github.com/${repository}.git") ;;

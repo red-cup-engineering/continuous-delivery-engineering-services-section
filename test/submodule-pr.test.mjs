@@ -121,7 +121,7 @@ test('workflow activates the immutable pending receiver while retaining caller a
     ref: '${{ github.event.repository.default_branch }}',
   });
   assert.deepEqual(job.steps.find(step => step.with?.path === '.cds').with, {
-    repository: 'red-cup-engineering/continuous-delivery-services-section',
+    repository: 'red-cup-engineering/continuous-delivery-engineering-services-section',
     ref: 'e141a4445864895631aa4f775a9ad6397e1772c8', path: '.cds', 'persist-credentials': false,
   });
   assert.equal(job.steps.find(step => step.id === 'advance').run, 'node .cds/scripts/advance.mjs --branch "$BRANCH" --note "$NOTE"');

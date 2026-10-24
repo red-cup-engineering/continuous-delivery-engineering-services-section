@@ -46,7 +46,7 @@ test('actual private Git source checkout is admitted only at its exact provider 
     writeFileSync(join(cwd,'package.json'),
       JSON.stringify({scripts:{verify:'npm run check && npm test'}}));
     git('add','package.json');git('commit','-qm','original');
-    git('remote','add','origin','git@github.com:red-cup-engineering/git-services-section.git');
+    git('remote','add','origin','git@github.com:red-cup-engineering/git-engineering-services-section.git');
     const revision=git('rev-parse','HEAD');
     // GitHub App CIRCLE_PROJECT_* names refer to the CircleCI project,
     // not necessarily to the independently selected checkout source.
@@ -62,6 +62,12 @@ test('actual private Git source checkout is admitted only at its exact provider 
     ])assert.notEqual(observe(bad).status,0,JSON.stringify(bad));
     // Different CircleCI project names do not change checkout identity.
     assert.equal(observe({CIRCLE_PROJECT_USERNAME:'',CIRCLE_PROJECT_REPONAME:''}).status,0);
+    // The repository moved; only its selected canonical checkout name now
+    // satisfies the private runner source guard, not the obsolete alias.
+    git('remote','set-url','origin','https://github.com/red-cup-engineering/git-services-section.git');
+    assert.notEqual(observe({}).status,0,'historical alias does not attest the current canonical project');
+    git('remote','set-url','origin','https://github.com/red-cup-engineering/git-engineering-services-section.git');
+    assert.equal(observe({}).status,0,'canonical HTTPS origin is admitted');
     git('remote','set-url','origin','https://attacker.example/other.git');
     assert.notEqual(observe({}).status,0,'foreign Git checkout must refuse');
     git('remote','set-url','origin','git@github.com:red-cup-engineering/another-private-repo.git');

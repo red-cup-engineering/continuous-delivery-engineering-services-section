@@ -36,7 +36,7 @@ test("separate inference consumer is a source-verified private CircleCI Free tes
     assert.equal(source.includes(disallowed), false, disallowed);
   }
   const previous = readFileSync(new URL("../.circleci/config.yml", import.meta.url), "utf8");
-  assert.match(previous, /repository="red-cup-engineering\/git-services-section"/u);
+  assert.match(previous, /repository="red-cup-engineering\/git-engineering-services-section"/u);
   assert.doesNotMatch(previous, /computer-inference-engine/u, "do not weaken or modify existing Git Services source admission");
 });
 
@@ -60,7 +60,7 @@ test("only the original Git source and exact commit can enter inference CI", () 
       {CIRCLE_SHA1:"a".repeat(40)},{CIRCLE_SHA1:"bad"}]) {
       assert.notEqual(check(bad).status, 0);
     }
-    git("remote","set-url","origin","git@github.com:red-cup-engineering/git-services-section.git");
+    git("remote","set-url","origin","git@github.com:red-cup-engineering/git-engineering-services-section.git");
     assert.notEqual(check({}).status,0,"the other authorized private CI repo must not be accepted here");
     git("remote","set-url","origin","https://attacker.example/wrong");
     assert.notEqual(check({}).status,0,"no arbitrary provider origin is admitted");
