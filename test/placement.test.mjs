@@ -5,6 +5,7 @@ import { newLedger, hold, settle, remainingMinutes, minutePrice, paceMinutes,
   newObservedBudget, quoteBudget, holdBudget, settleBudget, budgetAvailable }
   from '../src/placement/allowance.mjs';
 import { place, assess, planFleet } from '../src/placement/place.mjs';
+import { recoverFleetCapacity } from '../src/placement/recover.mjs';
 import { newTable, grant, renew, accept, expired } from '../src/placement/lease.mjs';
 import { compareBuilds, publishable } from '../src/placement/settle.mjs';
 
@@ -541,4 +542,568 @@ test('the existing placement CLI reads a complete original office shift without 
       ['--jobs',jobs,'--nodes',dir,'--used','0']
     ])assert.notEqual(run(...flags).status,0);
   }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+
+test('capacity recovery redistributes original packet Work without displacing earlier admitted Work',()=>{
+  const packetNi='ni:///sha-256;'+'a'.repeat(43);
+  const nodes=[
+    {id:'cached-node',state:'up',observedAt:NOW,cores:1,memoryGb:2,
+      freeDiskGb:2,bandwidthMbps:100,closureCache:[packetNi],
+      capabilities:['node'],cost:{kind:'held'}},
+    {id:'spare-node',state:'up',observedAt:NOW,cores:1,memoryGb:2,
+      freeDiskGb:2,bandwidthMbps:2,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'}},
+  ];
+  const original=(id,closure)=>({
+    id,minutes:2,maxMinutes:7,effect:false,visibility:'public',
+    closure,needs:{cores:1,memoryGb:1,freeDiskGb:0.5},
+    requires:{capabilities:['node']},
+  });
+  const flexible=original('work-part-0',[{id:packetNi,sizeMb:15}]);
+  const constrained={...original('work-part-1',[]),mustRunOn:['cached-node']};
+  const work=[flexible,constrained];
+  const beforeNodes=structuredClone(nodes),beforeWork=structuredClone(work);
+  const baseline=planFleet(work,nodes,{now:NOW});
+  assert.deepEqual(baseline.placements.map(p=>[p.jobId,p.nodeId]),
+    [['work-part-0','cached-node']]);
+  assert.equal(baseline.unplaced,1);
+  const recovered=recoverFleetCapacity(work,nodes,{now:NOW});
+  assert.deepEqual(recovered.placements.map(p=>[p.jobId,p.nodeId]),
+    [['work-part-0','spare-node'],['work-part-1','cached-node']]);
+  assert.equal(recovered.proposed,2);
+  assert.equal(recovered.unplaced,0);
+  assert.equal(recovered.executed,0);
+  assert.equal(recovered.providerBudgetHeld,false);
+  assert.equal(recovered.leaseReceived,false);
+  assert.deepEqual(recovered.capacityRecovery.newlyPlaced,['work-part-1']);
+  assert.deepEqual(recovered.capacityRecovery.relocated,
+    [{jobId:'work-part-0',from:'cached-node',to:'spare-node'}]);
+  assert.deepEqual(work,beforeWork);
+  assert.deepEqual(nodes,beforeNodes);
+  assert.deepEqual(recoverFleetCapacity(work,nodes,{now:NOW}),recovered);
+});
+
+test('finite Hall-feasible Work uses an interior insertion without losing mandatory original Work',()=>{
+  // Corresponds to the existing Obsmetrologia fleet/assignment assay's
+  // strictly finite indivisible-unit Hall setting; NOT a general proof for
+  // heterogeneous CPU+RAM+GPU workloads. First-eligible greedy placement:
+  // mandatory->node0, flexible->node1, bridge waits, although three are feasible.
+  const ns=Array.from({length:3},(_,i)=>({
+    id:'node'+i,state:'up',observedAt:NOW,
+    cores:1,memoryGb:2,freeDiskGb:2,bandwidthMbps:100,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'},
+  }));
+  const base={minutes:1,maxMinutes:2,effect:false,visibility:'public',
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const jobs=[
+    {...base,id:'mandatory',mustRunOn:['node0']},
+    {...base,id:'flexible',mustRunOn:['node1','node2']},
+    {...base,id:'bridge',mustRunOn:['node0','node1']},
+  ];
+  // Independent small Hall witness: every subset's work demand fits the
+  // union of its authorized hosts. No inferred edge or second live planner.
+  const hallShortfall=work=>{
+    for(let mask=1;mask<(1<<work.length);mask++){
+      const ids=work.filter((_,i)=>Boolean(mask&(1<<i)));
+      const eligible=new Set(ids.flatMap(j=>j.mustRunOn));
+      if(eligible.size<ids.length)return ids.map(j=>j.id);
+    }
+    return null;
+  };
+  assert.equal(hallShortfall(jobs),null);
+  const before=structuredClone({jobs,ns});
+  const baseline=planFleet(jobs,ns,{now:NOW});
+  assert.deepEqual(baseline.placements.map(p=>[p.jobId,p.nodeId]),[
+    ['mandatory','node0'],['flexible','node1']]);
+  const recovered=recoverFleetCapacity(jobs,ns,{now:NOW});
+  assert.deepEqual(recovered.placements.map(p=>[p.jobId,p.nodeId]),[
+    ['mandatory','node0'],['flexible','node2'],['bridge','node1']]);
+  assert.deepEqual(recovered.capacityRecovery.newlyPlaced,['bridge']);
+  assert.equal(recovered.capacityRecovery.effort.targetedReorders,2);
+  assert.equal(recovered.capacityRecovery.effort.planningPasses,3);
+  assert.equal(recovered.capacityRecovery.effort.assessmentBudget,4096);
+  assert.ok(recovered.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096);
+  assert.equal(recovered.executed,0);
+  assert.equal(recovered.leaseReceived,false);
+  assert.equal(recovered.providerBudgetHeld,false);
+  assert.deepEqual({jobs,ns},before);
+  // Remove the bridge's independent alternative: the original Hall deficit
+  // must remain a refusal, not a plausible but unauthorized third placement.
+  const impossible=jobs.map(j=>j.id==='bridge'?{...j,mustRunOn:['node0']}:j);
+  assert.deepEqual(hallShortfall(impossible),['mandatory','bridge']);
+  const denied=recoverFleetCapacity(impossible,ns,{now:NOW});
+  assert.equal(denied.proposed,2);
+  assert.equal(denied.executed,0);
+  assert.deepEqual(denied.capacityRecovery.newlyPlaced,[]);
+  assert.ok(denied.pending.some(row=>row.jobId==='bridge'));
+});
+
+test('bounded augmentation places additional source Work missed by one region-count sort',()=>{
+  const nodes=[
+    {id:'node0',state:'up',observedAt:NOW,cores:2,memoryGb:4,
+      freeDiskGb:4,bandwidthMbps:100,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'}},
+    {id:'node1',state:'up',observedAt:NOW,cores:1,memoryGb:4,
+      freeDiskGb:4,bandwidthMbps:100,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'}},
+    {id:'node2',state:'up',observedAt:NOW,cores:3,memoryGb:1,
+      freeDiskGb:4,bandwidthMbps:100,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'}},
+  ];
+  const work=(id,cores,memoryGb)=>({
+    id,minutes:1,maxMinutes:2,effect:false,visibility:'public',
+    closure:[],needs:{cores,memoryGb,freeDiskGb:0.1},
+    requires:{capabilities:['node']},
+  });
+  const jobs=[work('job0',2,1),work('job2',1,1),
+    work('job4',1,1),work('job5',1,3)];
+  const before=structuredClone({nodes,jobs});
+  const original=planFleet(jobs,nodes,{now:NOW});
+  assert.deepEqual(original.placements.map(p=>p.jobId),['job0','job2','job4']);
+  assert.equal(original.proposed,3);
+  // The old one-sort method orders job0 before job5: both have two eligible
+  // nodes. Retrying job5 at the front now exposes a lawful 4/4 arrangement.
+  const recovered=recoverFleetCapacity(jobs,nodes,{now:NOW});
+  assert.equal(recovered.proposed,4);
+  assert.deepEqual(recovered.placements.map(p=>[p.jobId,p.nodeId]),[
+    ['job0','node2'],['job2','node0'],['job4','node1'],['job5','node0']]);
+  assert.deepEqual(recovered.capacityRecovery.newlyPlaced,['job5']);
+  assert.equal(recovered.capacityRecovery.improved,true);
+  assert.equal(recovered.capacityRecovery.effort.targetedReorders,1);
+  assert.equal(recovered.capacityRecovery.effort.planningPasses,3);
+  assert.ok(recovered.capacityRecovery.effort.planningPasses<=10);
+  assert.equal(recovered.executed,0);
+  assert.equal(recovered.leaseReceived,false);
+  assert.deepEqual({nodes,jobs},before);
+  assert.deepEqual(recoverFleetCapacity(jobs,nodes,{now:NOW}),recovered);
+});
+
+test('capacity recovery never loses baseline Work or bypasses typed effect refusal',()=>{
+  const cached={id:'only-node',state:'up',observedAt:NOW,cores:1,
+    memoryGb:2,freeDiskGb:2,bandwidthMbps:100,closureCache:[],
+    capabilities:['node'],cost:{kind:'held'}};
+  const original={id:'first',effect:false,minutes:2,maxMinutes:7,
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const other={...original,id:'second'};
+  const work=[original,other,{...original,id:'deploy',effect:{kind:'provider-write'}}];
+  const baseline=planFleet(work,[cached],{now:NOW});
+  const recovered=recoverFleetCapacity(work,[cached],{now:NOW});
+  assert.deepEqual(recovered.placements,baseline.placements);
+  assert.equal(recovered.capacityRecovery.attempted,false);
+  assert.equal(recovered.capacityRecovery.reason,'no-useful-order-change');
+  assert.equal(recovered.capacityRecovery.effort.planningPasses,1);
+  assert.equal(recovered.capacityRecovery.improved,false);
+  assert.equal(recovered.capacityRecovery.recoveredProposed,1);
+  assert.equal(recovered.capacityRecovery.relocated.length,0);
+  assert.deepEqual(recovered.pending.map(p=>p.jobId),['second','deploy']);
+  assert.ok(recovered.pending.find(p=>p.jobId==='deploy').reason.includes('effect'));
+});
+
+test('opt-in capacity recovery is callable through original placement command',async()=>{
+  const {spawnSync}=await import('node:child_process');
+  const {mkdtempSync,mkdirSync,writeFileSync,rmSync}=await import('node:fs');
+  const {join}=await import('node:path');
+  const {tmpdir}=await import('node:os');
+  const root=mkdtempSync(join(tmpdir(),'recover-real-fleet-'));
+  try{
+    const nodes=join(root,'nodes');mkdirSync(nodes);
+    for(const n of [
+      {id:'cached',state:'up',observedAt:NOW,cores:1,memoryGb:2,
+        freeDiskGb:2,bandwidthMbps:100,closureCache:['article'],
+        capabilities:['node'],cost:{kind:'held'}},
+      {id:'spare',state:'up',observedAt:NOW,cores:1,memoryGb:2,
+        freeDiskGb:2,bandwidthMbps:2,closureCache:[],
+        capabilities:['node'],cost:{kind:'held'}},
+    ])writeFileSync(join(nodes,n.id+'.json'),JSON.stringify(n));
+    const base={minutes:2,maxMinutes:7,closure:[{id:'article',sizeMb:15}],
+      effect:false,needs:{cores:1,memoryGb:1,freeDiskGb:0.5},
+      requires:{capabilities:['node']}};
+    const jobs=join(root,'jobs.json');
+    writeFileSync(jobs,JSON.stringify([{...base,id:'flexible'},
+      {...base,id:'constrained',closure:[],mustRunOn:['cached']}]));
+    const script=new URL('../scripts/place-job.mjs',import.meta.url).pathname;
+    const run=(...args)=>spawnSync(process.execPath,[script,...args],{
+      encoding:'utf8',timeout:10000,
+    });
+    const before=run('--jobs',jobs,'--nodes',nodes,'--now',NOW);
+    const after=run('--jobs',jobs,'--nodes',nodes,'--now',NOW,
+      '--recover-capacity');
+    assert.equal(before.status,0,before.stderr);
+    assert.equal(after.status,0,after.stderr);
+    assert.equal(JSON.parse(before.stdout).proposed,1);
+    assert.equal(JSON.parse(after.stdout).proposed,2);
+    assert.equal(JSON.parse(after.stdout).capacityRecovery.improved,true);
+    assert.notEqual(run('--job',jobs,'--nodes',nodes,'--now',NOW,
+      '--recover-capacity').status,0);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+
+test('original fleet CLI reads bounded SHP-unpacked Work from stdin without a shadow jobs file', async()=>{
+  const {spawnSync}=await import('node:child_process');
+  const {mkdtempSync,mkdirSync,writeFileSync,rmSync}=await import('node:fs');
+  const {join}=await import('node:path');
+  const {tmpdir}=await import('node:os');
+  const root=mkdtempSync(join(tmpdir(),'original-work-stream-'));
+  try{
+    const nodes=join(root,'nodes');mkdirSync(nodes);
+    const node={id:'original-authorized-receiver',state:'up',observedAt:NOW,
+      cores:2,memoryGb:4,freeDiskGb:8,bandwidthMbps:100,
+      closureCache:[],capabilities:['node'],cost:{kind:'held'}};
+    writeFileSync(join(nodes,'observed.json'),JSON.stringify(node));
+    const packetNi='ni:///sha-256;'+'a'.repeat(43);
+    const job={id:'packet-original-unit-0',effect:false,visibility:'public',
+      packetNi,minutes:2,maxMinutes:7,closure:[{id:packetNi,sizeMb:0.02}],
+      needs:{cores:1,memoryGb:1,freeDiskGb:1},requires:{capabilities:['node']}};
+    const jobs=[job,{...job,id:'packet-original-unit-1'}];
+    const file=join(root,'verified-jobs.json');
+    writeFileSync(file,JSON.stringify(jobs));
+    const script=new URL('../scripts/place-job.mjs',import.meta.url).pathname;
+    const run=(argv,input)=>spawnSync(process.execPath,[script,...argv],{
+      input,encoding:'utf8',timeout:10000,
+    });
+    const options=['--nodes',nodes,'--now',NOW,'--recover-capacity'];
+    const fromFile=run(['--jobs',file,...options]);
+    const fromStdin=run(['--jobs','-',...options],JSON.stringify(jobs));
+    assert.equal(fromFile.status,0,fromFile.stderr);
+    assert.equal(fromStdin.status,0,fromStdin.stderr);
+    assert.deepEqual(JSON.parse(fromStdin.stdout),JSON.parse(fromFile.stdout));
+    assert.deepEqual(JSON.parse(fromStdin.stdout).placements.map(p=>p.jobId),
+      ['packet-original-unit-0','packet-original-unit-1']);
+    assert.equal(JSON.parse(fromStdin.stdout).executed,0);
+    assert.deepEqual(JSON.parse(fromStdin.stdout).placements.map(p=>p.packetNi),
+      [packetNi,packetNi]);
+    const single=run(['--job','-','--nodes',nodes,'--now',NOW],
+      JSON.stringify(job));
+    assert.equal(single.status,0,single.stderr);
+    assert.equal(JSON.parse(single.stdout).chosen,node.id);
+    const conflict=run(['--jobs','-',...options,'--budget-stdin'],
+      JSON.stringify(jobs));
+    assert.notEqual(conflict.status,0);
+    assert.match(conflict.stderr,/may not share stdin/u);
+    const oversized=run(['--jobs','-',...options],' '.repeat(8*1024*1024+1));
+    assert.notEqual(oversized.status,0);
+    assert.match(oversized.stderr,/exceeds 8 MiB/u);
+    const wrongShape=run(['--jobs','-',...options],JSON.stringify(job));
+    assert.notEqual(wrongShape.status,0);
+    assert.match(wrongShape.stderr,/input shape/u);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+
+test('capacity recovery avoids needless replanning of denied and already optimal Work',()=>{
+  const host={id:'source-owned',state:'up',observedAt:NOW,
+    cores:2,memoryGb:3,freeDiskGb:5,bandwidthMbps:20,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'}};
+  const base={id:'original-unit',effect:false,
+    minutes:2,maxMinutes:7,visibility:'public',
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const all=recoverFleetCapacity([base],[host],{now:NOW});
+  assert.equal(all.capacityRecovery.attempted,false);
+  assert.equal(all.capacityRecovery.reason,'all-original-work-provisionally-placed');
+  assert.equal(all.capacityRecovery.effort.territoryAssessments,0);
+  const denied=recoverFleetCapacity([base,{...base,id:'effect',
+    effect:{kind:'provider-write'}}],[host],{now:NOW});
+  assert.equal(denied.capacityRecovery.attempted,false);
+  assert.equal(denied.capacityRecovery.reason,'no-capacity-related-pending-work');
+  assert.equal(denied.proposed,1);
+  assert.equal(denied.pending[0].reason,'effect-authority-not-received');
+  const noAdmitted=recoverFleetCapacity([
+    {...base,id:'unbounded',maxMinutes:undefined},
+    {...base,id:'typed-effect',effect:'remote-write'},
+  ],[host],{now:NOW});
+  assert.equal(noAdmitted.capacityRecovery.attempted,false);
+  assert.equal(noAdmitted.capacityRecovery.reason,'no-original-admissions');
+  assert.equal(noAdmitted.capacityRecovery.effort.planningPasses,1);
+  const oversubscribed=recoverFleetCapacity(
+    [base,{...base,id:'second'},{...base,id:'third'}],
+    [{...host,cores:1,memoryGb:1,freeDiskGb:1}],{now:NOW});
+  assert.equal(oversubscribed.proposed,1);
+  assert.equal(oversubscribed.capacityRecovery.reason,'no-useful-order-change');
+  assert.equal(oversubscribed.capacityRecovery.effort.planningPasses,1);
+  assert.equal(oversubscribed.capacityRecovery.effort.territoryAssessments,3);
+});
+
+
+test('source-bound packet NI survives planning and cannot be silently replaced under original leased Work',()=>{
+  const ni='ni:///sha-256;'+'a'.repeat(43);
+  const another='ni:///sha-256;'+'b'.repeat(43);
+  const now=NOW,later='2026-10-15T04:52:00Z';
+  const source={id:'original-source-work-1',visibility:'public',effect:false,
+    packetNi:ni,minutes:2,maxMinutes:7,closure:[{id:ni,sizeMb:0.02}],
+    needs:{cores:1,memoryGb:1,freeDiskGb:0.2},
+    requires:{capabilities:['node']}};
+  const node={id:'eligible-original-receiver',state:'up',
+    observedAt:now,cores:2,memoryGb:4,freeDiskGb:8,bandwidthMbps:10,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'}};
+  const plan=planFleet([source],[node],{now});
+  assert.equal(plan.proposed,1);
+  assert.equal(plan.placements[0].packetNi,ni);
+  assert.equal(place(source,[node],{now}).packetNi,ni);
+  const table=newTable();
+  const first=grant(table,{jobId:source.id,nodeId:node.id,packetNi:ni,
+    now,ttlMs:60_000});
+  assert.equal(first.ok,true);
+  assert.equal(table.jobs[source.id].packetNi,ni);
+  assert.equal(grant(table,{jobId:source.id,nodeId:'other',packetNi:another,
+    now:later,ttlMs:60_000}).reason,'changed-source-packet-under-original-job-id');
+  assert.equal(grant(table,{jobId:source.id,nodeId:'other',
+    now:later,ttlMs:60_000}).reason,'changed-source-packet-under-original-job-id');
+  assert.equal(table.counter,1,'invalid retries must not consume fencing tokens');
+  const second=grant(table,{jobId:source.id,nodeId:'other',packetNi:ni,
+    now:later,ttlMs:60_000});
+  assert.equal(second.ok,true);
+  assert.equal(second.token,2);
+  assert.equal(renew(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later,ttlMs:60_000}).reason,'packet-source-not-the-lease-bound-work');
+  assert.equal(renew(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later,ttlMs:60_000,packetNi:another}).reason,'packet-source-not-the-lease-bound-work');
+  assert.equal(renew(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later,ttlMs:60_000,packetNi:ni}).ok,true);
+  assert.equal(accept(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later}).reason,'packet-source-not-the-lease-bound-work');
+  assert.equal(accept(table,{jobId:source.id,nodeId:'other',token:first.token,
+    now:later,packetNi:ni}).reason,'stale-fencing-token');
+  assert.equal(accept(table,{jobId:source.id,nodeId:'other',token:second.token,
+    now:later,packetNi:ni}).ok,true);
+  assert.equal(grant(table,{jobId:source.id,nodeId:'other',packetNi:ni,
+    now:later,ttlMs:60_000}).reason,'job-already-settled');
+  const malformed=place({...source,packetNi:'sha256:looks-valid'},[node],{now});
+  assert.equal(malformed.chosen,null);
+  assert.ok(malformed.refused[0].why.includes('packet-identity-not-bound-to-original-closure'));
+  const mismatched=place({...source,packetNi:another},[node],{now});
+  assert.equal(mismatched.chosen,null);
+  assert.ok(mismatched.refused[0].why.includes('packet-identity-not-bound-to-original-closure'));
+  assert.throws(()=>grant(newTable(),{jobId:'x',nodeId:'n',now,
+    ttlMs:5000,packetNi:'bad'}),/canonical packetNi/u);
+});
+
+test('lease table accepts arbitrary JSON job names as own properties without prototype mutation',()=>{
+  const t=newTable();
+  const prot=Object.getPrototypeOf(t.jobs);
+  const g=grant(t,{jobId:'__proto__',nodeId:'node',now:NOW,ttlMs:1000});
+  assert.equal(g.ok,true);
+  assert.equal(Object.getPrototypeOf(t.jobs),prot);
+  assert.equal(Object.hasOwn(t.jobs,'__proto__'),true);
+  assert.equal(t.jobs['__proto__'].token,g.token);
+  const received=JSON.parse(JSON.stringify(t));
+  assert.equal(Object.hasOwn(received.jobs,'__proto__'),true);
+  assert.equal(accept(received,{jobId:'__proto__',nodeId:'node',token:g.token,now:NOW}).ok,true);
+  assert.equal(grant(newTable(),{jobId:'toString',nodeId:'node',now:NOW,ttlMs:1000}).ok,true);
+});
+
+test('augmentation effort is bounded for a large source Work batch',()=>{
+  const base={id:'job',effect:false,minutes:1,maxMinutes:2,
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:0.1},
+    requires:{capabilities:['node']}};
+  const nodes=Array.from({length:8},(_,i)=>({
+    id:'n'+i,observedAt:NOW,state:'up',cores:1,memoryGb:1,
+    freeDiskGb:1,bandwidthMbps:100,closureCache:[],cost:{kind:'held'},
+    capabilities:['node'],
+  }));
+  const jobs=Array.from({length:150},(_,i)=>({...base,id:'job'+i}));
+  const result=recoverFleetCapacity(jobs,nodes,{now:NOW});
+  assert.equal(result.proposed,8);
+  assert.equal(result.capacityRecovery.effort.territoryAssessments,1200);
+  // Include the full alternate-plan cost in the SAME 4,096 cap.
+  // The old 4,096 formula separately authorized extra full plans.
+  assert.equal(result.capacityRecovery.effort.assessmentBudget,4096);
+  assert.ok(result.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096);
+  assert.ok(result.capacityRecovery.effort.planningPasses<=3);
+  assert.ok(result.capacityRecovery.effort.targetedReorders<=2);
+  assert.equal(result.executed,0);
+});
+
+
+test('large Work fleets skip expensive optional territory search without losing original placements',()=>{
+  // 66 real-shape source-declared units and 65 possible resource regions:
+  // a 4,290-assessment recovery scan is beyond the configured 4,096 budget.
+  const nodes=Array.from({length:65},(_,i)=>({
+    id:'held-node-'+i,state:'up',observedAt:NOW,
+    cores:1,memoryGb:2,freeDiskGb:2,bandwidthMbps:100,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'},
+  }));
+  const jobs=Array.from({length:66},(_,i)=>({
+    id:'original-work-'+i,minutes:1,maxMinutes:2,effect:false,
+    visibility:'public',closure:[],
+    needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']},
+  }));
+  const before=structuredClone({nodes,jobs});
+  const baseline=planFleet(jobs,nodes,{now:NOW});
+  assert.equal(baseline.proposed,65);
+  assert.equal(baseline.unplaced,1);
+  const recovered=recoverFleetCapacity(jobs,nodes,{now:NOW});
+  assert.deepEqual(recovered.placements,baseline.placements);
+  assert.deepEqual(recovered.pending,baseline.pending);
+  assert.deepEqual(recovered.residualResources,baseline.residualResources);
+  assert.equal(recovered.capacityRecovery.attempted,false);
+  assert.equal(recovered.capacityRecovery.reason,'optional-assessment-budget-insufficient-for-replan');
+  assert.deepEqual(recovered.capacityRecovery.effort,{
+    planningPasses:1,territoryAssessments:0,
+    assessmentBudget:4096,optionalAssessmentsUpperBound:0,
+  });
+  assert.equal(recovered.executed,0);
+  assert.equal(recovered.leaseReceived,false);
+  assert.equal(recovered.providerBudgetHeld,false);
+  assert.deepEqual({nodes,jobs},before);
+});
+
+test('optional recovery budget counts validated Work rather than inert denied effects',()=>{
+  // Many unrelated denied effects should not make 4 meaningful Work units
+  // look like 66 machine-eligible jobs. The original planner still refuses
+  // the denied effects; the optional search meters only real assess calls.
+  const nodes=Array.from({length:65},(_,i)=>({
+    id:'host'+i,state:'up',observedAt:NOW,
+    cores:1,memoryGb:2,freeDiskGb:2,bandwidthMbps:100,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'},
+  }));
+  const base={minutes:1,maxMinutes:2,visibility:'public',effect:false,
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const work=[
+    ...Array.from({length:4},(_,i)=>({...base,id:'valid'+i,
+      ...(i===3?{mustRunOn:['host0']}:{} )})),
+    ...Array.from({length:62},(_,i)=>({...base,id:'effect'+i,
+      effect:{kind:'external-write'}})),
+  ];
+  const original=planFleet(work,nodes,{now:NOW});
+  const selected=recoverFleetCapacity(work,nodes,{now:NOW});
+  assert.equal(original.proposed,3);
+  assert.equal(selected.proposed,4);
+  assert.equal(selected.executed,0);
+  assert.equal(selected.capacityRecovery.attempted,true);
+  assert.equal(selected.capacityRecovery.improved,true);
+  assert.deepEqual(selected.capacityRecovery.newlyPlaced,['valid3']);
+  assert.equal(selected.capacityRecovery.effort.territoryAssessments,260);
+  assert.ok(selected.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096);
+  assert.equal(selected.pending.length,62);
+  assert.ok(selected.pending.every(row=>row.reason==='effect-authority-not-received'));
+  assert.ok(original.placements.every(placed=>
+    selected.placements.some(row=>row.jobId===placed.jobId)));
+});
+
+test('finite Hall oracle exposes capacity regret without inventing a second production placer',t=>{
+  // Exhaust the 2^(3x3)=512 source-qualified eligibility graphs with
+  // 3 identical one-unit hosts, each Work needing one indivisible unit.
+  // Independent exhaustive assignment is a TEST oracle, scoped to the
+  // finite Hall setting of Obsmetrologia's established fleet/farm assay.
+  // The production candidates still come only from original planFleet.
+  const nodes=Array.from({length:3},(_,i)=>({
+    id:'n'+i,state:'up',observedAt:NOW,cores:1,memoryGb:1,
+    freeDiskGb:1,bandwidthMbps:100,closureCache:[],
+    capabilities:['node'],cost:{kind:'held'},
+  }));
+  const base={effect:false,minutes:1,maxMinutes:2,visibility:'public',
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const exactMaximumPreserving=(jobs,required)=>{
+    const walk=(index,used)=>{
+      if(index===jobs.length)return 0;
+      const job=jobs[index];
+      let best=required.has(job.id)?-Infinity:walk(index+1,used);
+      for(const id of job.mustRunOn){
+        const pos=Number(id.slice(1));
+        if(used&(1<<pos))continue;
+        best=Math.max(best,1+walk(index+1,used|(1<<pos)));
+      }
+      return best;
+    };
+    return walk(0,0);
+  };
+  let baselineTotal=0,recoveredTotal=0,allowedMaximumTotal=0;
+  let improved=0,unclosed=0;
+  for(let mask=0;mask<512;mask++){
+    const jobs=Array.from({length:3},(_,j)=>({
+      ...base,id:'w'+j,
+      mustRunOn:nodes.filter((_,n)=>Boolean(mask&(1<<(j*3+n))))
+        .map(n=>n.id),
+    }));
+    const original=planFleet(jobs,nodes,{now:NOW});
+    const recovered=recoverFleetCapacity(jobs,nodes,{now:NOW});
+    const eligibleBase=new Set(original.placements.map(p=>p.jobId));
+    const kept=new Set(recovered.placements.map(p=>p.jobId));
+    assert.ok([...eligibleBase].every(id=>kept.has(id)),
+      'original priority-preserved Work '+mask);
+    const optimum=exactMaximumPreserving(jobs,eligibleBase);
+    assert.ok(recovered.proposed<=optimum,
+      'actual original placer cannot exceed finite oracle '+mask);
+    assert.ok(recovered.proposed>=original.proposed,
+      'a speculative replan may not discard Work '+mask);
+    assert.ok(recovered.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096,
+      'global optional work budget held '+mask);
+    assert.equal(recovered.executed,0);
+    assert.equal(recovered.leaseReceived,false);
+    baselineTotal+=original.proposed;
+    recoveredTotal+=recovered.proposed;
+    allowedMaximumTotal+=optimum;
+    improved+=Number(recovered.proposed>original.proposed);
+    unclosed+=Number(recovered.proposed<optimum);
+  }
+  assert.ok(recoveredTotal>baselineTotal);
+  assert.equal(recoveredTotal,allowedMaximumTotal,
+    'the bounded tiny-fleet original-priority search shall close all feasible'
+    +' no-displacement unit-capacity cases in the exhaustive 3x3 setting');
+  assert.equal(unclosed,0,'no finite authorized unit-capacity assignment regret');
+  t.diagnostic('512 finite three-by-three authorized unit-capacity cases: baseline '+
+    baselineTotal+' proposed, recovered '+recoveredTotal+', preserving-Hall-oracle '+
+    allowedMaximumTotal+', improved '+improved+' cases, remaining regret '+
+    unclosed+' cases; no native execution or customer acceptance');
+});
+
+test('bounded recovery preserves every baseline admission over 400 heterogeneous Work fixtures',t=>{
+  let state=0x5612026;
+  const random=()=>{
+    state=(Math.imul(state,1664525)+1013904223)>>>0;
+    return state/4294967296;
+  };
+  const pick=choices=>choices[Math.floor(random()*choices.length)];
+  let baselineProposed=0,recoveredProposed=0,improvedCases=0,maxPasses=0;
+  for(let fixture=0;fixture<400;fixture++){
+    const nodes=Array.from({length:pick([2,3,4,5])},(_,i)=>({
+      id:'node'+i,observedAt:NOW,state:'up',
+      cores:pick([1,2,3,4]),memoryGb:pick([1,2,3,4,6]),
+      freeDiskGb:6,bandwidthMbps:100,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'},
+    }));
+    const jobs=Array.from({length:pick([4,5,6,7,8,9])},(_,i)=>({
+      id:'job'+i,minutes:1,maxMinutes:2,effect:false,
+      visibility:'public',closure:[],
+      needs:{cores:pick([1,1,2,2,3]),
+        memoryGb:pick([1,1,2,3,4]),freeDiskGb:0.2},
+      requires:{capabilities:['node']},
+      ...(random()<0.5
+        ? {mustRunOn:nodes.filter(()=>random()<0.75).map(node=>node.id)} : {}),
+    }));
+    const original=planFleet(jobs,nodes,{now:NOW});
+    const recovered=recoverFleetCapacity(jobs,nodes,{now:NOW});
+    const kept=new Set(recovered.placements.map(p=>p.jobId));
+    assert.ok(original.placements.every(p=>kept.has(p.jobId)),
+      'every original admission survives fixture '+fixture);
+    assert.ok(recovered.proposed>=original.proposed,
+      'capacity may not decline in fixture '+fixture);
+    assert.equal(recovered.executed,0);
+    assert.equal(recovered.leaseReceived,false);
+    assert.equal(recovered.providerBudgetHeld,false);
+    assert.ok(recovered.capacityRecovery.effort.planningPasses<=10,
+      'bounded original plan passes in fixture '+fixture);
+    assert.equal(recovered.capacityRecovery.effort.assessmentBudget,4096);
+    assert.ok(recovered.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096,
+      'whole optional recovery assessment budget holds in fixture '+fixture);
+    maxPasses=Math.max(maxPasses,recovered.capacityRecovery.effort.planningPasses);
+    baselineProposed+=original.proposed;
+    recoveredProposed+=recovered.proposed;
+    if(recovered.proposed>original.proposed)improvedCases++;
+  }
+  assert.ok(recoveredProposed>baselineProposed,
+    'the real cardinality and augmenting policies must recover useful original Work');
+  assert.ok(improvedCases>0);
+  t.diagnostic('400 original synthetic heterogeneous Work fixtures: baseline '+
+    baselineProposed+' proposals, capacity recovery '+recoveredProposed+
+    ' proposals, improved '+improvedCases+' cases, zero lost baseline units, '+
+    'maximum '+maxPasses+' original planning passes; no customer Work executed');
 });

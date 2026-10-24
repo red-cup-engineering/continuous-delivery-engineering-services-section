@@ -149,6 +149,62 @@ fleet regression uses one owned host, a CircleCI Free node and an OCI A1
 node with bounded *test-only* observations; it confirms distribution and
 no shared-quota double booking without pretending those nodes are online.
 
+**Recover avoidable packet-work contention using the same placer.**
+The opt-in `recoverFleetCapacity(jobs,nodes,context)` and
+`scripts/place-job.mjs --jobs jobs.json --nodes ... --recover-capacity`
+accept the original planner's already-typed **source-declared independent
+Work units**, including SHA-256-addressed SHP packet dependencies in
+`job.closure`. The first pass keeps original caller priority and
+the existing cache/transfer/queue/scarcity cost (a generalized Voronoi
+cost partition). If that leaves Work unplaced, a bounded second plan tries
+jobs with fewer qualified host regions first. It may reassign a flexible job
+only when **every originally provisionally placed job remains placed** and
+the same fully requalified resources admit strictly more Work. The
+`capacityRecovery` report names the newly placeable and reassigned units,
+with deterministic planner-pass and eligibility-assessment counters to profile
+allocation overhead. If all Work is placed, or the only pending Work was refused for reasons
+unrelated to scarce compute, the planner avoids extra search. A bounded
+augmenting reorder now also handles distinct CPU/memory footprints even when
+eligible-node counts are equal and a single cardinality sort cannot improve
+throughput. When all front insertions fail, the same bounded search can insert
+a waiting original Work unit *between* previously attempted priorities.
+The 3-job/3-one-core-node regression is grounded in Lenticule Science's
+[existing finite Hall eligibility assay](https://github.com/lenticule-science/obsmetrologia/blob/main/docs/preprints/assays/feathers-fleets-farms-agent-check.py):
+baseline 2/3, restored 3/3 with the earlier mandatory Work preserved; a
+genuinely infeasible missing-edge variant remains 2/3 and is refused. Hall's
+unit-capacity criterion is a **test oracle only** here: it is not a matching
+solver, a proof for heterogeneous resources, a new placement authority, or
+production Work. A final, bounded source-only micro-fleet fallback enumerates
+at most six original Work priority orderings *only when 2–3 physical nodes,
+2–3 Work units and original eligible waiting Work make replanning meaningful*.
+Against **all 512** source-qualified three-by-three unit-capacity eligibility
+graphs, an independent finite assignment oracle retaining earlier admissions
+is the regression target; infeasible work remains rejected and no lease,
+machine or rights arise from this exercise. On larger/heterogeneous fleets the
+existing constrained/interior bounded heuristic applies; there is no claim of
+global optimality or Slurm-equivalent fairness. Every candidate is rechecked
+by original `planFleet`; it is
+accepted only when all previously provisionally admitted Work stays admitted
+and strictly more original units fit. The optional eligibility scan and every alternate original `planFleet` call
+share ONE conservative upper bound of 4,096 `assess` operations beyond the
+baseline plan; the former per-phase formula could spend the claimed budget
+several times. Only original finite/effect-free jobs require assessments,
+so irrelevant rejected Work does not exhaust the optional budget. If a scan
+plus a full alternate placement cannot fit, recovery returns the untouched
+baseline without doing the expensive scan. `effort.assessmentBudget` and
+`effort.optionalAssessmentsUpperBound` make that invariant independently
+testable; at most eight augmenting reorders are considered within the
+remaining budget. This is an explicit bounded-search cost tradeoff analogous
+to Slurm's configured backfill scan limits, **not Slurm-compatible fairshare
+or API conformance** (source: https://slurm.schedmd.com/slurm.conf.html).
+Assessment counts are computational-work ceilings, not measured wall time,
+energy savings, available hardware, or accepted customer results.
+No new node, credential, workload schema, lease, provider charge or execution
+is inferred; default `planFleet` and `--jobs` stay unchanged. Tests include
+a cached packet on a single constrained node and an uncached idle alternative,
+effect refusal, no-regression, and native CLI readback.
+
+
 **Settle only independently observed spent minutes and independent
 build agreement.** The original GitHub hosted allowance now prices and
 reserves a job's *maximum* bounded duration; a missing maximum cannot turn
@@ -822,3 +878,18 @@ artifact transfer, receiving assertions and time limits remain intact. `HOME`
 and hosted action-internal supplier paths are not reconfigured. This is an
 authored-path admission, not confinement of arbitrary test programs or a claim
 that other reusable workflows have already received the same migration.
+
+**Bind content-addressed Work to its actual fenced lease.** A qualified
+SHP receiving engine derives `job.packetNi` from the *actual checked article*
+and includes the article NI and measured transfer size in `job.closure`.
+The original placer rejects a claim that the packet name is absent, malformed
+or inconsistent with this closure, and carries `packetNi` unchanged to its
+proposed placements. The existing `lease.grant/renew/accept` methods now
+optionally bind that NI to the original job identity, preserving old unbound
+callers but **refusing a packet-name downgrade or changed source under the
+same already leased job ID**. Expiry never makes a different packet for the
+same Work ID executable, and retry with the same NI still receives a new
+monotonic fencing token. Lease tables cannot have their prototypes changed
+by arbitrary JSON job names. This is source-level consistency, *not* an
+authenticated dispatch, byte-verification service, independent acceptance or
+a live production lease database: those remain with their original owners.

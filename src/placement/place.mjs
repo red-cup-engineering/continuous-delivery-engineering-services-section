@@ -19,6 +19,16 @@ export function fetchMinutes(job, node) {
 
 export function assess(job, node, { ledger = null, budgets = {}, now }) {
   const why = [];
+  // The original SHP receiver supplies packetNi from verified bytes. A
+  // caller-supplied digest without the matching measured closure is NOT
+  // a transport claim or a qualified placement.
+  if(job.packetNi!==undefined &&
+      (typeof job.packetNi!=='string' ||
+       !/^ni:\/\/\/sha-256;[A-Za-z0-9_-]{43}$/u.test(job.packetNi) ||
+       !Array.isArray(job.closure) ||
+       !job.closure.some(m=>m?.id===job.packetNi &&
+         typeof m.sizeMb==='number'&&Number.isFinite(m.sizeMb)&&m.sizeMb>=0)))
+    why.push('packet-identity-not-bound-to-original-closure');
   if (job.mustRunOn && !job.mustRunOn.includes(node.id)) why.push('job-names-other-nodes');
   if (!['up','intermittent'].includes(node.state)) why.push('node-not-observed-up');
   const nowMs=Date.parse(now),nodeAt=Date.parse(node.observedAt);
@@ -107,6 +117,7 @@ export function place(job, nodes, ctx) {
   const chosen = candidates[0] ?? null;
   return {
     job: job.id, chosen: chosen?.nodeId ?? null,
+    ...(chosen && job.packetNi!==undefined ? {packetNi:job.packetNi}:{}),
     needsProbe: chosen ? chosen.certainty !== 'certain' : false,   // an advertised field was unknown: measure before relying on it
     needsLeaderWords: Boolean(job.effect),
     candidates, refused: assessed.filter(a => !a.feasible),
@@ -208,7 +219,8 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now}={}){
     }
     const resourceHold=Object.fromEntries(dimensions.map(k=>[k,job.needs[k]]));
     for(const key of dimensions)node[key]-=resourceHold[key];
-    placements.push({jobId:job.id,nodeId:node.id,resourceHold,
+    placements.push({jobId:job.id,nodeId:node.id,
+      ...(job.packetNi===undefined?{}:{packetNi:job.packetNi}),resourceHold,
       budgetHold:candidate.budgetHold,price:candidate.price,
       state:'proposed-not-executed',leaseRequired:true});
   }
