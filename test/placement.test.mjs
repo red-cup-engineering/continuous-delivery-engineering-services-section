@@ -857,3 +857,54 @@ test('augmentation effort is bounded for a large source Work batch',()=>{
   assert.ok(result.capacityRecovery.effort.targetedReorders<=3);
   assert.equal(result.executed,0);
 });
+
+
+test('bounded recovery preserves every baseline admission over 400 heterogeneous Work fixtures',t=>{
+  let state=0x5612026;
+  const random=()=>{
+    state=(Math.imul(state,1664525)+1013904223)>>>0;
+    return state/4294967296;
+  };
+  const pick=choices=>choices[Math.floor(random()*choices.length)];
+  let baselineProposed=0,recoveredProposed=0,improvedCases=0,maxPasses=0;
+  for(let fixture=0;fixture<400;fixture++){
+    const nodes=Array.from({length:pick([2,3,4,5])},(_,i)=>({
+      id:'node'+i,observedAt:NOW,state:'up',
+      cores:pick([1,2,3,4]),memoryGb:pick([1,2,3,4,6]),
+      freeDiskGb:6,bandwidthMbps:100,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'},
+    }));
+    const jobs=Array.from({length:pick([4,5,6,7,8,9])},(_,i)=>({
+      id:'job'+i,minutes:1,maxMinutes:2,effect:false,
+      visibility:'public',closure:[],
+      needs:{cores:pick([1,1,2,2,3]),
+        memoryGb:pick([1,1,2,3,4]),freeDiskGb:0.2},
+      requires:{capabilities:['node']},
+      ...(random()<0.5
+        ? {mustRunOn:nodes.filter(()=>random()<0.75).map(node=>node.id)} : {}),
+    }));
+    const original=planFleet(jobs,nodes,{now:NOW});
+    const recovered=recoverFleetCapacity(jobs,nodes,{now:NOW});
+    const kept=new Set(recovered.placements.map(p=>p.jobId));
+    assert.ok(original.placements.every(p=>kept.has(p.jobId)),
+      'every original admission survives fixture '+fixture);
+    assert.ok(recovered.proposed>=original.proposed,
+      'capacity may not decline in fixture '+fixture);
+    assert.equal(recovered.executed,0);
+    assert.equal(recovered.leaseReceived,false);
+    assert.equal(recovered.providerBudgetHeld,false);
+    assert.ok(recovered.capacityRecovery.effort.planningPasses<=10,
+      'bounded original plan passes in fixture '+fixture);
+    maxPasses=Math.max(maxPasses,recovered.capacityRecovery.effort.planningPasses);
+    baselineProposed+=original.proposed;
+    recoveredProposed+=recovered.proposed;
+    if(recovered.proposed>original.proposed)improvedCases++;
+  }
+  assert.ok(recoveredProposed>baselineProposed,
+    'the real cardinality and augmenting policies must recover useful original Work');
+  assert.ok(improvedCases>0);
+  t.diagnostic('400 original synthetic heterogeneous Work fixtures: baseline '+
+    baselineProposed+' proposals, capacity recovery '+recoveredProposed+
+    ' proposals, improved '+improvedCases+' cases, zero lost baseline units, '+
+    'maximum '+maxPasses+' original planning passes; no customer Work executed');
+});
