@@ -126,7 +126,7 @@ jobs:
         if: inputs.install && inputs.package-manager == 'pnpm'
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          repository: red-cup-engineering/continuous-delivery-services-section
+          repository: red-cup-engineering/continuous-delivery-engineering-services-section
           ref: ${{ inputs.supplier-ref }}
           path: .ci-supplier
           persist-credentials: false
