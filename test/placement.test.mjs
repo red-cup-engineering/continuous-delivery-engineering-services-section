@@ -542,3 +542,102 @@ test('the existing placement CLI reads a complete original office shift without 
     ])assert.notEqual(run(...flags).status,0);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test('no fractional credit reservation can be offered when real observed Free balance is exactly zero',()=>{
+  const at='2026-10-23T22:01:00.000Z';
+  const provider='circleci-free-private',scope='red-cup/free-verified-ci';
+  const b=newObservedBudget({provider,scope,hardStop:true,
+    sourceRef:'provider://circleci/observed-zero-native-budget',
+    observedAt:'2026-10-23T22:00:00.000Z',expiresAt:'2026-10-23T23:00:00.000Z',
+    remaining:{credits:0}});
+  const claim={provider,scope,now:at,units:{credits:0.0000000005}};
+  assert.deepEqual(quoteBudget(b,claim),{ok:false,
+    reason:'would-overdraw-the-observed-free-allowance:credits'});
+  assert.deepEqual(holdBudget(b,{jobId:'first',...claim}),{ok:false,
+    reason:'would-overdraw-the-observed-free-allowance:credits'});
+  assert.deepEqual(b.entries,[],'a source-only quote cannot create a phantom provider hold');
+  assert.equal(budgetAvailable(b).credits,0);
+  assert.deepEqual(quoteBudget(b,{...claim,units:{credits:0}}),{ok:false,
+    reason:'provider-usage-has-no-positive-reservation'});
+});
+
+test('decimal fractions conserve exactly across multiple independent held jobs',()=>{
+  const at='2026-10-23T22:01:00.000Z';
+  const b=newObservedBudget({provider:'oci-always-free-a1',scope:'oci/free-decimal',
+    hardStop:true,sourceRef:'provider://oci/exact-decimal-source',
+    observedAt:'2026-10-23T22:00:00.000Z',expiresAt:'2026-10-23T23:00:00.000Z',
+    remaining:{ocpuHours:0.3,gbHours:0.6}});
+  const grant=(jobId,units)=>holdBudget(b,{jobId,provider:b.provider,scope:b.scope,now:at,units});
+  assert.equal(grant('quarter',{ocpuHours:0.1,gbHours:0.2}).ok,true);
+  assert.equal(grant('remainder',{ocpuHours:0.2,gbHours:0.4}).ok,true);
+  assert.deepEqual(budgetAvailable(b),{ocpuHours:0,gbHours:0});
+  assert.equal(grant('extra',{ocpuHours:1e-12}).ok,false);
+  assert.equal(b.entries.length,2);
+  const charged=settleBudget(b,{jobId:'quarter',state:'spent',
+    actualUnits:{ocpuHours:0.1,gbHours:0.2}});
+  assert.equal(charged.state,'spent');
+  assert.deepEqual(b.remaining,{ocpuHours:0.2,gbHours:0.4},
+    'source decimal 0.3-0.1 and 0.6-0.2 remain exact observed balance, not binary drift');
+  assert.deepEqual(budgetAvailable(b),{ocpuHours:0,gbHours:0});
+  settleBudget(b,{jobId:'remainder',state:'spent',
+    actualUnits:{ocpuHours:0.2,gbHours:0.4}});
+  assert.deepEqual(b.remaining,{ocpuHours:0,gbHours:0});
+});
+
+test('source balance shrink below held work is a refusal, never silently clamped to available zero',()=>{
+  const at='2026-10-23T22:01:00.000Z';
+  const b=newObservedBudget({provider:'circleci-free-private',scope:'red-cup/free-ci',
+    hardStop:true,sourceRef:'provider://circleci/native-changed-quota',
+    observedAt:'2026-10-23T22:00:00.000Z',expiresAt:'2026-10-23T23:00:00.000Z',
+    remaining:{credits:1,minutes:100}});
+  const call=units=>({provider:b.provider,scope:b.scope,now:at,units});
+  assert.equal(holdBudget(b,{jobId:'first',...call({credits:0.8})}).ok,true);
+  b.remaining.credits=0.7; // provider's independently observed remaining fell
+  const prior=structuredClone(b);
+  assert.deepEqual(quoteBudget(b,call({minutes:1})),{ok:false,
+    reason:'provider-held-budget-exceeds-observed-balance:credits'},
+    'one denomination in conflict blocks all new Work, not just the same unit');
+  assert.deepEqual(holdBudget(b,{jobId:'second',...call({minutes:1})}),{ok:false,
+    reason:'provider-held-budget-exceeds-observed-balance:credits'});
+  assert.throws(()=>budgetAvailable(b),/provider-held-budget-exceeds-observed-balance/);
+  assert.deepEqual(b,prior,'a capacity shortfall cannot create a second job hold');
+});
+
+test('provider remaining and live-hold nonfinite source data fail closed without a guessed zero',()=>{
+  const at='2026-10-23T22:01:00.000Z';
+  const b=newObservedBudget({provider:'oci-always-free-a1',scope:'oci/source-clock',
+    hardStop:true,sourceRef:'provider://oci/valid-original-observation',
+    observedAt:'2026-10-23T22:00:00.000Z',expiresAt:'2026-10-23T23:00:00.000Z',
+    remaining:{credits:3}});
+  const c={provider:b.provider,scope:b.scope,now:at,units:{credits:1}};
+  assert.equal(holdBudget(b,{jobId:'genuine',...c}).ok,true);
+  b.remaining.credits=NaN;
+  assert.equal(quoteBudget(b,c).reason,'provider-budget-observation-malformed');
+  assert.throws(()=>budgetAvailable(b),/provider-budget-observation-malformed/);
+  b.remaining.credits=3;
+  b.entries[0].units.credits=Infinity;
+  assert.equal(quoteBudget(b,c).reason,'provider-budget-observation-malformed');
+  assert.throws(()=>budgetAvailable(b),/provider-budget-observation-malformed/);
+  b.entries[0].units={unobservedUnit:1};
+  assert.equal(quoteBudget(b,c).reason,'provider-held-budget-unit-unobserved:unobservedUnit');
+});
+
+test('provider settlement may not exceed even a fractional original free hold and stays atomic',()=>{
+  const b=newObservedBudget({provider:'circleci-free-private',scope:'red-cup/cashless-ci',
+    hardStop:true,sourceRef:'provider://circleci/verified-observation',
+    observedAt:'2026-10-23T22:00:00.000Z',expiresAt:'2026-10-23T23:00:00.000Z',
+    remaining:{credits:10,gbHours:20}});
+  const now='2026-10-23T22:01:00.000Z';
+  assert.equal(holdBudget(b,{jobId:'one',provider:b.provider,scope:b.scope,now,
+    units:{credits:0.1,gbHours:0.2}}).ok,true);
+  const original=structuredClone(b);
+  assert.throws(()=>settleBudget(b,{jobId:'one',state:'spent',
+    actualUnits:{credits:0.1000000005,gbHours:0.2}}),/billed usage exceeds held free units/);
+  assert.deepEqual(b,original,'failed independent free-budget settlement is strictly no-effect');
+  assert.throws(()=>settleBudget(b,{jobId:'one',state:'spent',
+    actualUnits:{credits:0.1,gbHours:0.2000000005}}),/billed usage exceeds held free units/);
+  assert.deepEqual(b,original);
+  settleBudget(b,{jobId:'one',state:'spent',actualUnits:{credits:0.1,gbHours:0.2}});
+  assert.deepEqual(b.remaining,{credits:9.9,gbHours:19.8});
+});
