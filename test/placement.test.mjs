@@ -584,6 +584,62 @@ test('capacity recovery redistributes original packet Work without displacing ea
   assert.deepEqual(recoverFleetCapacity(work,nodes,{now:NOW}),recovered);
 });
 
+test('finite Hall-feasible Work uses an interior insertion without losing mandatory original Work',()=>{
+  // Corresponds to the existing Obsmetrologia fleet/assignment assay's
+  // strictly finite indivisible-unit Hall setting; NOT a general proof for
+  // heterogeneous CPU+RAM+GPU workloads. First-eligible greedy placement:
+  // mandatory->node0, flexible->node1, bridge waits, although three are feasible.
+  const ns=Array.from({length:3},(_,i)=>({
+    id:'node'+i,state:'up',observedAt:NOW,
+    cores:1,memoryGb:2,freeDiskGb:2,bandwidthMbps:100,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'},
+  }));
+  const base={minutes:1,maxMinutes:2,effect:false,visibility:'public',
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const jobs=[
+    {...base,id:'mandatory',mustRunOn:['node0']},
+    {...base,id:'flexible',mustRunOn:['node1','node2']},
+    {...base,id:'bridge',mustRunOn:['node0','node1']},
+  ];
+  // Independent small Hall witness: every subset's work demand fits the
+  // union of its authorized hosts. No inferred edge or second live planner.
+  const hallShortfall=work=>{
+    for(let mask=1;mask<(1<<work.length);mask++){
+      const ids=work.filter((_,i)=>Boolean(mask&(1<<i)));
+      const eligible=new Set(ids.flatMap(j=>j.mustRunOn));
+      if(eligible.size<ids.length)return ids.map(j=>j.id);
+    }
+    return null;
+  };
+  assert.equal(hallShortfall(jobs),null);
+  const before=structuredClone({jobs,ns});
+  const baseline=planFleet(jobs,ns,{now:NOW});
+  assert.deepEqual(baseline.placements.map(p=>[p.jobId,p.nodeId]),[
+    ['mandatory','node0'],['flexible','node1']]);
+  const recovered=recoverFleetCapacity(jobs,ns,{now:NOW});
+  assert.deepEqual(recovered.placements.map(p=>[p.jobId,p.nodeId]),[
+    ['mandatory','node0'],['flexible','node2'],['bridge','node1']]);
+  assert.deepEqual(recovered.capacityRecovery.newlyPlaced,['bridge']);
+  assert.equal(recovered.capacityRecovery.effort.targetedReorders,2);
+  assert.equal(recovered.capacityRecovery.effort.planningPasses,3);
+  assert.equal(recovered.capacityRecovery.effort.assessmentBudget,4096);
+  assert.ok(recovered.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096);
+  assert.equal(recovered.executed,0);
+  assert.equal(recovered.leaseReceived,false);
+  assert.equal(recovered.providerBudgetHeld,false);
+  assert.deepEqual({jobs,ns},before);
+  // Remove the bridge's independent alternative: the original Hall deficit
+  // must remain a refusal, not a plausible but unauthorized third placement.
+  const impossible=jobs.map(j=>j.id==='bridge'?{...j,mustRunOn:['node0']}:j);
+  assert.deepEqual(hallShortfall(impossible),['mandatory','bridge']);
+  const denied=recoverFleetCapacity(impossible,ns,{now:NOW});
+  assert.equal(denied.proposed,2);
+  assert.equal(denied.executed,0);
+  assert.deepEqual(denied.capacityRecovery.newlyPlaced,[]);
+  assert.ok(denied.pending.some(row=>row.jobId==='bridge'));
+});
+
 test('bounded augmentation places additional source Work missed by one region-count sort',()=>{
   const nodes=[
     {id:'node0',state:'up',observedAt:NOW,cores:2,memoryGb:4,
