@@ -38,7 +38,7 @@ jobs:
             /dependencies.lock.yaml
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          repository: red-cup-engineering/continuous-delivery-services-section
+          repository: red-cup-engineering/continuous-delivery-engineering-services-section
           ref: e186963c8a4b9cfe5a90e5e33c3e6e30f56cc282
           path: section
           persist-credentials: false
