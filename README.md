@@ -188,6 +188,21 @@ readback requires reconciliation; it must not create a negative OCI,
 GCP or Cloudflare free-quota balance or disguise a charge as zero cost.
 This is an accounting boundary, not an account connection or executed job.
 
+**Exact Free-provider unit conservation.** Positive requests cannot consume
+even tiny fractional credits that the independently observed provider never
+held: a previous `+1e-9` tolerance had treated a positive request as
+affordable against **zero** balance. The original `allowance.mjs` now reads
+finite provider quota, held work, and independently measured settlement
+quantities using base-ten integer arithmetic over their existing number-wire
+representations. This admits genuine `0.3 = 0.1 + 0.2` without binary
+rounding drift, while refusing any overdraw (however small), nonfinite
+observation, unobserved unit, or changed provider balance beneath existing
+holds. All available dimensions must remain internally consistent before
+**any** new Work can reserve one. Independent per-provider receipt/authority,
+actual quotas, hard-stop entitlement, original fenced leases and external
+budget custody are unchanged. An exact source-only budget quote is NOT a
+provider allocation, a job start, a bill or an available external runner.
+
 **Read original quota before planning and hold before dispatch.** Provider
 adapters must authenticate fresh native, non-secret provider readback and
 supply an account-scoped free-only budget observation. Its `sourceRef`,

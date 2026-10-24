@@ -97,14 +97,84 @@ export function newObservedBudget({
     observedAt,expiresAt,remaining:quantities,entries:[]};
 }
 
-export function budgetAvailable(b){
-  const quantities={...b.remaining};
-  for(const e of b.entries){
-    if(e.state!=='held')continue;
-    for(const [unit,amount] of Object.entries(e.units))
-      quantities[unit]=Math.max(0,quantities[unit]-amount);
+/**
+ * Original provider units remain NUMBERs on the wire, but binary floating
+ * tolerance cannot mint even fractional free credits. Compare their shortest
+ * exact decimal source representations as base-ten integers at a common scale.
+ * All quantities first pass the existing finite, nonnegative source contract.
+ * This is arithmetic only: it witnesses no provider grants or reservations.
+ */
+const decimalQuantity = value => {
+  if(typeof value!=='number'||!Number.isFinite(value)||value<0)
+    throw new TypeError('finite nonnegative observed free units required');
+  // Integral quotas (typically CI credits) are exact and overwhelmingly
+  // common. Keep them on the cheap native safe-integer path; use BigInt
+  // only when a source actually needs fractional/exponent arithmetic.
+  if(Number.isSafeInteger(value))return {digits:value,exponent:0};
+  const [mantissa,power='0']=String(value).toLowerCase().split('e');
+  const [whole,fraction='']=mantissa.split('.');
+  return {digits:BigInt(whole+fraction),exponent:Number(power)-fraction.length};
+};
+const aligned = (left,right) => {
+  const power=Math.min(left.exponent,right.exponent);
+  return [BigInt(left.digits)*10n**BigInt(left.exponent-power),
+    BigInt(right.digits)*10n**BigInt(right.exponent-power),power];
+};
+const difference = (left,right) => {
+  if(typeof left.digits==='number'&&typeof right.digits==='number'){
+    const delta=left.digits-right.digits;
+    if(Number.isSafeInteger(delta))return {digits:delta,exponent:0};
   }
-  return quantities;
+  const [a,b,power]=aligned(left,right);
+  return {digits:a-b,exponent:power};
+};
+const largerThan = (left,right) => {
+  if(typeof left.digits==='number'&&typeof right.digits==='number')
+    return left.digits>right.digits;
+  const [a,b]=aligned(left,right);
+  return a>b;
+};
+const decimalNumber = value => typeof value.digits==='number'
+  ? value.digits : Number(value.digits.toString()+'e'+value.exponent);
+
+/** All earlier live holds must still fit the CURRENT observed provider balance.
+ * The old Math.max(0, remaining - held) concealed a provider readback shortfall,
+ * allowing unrelated proposed jobs to appear safe while a held job was at risk.
+ * Preserve honest refusal rather than treating missing/quota-inconsistent data
+ * as available units or giving a caller a fake provider entitlement.
+ */
+function observedHeadroom(b) {
+  if(!b?.remaining||typeof b.remaining!=='object'||Array.isArray(b.remaining)||
+    !Array.isArray(b.entries))
+    return {ok:false,reason:'provider-budget-observation-malformed'};
+  const amounts=new Map();
+  try {
+    for(const [unit,quantity] of Object.entries(b.remaining))
+      amounts.set(unit,decimalQuantity(quantity));
+    if(amounts.size===0)return {ok:false,reason:'provider-budget-observation-malformed'};
+    for(const entry of b.entries){
+      if(entry?.state!=='held')continue;
+      if(!entry.units||typeof entry.units!=='object'||Array.isArray(entry.units))
+        return {ok:false,reason:'provider-held-budget-record-malformed'};
+      for(const [unit,quantity] of Object.entries(entry.units)){
+        if(!amounts.has(unit))
+          return {ok:false,reason:'provider-held-budget-unit-unobserved:'+unit};
+        const rest=difference(amounts.get(unit),decimalQuantity(quantity));
+        if(rest.digits<0)
+          return {ok:false,reason:'provider-held-budget-exceeds-observed-balance:'+unit};
+        amounts.set(unit,rest);
+      }
+    }
+    return {ok:true,remaining:Object.fromEntries([...amounts].map(([unit,q])=>[unit,decimalNumber(q)])),
+      exact:amounts};
+  }catch{
+    return {ok:false,reason:'provider-budget-observation-malformed'};
+  }
+}
+export function budgetAvailable(b){
+  const reading=observedHeadroom(b);
+  if(!reading.ok)throw new TypeError(reading.reason);
+  return reading.remaining;
 }
 
 export function quoteBudget(b,{provider,scope,now,units}={}){
@@ -117,12 +187,13 @@ export function quoteBudget(b,{provider,scope,now,units}={}){
     return {ok:false,reason:'provider-budget-stale'};
   if(!units||Array.isArray(units)||typeof units!=='object'||!Object.keys(units).length)
     return {ok:false,reason:'provider-usage-unbounded'};
-  const available=budgetAvailable(b);
+  const headroom=observedHeadroom(b);
+  if(!headroom.ok)return {ok:false,reason:headroom.reason};
   for(const [unit,value] of Object.entries(units)){
-    if(!Object.hasOwn(available,unit)||typeof value!=='number'||
+    if(!headroom.exact.has(unit)||typeof value!=='number'||
       !Number.isFinite(value)||value<0)
       return {ok:false,reason:'provider-usage-unit-unmeasured:'+unit};
-    if(value>available[unit]+1e-9)
+    if(largerThan(decimalQuantity(value),headroom.exact.get(unit)))
       return {ok:false,reason:'would-overdraw-the-observed-free-allowance:'+unit};
   }
   if(!Object.values(units).some(value=>value>0))
@@ -148,7 +219,8 @@ export function settleBudget(b,{jobId,state,actualUnits={}}={}){
   if(state==='spent'){
     for(const [unit,amount] of Object.entries(actualUnits)){
       if(!Object.hasOwn(held.units,unit)||typeof amount!=='number'||
-        !Number.isFinite(amount)||amount<0||amount>held.units[unit]+1e-9)
+        !Number.isFinite(amount)||amount<0||
+        largerThan(decimalQuantity(amount),decimalQuantity(held.units[unit])))
         throw new TypeError('billed usage exceeds held free units: '+unit);
     }
     for(const unit of Object.keys(held.units))
@@ -156,11 +228,18 @@ export function settleBudget(b,{jobId,state,actualUnits={}}={}){
         throw new TypeError('settlement missing observed usage unit: '+unit);
     // Provider readback can shrink while a job is in flight. Reconcile before
     // spending; never mutate one denomination before another proves feasible.
-    for(const [unit,amount] of Object.entries(actualUnits))
-      if(!Number.isFinite(b.remaining[unit])||amount>b.remaining[unit])
+    const next={};
+    for(const [unit,amount] of Object.entries(actualUnits)){
+      if(typeof b.remaining[unit]!=='number'||!Number.isFinite(b.remaining[unit])||
+        b.remaining[unit]<0||
+        largerThan(decimalQuantity(amount),decimalQuantity(b.remaining[unit])))
         throw new TypeError('settlement exceeds observed remaining free units: '+unit);
-    for(const [unit,amount] of Object.entries(actualUnits))
-      b.remaining[unit]-=amount;
+      next[unit]=decimalNumber(difference(decimalQuantity(b.remaining[unit]),
+        decimalQuantity(amount)));
+    }
+    // Commit all denominations together only after every readback and
+    // independent observed-usage denomination has passed exact admission.
+    for(const [unit,amount] of Object.entries(next))b.remaining[unit]=amount;
   }
   held.state=state;
   if(state==='spent')held.actualUnits={...actualUnits};
