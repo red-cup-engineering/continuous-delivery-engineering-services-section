@@ -41,7 +41,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          repository: red-cup-engineering/continuous-delivery-services-section
+          repository: red-cup-engineering/continuous-delivery-engineering-services-section
           ref: ${{ github.job_workflow_sha }}
           path: .release-tools
           persist-credentials: false
