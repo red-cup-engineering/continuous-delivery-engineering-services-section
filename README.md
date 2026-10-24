@@ -294,16 +294,29 @@ credits (up to 6,000 small-Docker minutes) without a credit card, with jobs
 blocked at exhaustion rather than silently billed. This emergency independent
 hosted route is **not** a substitute for bringing up Guix/LAGOON-owned compute.
 
-**One-time native provider receiving (requires authorized account action):**
-In CircleCI Free, install the CircleCI GitHub App with *repository-limited*
-access to `red-cup-engineering/continuous-delivery-engineering-services-section` (public
-configuration source) and `red-cup-engineering/git-engineering-services-section` (private
-checkout source). Create the project for the **private Git Services repository**.
-Select this Engineering owner's `.circleci/config.yml` at protected `main`
-as its **configuration source**, and the private Git Services repository as
-**checkout source**. Supply the project checkout's normal SSH grant if the
-GitHub App onboarding requires it. Choose the GitHub App trigger preset
-**"Pushes to default branch"**; this source additionally filters to
+**Original provider receiving (requires authorized existing-account actor):**
+The CircleCI account already exists and GitHub independently confirms the
+CircleCI GitHub App installation **172175362** on Red Cup, created October 16.
+The selected repository grant, CircleCI project and native private runner
+execution are **not** independently received; do not reinstall the App or
+treat source configuration as an installed CI job. The private checkout source
+is now canonically `red-cup-engineering/git-engineering-services-section`
+(GitHub repository ID **1325533741**). The historical
+`red-cup-engineering/git-services-section` URL redirects to that ID but is not
+a qualified current project checkout name for this source gate.
+
+Through the existing CircleCI Free account, verify the App's repository-limited
+grant for `red-cup-engineering/continuous-delivery-engineering-services-section`
+(public configuration source) and the canonical private checkout source. Reuse
+an existing correctly bound project; create one only if none exists and the
+existing grant/Free-plan quota independently qualifies it. Select this original
+Engineering `.circleci/config.yml` at protected `main` as configuration
+source and the exact canonical Git Services repository as checkout source.
+If the GitHub App project still supplies the old source alias, **hold** the
+source check and reconcile the selected project identity instead of accepting
+an arbitrary redirect or relaxing the attestation. Supply the existing
+project's normal SSH checkout grant if its original onboarding requires it.
+Select **"Pushes to default branch"**, additionally gated here by
 `pipeline.git.branch == "main"`. Do not authorize billing, add a paid
 account, create a context, copy private code into the public configuration
 repository, or deploy a Worker as a stand-in.
