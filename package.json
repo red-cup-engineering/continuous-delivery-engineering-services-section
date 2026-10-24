@@ -1,5 +1,5 @@
 {
-  "name": "@red-cup-engineering/continuous-delivery-engineering-services-section",
+  "name": "@red-cup-engineering/continuous-delivery-services-section",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "yaml": "2.8.3"
   },
   "peerDependencies": {
-    "@red-cup-engineering/git-engineering-services-section": ">=0.1.12"
+    "@red-cup-engineering/git-services-section": ">=0.1.12"
   },
   "license": "MIT",
   "funding": {
@@ -22,6 +22,6 @@
     "url": "git+https://github.com/red-cup-engineering/continuous-delivery-engineering-services-section.git"
   },
   "devDependencies": {
-    "@red-cup-engineering/git-engineering-services-section": "0.1.12"
+    "@red-cup-engineering/git-services-section": "0.1.12"
   }
 }
