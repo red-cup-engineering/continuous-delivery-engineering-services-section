@@ -1045,7 +1045,10 @@ test('finite Hall oracle exposes capacity regret without inventing a second prod
     unclosed+=Number(recovered.proposed<optimum);
   }
   assert.ok(recoveredTotal>baselineTotal);
-  assert.ok(allowedMaximumTotal>=recoveredTotal);
+  assert.equal(recoveredTotal,allowedMaximumTotal,
+    'the bounded tiny-fleet original-priority search shall close all feasible'
+    +' no-displacement unit-capacity cases in the exhaustive 3x3 setting');
+  assert.equal(unclosed,0,'no finite authorized unit-capacity assignment regret');
   t.diagnostic('512 finite three-by-three authorized unit-capacity cases: baseline '+
     baselineTotal+' proposed, recovered '+recoveredTotal+', preserving-Hall-oracle '+
     allowedMaximumTotal+', improved '+improved+' cases, remaining regret '+
