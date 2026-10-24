@@ -5,10 +5,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { newLedger, newObservedBudget } from '../src/placement/allowance.mjs';
 import { place, planFleet } from '../src/placement/place.mjs';
+import { recoverFleetCapacity } from '../src/placement/recover.mjs';
 
 const args={};
 const words=process.argv.slice(2);
-const flags=new Set(['budget-stdin']);
+const flags=new Set(['budget-stdin','recover-capacity']);
 const values=new Set(['job','jobs','nodes','now','used','observed-at','plan']);
 for(let i=0;i<words.length;i++){
   const token=words[i],key=token.startsWith('--')?token.slice(2):'';
@@ -20,6 +21,8 @@ for(let i=0;i<words.length;i++){
     throw new TypeError('missing original placement argument '+token);
   args[key]=value;
 }
+if(args['recover-capacity']&&!args.jobs)
+  throw new TypeError('capacity recovery only applies to an original --jobs batch');
 if(Boolean(args.job)===Boolean(args.jobs)||!args.nodes)
   throw new TypeError('exactly one of --job or --jobs and the original --nodes required');
 const at=args.now??new Date().toISOString();
@@ -50,5 +53,7 @@ if(args['budget-stdin']){
     throw new Error('duplicate original provider scope in current budget observations');
 }
 const ctx={ledger,budgets,now:at};
-const proposal=args.jobs?planFleet(input,nodes,ctx):place(input,nodes,ctx);
+const proposal=args.jobs?
+  (args['recover-capacity']?recoverFleetCapacity(input,nodes,ctx):planFleet(input,nodes,ctx)):
+  place(input,nodes,ctx);
 process.stdout.write(JSON.stringify(proposal,(_k,v)=>v===Infinity?'unbounded':v,2)+'\n');
