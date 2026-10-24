@@ -596,7 +596,9 @@ test('capacity recovery never loses baseline Work or bypasses typed effect refus
   const baseline=planFleet(work,[cached],{now:NOW});
   const recovered=recoverFleetCapacity(work,[cached],{now:NOW});
   assert.deepEqual(recovered.placements,baseline.placements);
-  assert.equal(recovered.capacityRecovery.attempted,true);
+  assert.equal(recovered.capacityRecovery.attempted,false);
+  assert.equal(recovered.capacityRecovery.reason,'no-useful-order-change');
+  assert.equal(recovered.capacityRecovery.effort.planningPasses,1);
   assert.equal(recovered.capacityRecovery.improved,false);
   assert.equal(recovered.capacityRecovery.recoveredProposed,1);
   assert.equal(recovered.capacityRecovery.relocated.length,0);
@@ -690,4 +692,39 @@ test('original fleet CLI reads bounded SHP-unpacked Work from stdin without a sh
     assert.notEqual(wrongShape.status,0);
     assert.match(wrongShape.stderr,/input shape/u);
   }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+
+test('capacity recovery avoids needless replanning of denied and already optimal Work',()=>{
+  const host={id:'source-owned',state:'up',observedAt:NOW,
+    cores:2,memoryGb:3,freeDiskGb:5,bandwidthMbps:20,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'}};
+  const base={id:'original-unit',effect:false,
+    minutes:2,maxMinutes:7,visibility:'public',
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const all=recoverFleetCapacity([base],[host],{now:NOW});
+  assert.equal(all.capacityRecovery.attempted,false);
+  assert.equal(all.capacityRecovery.reason,'all-original-work-provisionally-placed');
+  assert.equal(all.capacityRecovery.effort.territoryAssessments,0);
+  const denied=recoverFleetCapacity([base,{...base,id:'effect',
+    effect:{kind:'provider-write'}}],[host],{now:NOW});
+  assert.equal(denied.capacityRecovery.attempted,false);
+  assert.equal(denied.capacityRecovery.reason,'no-capacity-related-pending-work');
+  assert.equal(denied.proposed,1);
+  assert.equal(denied.pending[0].reason,'effect-authority-not-received');
+  const noAdmitted=recoverFleetCapacity([
+    {...base,id:'unbounded',maxMinutes:undefined},
+    {...base,id:'typed-effect',effect:'remote-write'},
+  ],[host],{now:NOW});
+  assert.equal(noAdmitted.capacityRecovery.attempted,false);
+  assert.equal(noAdmitted.capacityRecovery.reason,'no-original-admissions');
+  assert.equal(noAdmitted.capacityRecovery.effort.planningPasses,1);
+  const oversubscribed=recoverFleetCapacity(
+    [base,{...base,id:'second'},{...base,id:'third'}],
+    [{...host,cores:1,memoryGb:1,freeDiskGb:1}],{now:NOW});
+  assert.equal(oversubscribed.proposed,1);
+  assert.equal(oversubscribed.capacityRecovery.reason,'no-useful-order-change');
+  assert.equal(oversubscribed.capacityRecovery.effort.planningPasses,1);
+  assert.equal(oversubscribed.capacityRecovery.effort.territoryAssessments,3);
 });

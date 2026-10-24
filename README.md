@@ -160,7 +160,11 @@ cost partition). If that leaves Work unplaced, a bounded second plan tries
 jobs with fewer qualified host regions first. It may reassign a flexible job
 only when **every originally provisionally placed job remains placed** and
 the same fully requalified resources admit strictly more Work. The
-`capacityRecovery` report names the newly placeable and reassigned units.
+`capacityRecovery` report names the newly placeable and reassigned units,
+with deterministic planner-pass and eligibility-assessment counters to profile
+allocation overhead. If all Work is placed, if the only pending Work was
+refused for reasons unrelated to scarce compute, or if scarcity sorting cannot
+change the job order, the planner avoids the needless second pass.
 No new node, credential, workload schema, lease, provider charge or execution
 is inferred; default `planFleet` and `--jobs` stay unchanged. Tests include
 a cached packet on a single constrained node and an uncached idle alternative,

@@ -15,7 +15,7 @@ function finiteOriginalWork(job) {
 }
 
 function availableTerritory(job, nodes, context) {
-  if (!finiteOriginalWork(job)) return Infinity;
+  if (!finiteOriginalWork(job)) return { slots: Infinity, assessments: 0 };
   // Count actual finite, certain, presently eligible node regions. This uses
   // the original place/assess authority, not an independently invented bid.
   let slots = 0;
@@ -29,7 +29,7 @@ function availableTerritory(job, nodes, context) {
       slots++;
     }
   }
-  return slots;
+  return { slots, assessments: nodes.length };
 }
 
 const originalOrder = (sourceJobs, rows) => {
@@ -47,19 +47,32 @@ const originalOrder = (sourceJobs, rows) => {
  */
 export function recoverFleetCapacity(jobs, nodes, context) {
   const baseline = planFleet(jobs, nodes, context);
-  if (!baseline.unplaced || !Array.isArray(jobs) || !Array.isArray(nodes))
-    return { ...baseline, capacityRecovery: {
+  const unchanged = (reason, assessments = 0) => ({
+    ...baseline, capacityRecovery: {
       policy: "preserve-original-admissions",
-      attempted: false, improved: false,
+      attempted: false, improved: false, reason,
       originalProposed: baseline.proposed, recoveredProposed: baseline.proposed,
       newlyPlaced: [], relocated: [],
-    } };
+      effort: { planningPasses: 1, territoryAssessments: assessments },
+    },
+  });
+  // With no initial admitted jobs, ordering cannot create free resources.
+  // Denied effects, unmeasured original jobs and probing requests cannot
+  // become executable by changing scheduling order. Avoid an extra O(jobs*nodes)
+  // calculation in these common conditions on small low-resource machines.
+  if (!baseline.unplaced) return unchanged("all-original-work-provisionally-placed");
+  if (!baseline.proposed) return unchanged("no-original-admissions");
+  if (!baseline.pending.some(p => p.reason === "no-finite-certain-original-placement"))
+    return unchanged("no-capacity-related-pending-work");
   const scarcity = jobs.map((job, index) => ({
-    job, index, territory: availableTerritory(job, nodes, context),
+    job, index, ...availableTerritory(job, nodes, context),
   }));
+  const assessments = scarcity.reduce((sum, row) => sum + row.assessments, 0);
   const alternative = scarcity.slice()
-    .sort((a, b) => a.territory - b.territory || a.index - b.index)
+    .sort((a, b) => a.slots - b.slots || a.index - b.index)
     .map(row => row.job);
+  if (alternative.every((job, index) => job.id === jobs[index].id))
+    return unchanged("no-useful-order-change", assessments);
   const candidate = planFleet(alternative, nodes, context);
   const formerlyPlaced = new Map(baseline.placements.map(p => [p.jobId, p.nodeId]));
   const nowPlaced = new Map(candidate.placements.map(p => [p.jobId, p.nodeId]));
@@ -79,6 +92,7 @@ export function recoverFleetCapacity(jobs, nodes, context) {
       policy: "preserve-original-admissions",
       attempted: true, improved,
       originalProposed: baseline.proposed, recoveredProposed: chosen.proposed,
+      effort: { planningPasses: 2, territoryAssessments: assessments },
       newlyPlaced: [...nowPlaced.keys()].filter(id => improved && !formerlyPlaced.has(id)),
       relocated: improved ? [...formerlyPlaced].filter(([id, nodeId]) =>
         nowPlaced.get(id) !== nodeId).map(([id, from]) => ({
