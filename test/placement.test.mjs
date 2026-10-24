@@ -584,6 +584,46 @@ test('capacity recovery redistributes original packet Work without displacing ea
   assert.deepEqual(recoverFleetCapacity(work,nodes,{now:NOW}),recovered);
 });
 
+test('bounded augmentation places additional source Work missed by one region-count sort',()=>{
+  const nodes=[
+    {id:'node0',state:'up',observedAt:NOW,cores:2,memoryGb:4,
+      freeDiskGb:4,bandwidthMbps:100,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'}},
+    {id:'node1',state:'up',observedAt:NOW,cores:1,memoryGb:4,
+      freeDiskGb:4,bandwidthMbps:100,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'}},
+    {id:'node2',state:'up',observedAt:NOW,cores:3,memoryGb:1,
+      freeDiskGb:4,bandwidthMbps:100,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'}},
+  ];
+  const work=(id,cores,memoryGb)=>({
+    id,minutes:1,maxMinutes:2,effect:false,visibility:'public',
+    closure:[],needs:{cores,memoryGb,freeDiskGb:0.1},
+    requires:{capabilities:['node']},
+  });
+  const jobs=[work('job0',2,1),work('job2',1,1),
+    work('job4',1,1),work('job5',1,3)];
+  const before=structuredClone({nodes,jobs});
+  const original=planFleet(jobs,nodes,{now:NOW});
+  assert.deepEqual(original.placements.map(p=>p.jobId),['job0','job2','job4']);
+  assert.equal(original.proposed,3);
+  // The old one-sort method orders job0 before job5: both have two eligible
+  // nodes. Retrying job5 at the front now exposes a lawful 4/4 arrangement.
+  const recovered=recoverFleetCapacity(jobs,nodes,{now:NOW});
+  assert.equal(recovered.proposed,4);
+  assert.deepEqual(recovered.placements.map(p=>[p.jobId,p.nodeId]),[
+    ['job0','node2'],['job2','node0'],['job4','node1'],['job5','node0']]);
+  assert.deepEqual(recovered.capacityRecovery.newlyPlaced,['job5']);
+  assert.equal(recovered.capacityRecovery.improved,true);
+  assert.equal(recovered.capacityRecovery.effort.targetedReorders,1);
+  assert.equal(recovered.capacityRecovery.effort.planningPasses,3);
+  assert.ok(recovered.capacityRecovery.effort.planningPasses<=10);
+  assert.equal(recovered.executed,0);
+  assert.equal(recovered.leaseReceived,false);
+  assert.deepEqual({nodes,jobs},before);
+  assert.deepEqual(recoverFleetCapacity(jobs,nodes,{now:NOW}),recovered);
+});
+
 test('capacity recovery never loses baseline Work or bypasses typed effect refusal',()=>{
   const cached={id:'only-node',state:'up',observedAt:NOW,cores:1,
     memoryGb:2,freeDiskGb:2,bandwidthMbps:100,closureCache:[],
@@ -798,4 +838,22 @@ test('lease table accepts arbitrary JSON job names as own properties without pro
   assert.equal(Object.hasOwn(received.jobs,'__proto__'),true);
   assert.equal(accept(received,{jobId:'__proto__',nodeId:'node',token:g.token,now:NOW}).ok,true);
   assert.equal(grant(newTable(),{jobId:'toString',nodeId:'node',now:NOW,ttlMs:1000}).ok,true);
+});
+
+test('augmentation effort is bounded for a large source Work batch',()=>{
+  const base={id:'job',effect:false,minutes:1,maxMinutes:2,
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:0.1},
+    requires:{capabilities:['node']}};
+  const nodes=Array.from({length:8},(_,i)=>({
+    id:'n'+i,observedAt:NOW,state:'up',cores:1,memoryGb:1,
+    freeDiskGb:1,bandwidthMbps:100,closureCache:[],cost:{kind:'held'},
+    capabilities:['node'],
+  }));
+  const jobs=Array.from({length:150},(_,i)=>({...base,id:'job'+i}));
+  const result=recoverFleetCapacity(jobs,nodes,{now:NOW});
+  assert.equal(result.proposed,8);
+  assert.equal(result.capacityRecovery.effort.territoryAssessments,1200);
+  assert.ok(result.capacityRecovery.effort.planningPasses<=5);
+  assert.ok(result.capacityRecovery.effort.targetedReorders<=3);
+  assert.equal(result.executed,0);
 });
