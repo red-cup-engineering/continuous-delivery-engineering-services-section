@@ -6,6 +6,10 @@
 // Never publishes a lease, bids, changes provider holds or authorizes an effect.
 import { assess, planFleet } from "./place.mjs";
 
+// Upper bound on *all* optional original-assess calls beyond the baseline plan:
+// one territory scan plus any fully requalified alternate planFleet passes.
+const OPTIONAL_ASSESSMENT_BUDGET = 4_096;
+
 function finiteOriginalWork(job) {
   return job && !Boolean(job.effect) && Array.isArray(job.closure) &&
     Number.isFinite(job.minutes) && job.minutes > 0 &&
@@ -53,7 +57,9 @@ export function recoverFleetCapacity(jobs, nodes, context) {
       attempted: false, improved: false, reason,
       originalProposed: baseline.proposed, recoveredProposed: baseline.proposed,
       newlyPlaced: [], relocated: [],
-      effort: { planningPasses: 1, territoryAssessments: assessments },
+      effort: { planningPasses: 1, territoryAssessments: assessments,
+        assessmentBudget: OPTIONAL_ASSESSMENT_BUDGET,
+        optionalAssessmentsUpperBound: assessments },
     },
   });
   // With no initial admitted jobs, ordering cannot create free resources.
@@ -64,14 +70,16 @@ export function recoverFleetCapacity(jobs, nodes, context) {
   if (!baseline.proposed) return unchanged("no-original-admissions");
   if (!baseline.pending.some(p => p.reason === "no-finite-certain-original-placement"))
     return unchanged("no-capacity-related-pending-work");
-  // A large source-declared queue may already cost substantial baseline planning.
-  // Do not add O(jobs × nodes) eligibility probes when the optional recovery
-  // search exceeds its deterministic CPU-work budget. Preserve every original
-  // provisional placement and expose the refusal instead of guessing capacity.
-  const territoryBudget = 4_096;
-  const territoryVolume = jobs.length * nodes.length;
-  if (territoryVolume > territoryBudget)
-    return unchanged("territory-assessment-budget-exceeded");
+  // The baseline planner has already done its job and is outside this optional
+  // budget. The previous limit capped *only* territory probes while permitting
+  // several complete plans, so its reported 4,096 "assessment ceiling" was false.
+  // Every finite original job gets at most one assess per node in each call to
+  // planFleet; unsupported/effectful jobs do not enter that loop.
+  const perPassUpperBound = jobs.filter(finiteOriginalWork).length * nodes.length;
+  // If even one territory scan plus one independent replanning would exceed
+  // the budget, skip the speculative scan entirely; never lose baseline Work.
+  if (2 * perPassUpperBound > OPTIONAL_ASSESSMENT_BUDGET)
+    return unchanged("optional-assessment-budget-insufficient-for-replan");
   const scarcity = jobs.map((job, index) => ({
     job, index, ...availableTerritory(job, nodes, context),
   }));
@@ -82,11 +90,16 @@ export function recoverFleetCapacity(jobs, nodes, context) {
   const formerlyPlaced = new Map(baseline.placements.map(p => [p.jobId, p.nodeId]));
   let best = baseline, bestOrder = jobs;
   let planningPasses = 1, targetedReorders = 0, acceptedAlternatives = 0;
+  let remainingOptionalAssessments = OPTIONAL_ASSESSMENT_BUDGET - assessments;
+  let replanAssessmentUpperBound = 0;
   const triedOrders = new Set([JSON.stringify(jobs.map(job => job.id))]);
   const propose = order => {
     const key = JSON.stringify(order.map(job => job.id));
     if (triedOrders.has(key)) return false;
+    if (remainingOptionalAssessments < perPassUpperBound) return false;
     triedOrders.add(key);
+    remainingOptionalAssessments -= perPassUpperBound;
+    replanAssessmentUpperBound += perPassUpperBound;
     planningPasses++;
     // Retain original planFleet as the ONLY authority for provisional resource
     // and provider-budget holds, egress, eligibility and effect refusals.
@@ -112,10 +125,15 @@ export function recoverFleetCapacity(jobs, nodes, context) {
   // the same eligible-region cardinality. Try bounded augmenting reorders,
   // putting an actually waiting unit first, then delegating all constraints
   // and budget changes to original planFleet again.
-  const volume = jobs.length * nodes.length;
+  // The territory scan and the sorted attempt have ALREADY spent their part
+  // of the same budget. Leave room for only as many targeted augmentations as
+  // their worst-case complete original-placer calls permit.
   const maximumTargetTrials = nodes.length > 1
-    ? Math.min(8, Math.floor(territoryBudget / Math.max(1, volume))) : 0;
-  for (let i = 0; i < maximumTargetTrials && best.proposed < jobs.length; i++) {
+    ? Math.min(8, Math.floor(remainingOptionalAssessments /
+        Math.max(1, perPassUpperBound))) : 0;
+  for (let i = 0; i < maximumTargetTrials &&
+       remainingOptionalAssessments >= perPassUpperBound &&
+       best.proposed < jobs.length; i++) {
     const waiting = new Set(best.pending
       .filter(p => p.reason === "no-finite-certain-original-placement")
       .map(p => p.jobId));
@@ -151,7 +169,9 @@ export function recoverFleetCapacity(jobs, nodes, context) {
       ...(planningPasses === 1 ? { reason: "no-useful-order-change" } : {}),
       originalProposed: baseline.proposed, recoveredProposed: chosen.proposed,
       effort: { planningPasses, territoryAssessments: assessments,
-        targetedReorders, acceptedAlternatives },
+        targetedReorders, acceptedAlternatives,
+        assessmentBudget: OPTIONAL_ASSESSMENT_BUDGET,
+        optionalAssessmentsUpperBound: assessments + replanAssessmentUpperBound },
       newlyPlaced: improved ? jobs.map(job => job.id)
         .filter(id => !formerlyPlaced.has(id) && selected.has(id)) : [],
       relocated: improved ? [...formerlyPlaced].filter(([id, nodeId]) =>
