@@ -855,3 +855,58 @@ artifact transfer, receiving assertions and time limits remain intact. `HOME`
 and hosted action-internal supplier paths are not reconfigured. This is an
 authored-path admission, not confinement of arbitrary test programs or a claim
 that other reusable workflows have already received the same migration.
+
+## Autosell: `derive-market-offers.yml`
+
+A FOSS package that declares `package.json#x-market` is sold as a hosted x402
+service without anyone writing its market offer. This reusable workflow derives
+the offer from the package, reconciles it with the live catalog, and opens (or
+updates) one pull request in the catalog repository. It never merges, never
+edits a catalog in place and never writes to the calling repository. The
+derivation is `apps/derive-market-offers.mjs` of
+[x402-engineering-services-section](https://github.com/red-cup-engineering/x402-engineering-services-section)
+(see its "Autosell" section for `x-market`, the licence gate, the rendanheyi
+service-offering link and the Hoare program contract), checked out at the pinned
+commit `x402-ref`, as `change-test` checks out its controller.
+
+It lives here, not in the x402 section, because Continuous Delivery is the
+house's one hired CI/CD owner (callers pin its workflows by commit and supply
+explicit runner labels) and because this repository is public: a private
+repository's reusable workflow is callable only inside its own organization,
+and packages that should be sold live in several.
+
+Call it on push to the package's default branch, **not** on `pull_request`:
+derivation imports the package's own code. The step that imports it holds no
+token and no git credential; the catalog write is the last, separate job.
+
+```yaml
+name: derive-market-offers
+on:
+  push:
+    branches: [main]
+jobs:
+  market:
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/derive-market-offers.yml@<commit>
+    with:
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
+      x402-ref: <40-hex commit of x402-engineering-services-section>
+      catalog-repository: <owner/repo holding the catalog file>
+      catalog-path: data/catalog.json
+      agency-checkouts: '[{"repository":"<owner/repo of the enterprise and office records>","ref":"<commit>","path":"agency"}]'
+      agency-index: agency/<path to the agency index JSON>
+    secrets:
+      catalog-token: ${{ secrets.MARKET_CATALOG_TOKEN }}     # contents:write + pull-requests:write on the catalog repository only
+      house-read-token: ${{ secrets.HOUSE_READ_TOKEN }}      # contents:read on the x402 source and the agency repositories
+```
+
+No catalog repository is named in the workflow; the caller supplies it. The
+live catalog (`data/catalog.json`) is held by
+`causeway-services/public-market-services-section`, the `parameters` submodule
+of the market site (`market.561.group`, whose repository now resolves to
+`red-cup-engineering/market.561.group`), so that is the repository whose pull
+request is reviewed. A missing token, an unpinned `x402-ref`, or a package that is
+refused (no OSI licence, no seller enterprise record, unknown service offering)
+fails the run with the reason in the job summary; whatever else derived is
+still proposed. The pull request is the review: merging it puts the listed
+offers on sale as declared, and a newly derived offer should start
+`saleStatus: "held"`.
