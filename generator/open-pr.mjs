@@ -98,6 +98,10 @@ export async function verifyGeneratedTreeFrames(proposal,sourceTree,targetTree,r
 }
 
 /** Receive a configured no-billing runner before proposing workflow callers. */
+// Only standard Ubuntu images admitted by this source-owned zero-spend route.
+export const isPublicStandardRunner = labels => Array.isArray(labels) && labels.length === 1
+  && ['ubuntu-latest', 'ubuntu-24.04'].includes(labels[0]);
+
 export async function receiveRunnerSelection({repo,runsOn,request,repositoryRecord}) {
   if(typeof repo!=='string'||!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo)
       ||!Array.isArray(runsOn)||!runsOn.length||runsOn.some(label=>typeof label!=='string'||!label.trim()))
@@ -106,7 +110,7 @@ export async function receiveRunnerSelection({repo,runsOn,request,repositoryReco
   if(owner?.full_name!==repo||!Number.isSafeInteger(owner.id))throw new Error('runner repository identity differs');
   // Standard Ubuntu execution is free for an explicitly observed public repository.
   // A private caller never inherits the public supplier's execution entitlement.
-  if(owner.visibility==='public'&&runsOn.length===1&&runsOn[0]==='ubuntu-latest')
+  if(owner.visibility==='public'&&isPublicStandardRunner(runsOn))
     return {repository:repo,labels:runsOn,execution:'public-standard',billingActivation:false,executed:false};
   if(!runsOn.includes('self-hosted'))throw new Error('private workflow callers require registered house runner labels');
   const observation=await request('GET',`/repos/${repo}/actions/runners?per_page=100`);

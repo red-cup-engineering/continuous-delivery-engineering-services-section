@@ -21,7 +21,7 @@ from `package.json` or qualify a downstream composition.
 The public `agent-work-contract` job now executes only the full owner-selected
 standalone, dependency-closed source-contract suite: generator/rendering,
 retained-runner graph analysis, node-package interface, and provider-native
-Cloud Build configuration. The full `node-package` **reusable workflow** still
+Cloud Build configuration. The full CD private-composition suite still
 requires a caller-supplied, observed self-hosted runner and original composed
 Git-services 4.1.1 dependency. It is **not** an automatic job of this public
 push/pull_request workflow: that previous wiring left the overall run queued
@@ -34,7 +34,12 @@ Use `node generator/generate-ci.mjs . --audit-runners --public-repo` to audit
 this source owner's exceptional runner route. This exception does not change
 private consumers' own self-hosted runner requirements, the exact-source
 build receiver, the Guix/LAGOON release path, or installed customer acceptance.
-No CI result is implied by a runner selector alone.
+For other verified public source consumers, the existing caller generator
+accepts an explicit publicRepository option with ubuntu-24.04 or ubuntu-latest.
+Rendering, static audit and live source receiving share that finite selector;
+the live receiver checks the consumer repository identity and visibility again.
+Private source, larger runner labels and effectful release/sync generation do
+not inherit that route. No CI result is implied by a runner selector alone.
 
 ## Release integrity: no ghost packages or sacrificed dependencies
 

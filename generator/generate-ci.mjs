@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
-import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames, receiveRunnerSelection, githubRequest, reconcileRetiredIntakeFleet } from './open-pr.mjs';
+import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames, receiveRunnerSelection, isPublicStandardRunner, githubRequest, reconcileRetiredIntakeFleet } from './open-pr.mjs';
 
 export const REUSABLE = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
 // The generated caller hires this exact source revision, never a moving branch.
@@ -86,9 +86,10 @@ const job = (id, file, withs = {}, ref = REF, condition) => {
     + `    uses: ${REUSABLE}/${file}@${revision(ref)}\n` + (w ? `    with:\n${w}` : '');
 };
 
-export function renderCi(sel, { ref = REF, runsOn, nodePackage } = {}) {
+export function renderCi(sel, { ref = REF, runsOn, nodePackage, publicRepository = false } = {}) {
   const jobs = [];
-  const runner = {'runs-on': runnerLabels(runsOn)};
+  const runner = {'runs-on': publicRepository === true && isPublicStandardRunner(runsOn)
+    ? JSON.stringify(JSON.stringify(runsOn)) : runnerLabels(runsOn)};
   if (sel.node) {
     let withs=runner, secrets='';
     if(nodePackage!==undefined){
@@ -288,8 +289,7 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
           report('dynamic runner selector has no statically proven house machine identity');
           continue;
         }
-        if (publicRepository && typeof selection === 'string'
-            && /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(selection)) continue;
+        if (publicRepository === true && isPublicStandardRunner(Array.isArray(selection) ? selection : [selection])) continue;
         try { runnerLabels(Array.isArray(selection) ? selection : [selection]); }
         catch { report('job does not select an explicitly named self-hosted house machine/pool'); }
       } else if (typeof job.uses === 'string' && (job.uses.startsWith(shared) || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
@@ -300,9 +300,7 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
         } else {
           let parsed;
           try { parsed = JSON.parse(value); } catch { parsed = undefined; }
-          if (publicRepository && Array.isArray(parsed) && parsed.length === 1
-              && typeof parsed[0] === 'string'
-              && /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(parsed[0])) continue;
+          if (publicRepository === true && isPublicStandardRunner(parsed)) continue;
           try { runnerLabels(parsed); } catch {
             report('shared delivery caller has no explicit house runner input');
           }
