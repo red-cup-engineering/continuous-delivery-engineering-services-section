@@ -542,3 +542,102 @@ test('the existing placement CLI reads a complete original office shift without 
     ])assert.notEqual(run(...flags).status,0);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test('capacity recovery redistributes original packet Work without displacing earlier admitted Work',()=>{
+  const packetNi='ni:///sha-256;'+'a'.repeat(43);
+  const nodes=[
+    {id:'cached-node',state:'up',observedAt:NOW,cores:1,memoryGb:2,
+      freeDiskGb:2,bandwidthMbps:100,closureCache:[packetNi],
+      capabilities:['node'],cost:{kind:'held'}},
+    {id:'spare-node',state:'up',observedAt:NOW,cores:1,memoryGb:2,
+      freeDiskGb:2,bandwidthMbps:2,closureCache:[],
+      capabilities:['node'],cost:{kind:'held'}},
+  ];
+  const original=(id,closure)=>({
+    id,minutes:2,maxMinutes:7,effect:false,visibility:'public',
+    closure,needs:{cores:1,memoryGb:1,freeDiskGb:0.5},
+    requires:{capabilities:['node']},
+  });
+  const flexible=original('work-part-0',[{id:packetNi,sizeMb:15}]);
+  const constrained={...original('work-part-1',[]),mustRunOn:['cached-node']};
+  const work=[flexible,constrained];
+  const beforeNodes=structuredClone(nodes),beforeWork=structuredClone(work);
+  const baseline=planFleet(work,nodes,{now:NOW});
+  assert.deepEqual(baseline.placements.map(p=>[p.jobId,p.nodeId]),
+    [['work-part-0','cached-node']]);
+  assert.equal(baseline.unplaced,1);
+  const recovered=recoverFleetCapacity(work,nodes,{now:NOW});
+  assert.deepEqual(recovered.placements.map(p=>[p.jobId,p.nodeId]),
+    [['work-part-0','spare-node'],['work-part-1','cached-node']]);
+  assert.equal(recovered.proposed,2);
+  assert.equal(recovered.unplaced,0);
+  assert.equal(recovered.executed,0);
+  assert.equal(recovered.providerBudgetHeld,false);
+  assert.equal(recovered.leaseReceived,false);
+  assert.deepEqual(recovered.capacityRecovery.newlyPlaced,['work-part-1']);
+  assert.deepEqual(recovered.capacityRecovery.relocated,
+    [{jobId:'work-part-0',from:'cached-node',to:'spare-node'}]);
+  assert.deepEqual(work,beforeWork);
+  assert.deepEqual(nodes,beforeNodes);
+  assert.deepEqual(recoverFleetCapacity(work,nodes,{now:NOW}),recovered);
+});
+
+test('capacity recovery never loses baseline Work or bypasses typed effect refusal',()=>{
+  const cached={id:'only-node',state:'up',observedAt:NOW,cores:1,
+    memoryGb:2,freeDiskGb:2,bandwidthMbps:100,closureCache:[],
+    capabilities:['node'],cost:{kind:'held'}};
+  const original={id:'first',effect:false,minutes:2,maxMinutes:7,
+    closure:[],needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']}};
+  const other={...original,id:'second'};
+  const work=[original,other,{...original,id:'deploy',effect:{kind:'provider-write'}}];
+  const baseline=planFleet(work,[cached],{now:NOW});
+  const recovered=recoverFleetCapacity(work,[cached],{now:NOW});
+  assert.deepEqual(recovered.placements,baseline.placements);
+  assert.equal(recovered.capacityRecovery.attempted,true);
+  assert.equal(recovered.capacityRecovery.improved,false);
+  assert.equal(recovered.capacityRecovery.recoveredProposed,1);
+  assert.equal(recovered.capacityRecovery.relocated.length,0);
+  assert.deepEqual(recovered.pending.map(p=>p.jobId),['second','deploy']);
+  assert.ok(recovered.pending.find(p=>p.jobId==='deploy').reason.includes('effect'));
+});
+
+test('opt-in capacity recovery is callable through original placement command',async()=>{
+  const {spawnSync}=await import('node:child_process');
+  const {mkdtempSync,mkdirSync,writeFileSync,rmSync}=await import('node:fs');
+  const {join}=await import('node:path');
+  const {tmpdir}=await import('node:os');
+  const root=mkdtempSync(join(tmpdir(),'recover-real-fleet-'));
+  try{
+    const nodes=join(root,'nodes');mkdirSync(nodes);
+    for(const n of [
+      {id:'cached',state:'up',observedAt:NOW,cores:1,memoryGb:2,
+        freeDiskGb:2,bandwidthMbps:100,closureCache:['article'],
+        capabilities:['node'],cost:{kind:'held'}},
+      {id:'spare',state:'up',observedAt:NOW,cores:1,memoryGb:2,
+        freeDiskGb:2,bandwidthMbps:2,closureCache:[],
+        capabilities:['node'],cost:{kind:'held'}},
+    ])writeFileSync(join(nodes,n.id+'.json'),JSON.stringify(n));
+    const base={minutes:2,maxMinutes:7,closure:[{id:'article',sizeMb:15}],
+      effect:false,needs:{cores:1,memoryGb:1,freeDiskGb:0.5},
+      requires:{capabilities:['node']}};
+    const jobs=join(root,'jobs.json');
+    writeFileSync(jobs,JSON.stringify([{...base,id:'flexible'},
+      {...base,id:'constrained',closure:[],mustRunOn:['cached']}]));
+    const script=new URL('../scripts/place-job.mjs',import.meta.url).pathname;
+    const run=(...args)=>spawnSync(process.execPath,[script,...args],{
+      encoding:'utf8',timeout:10000,
+    });
+    const before=run('--jobs',jobs,'--nodes',nodes,'--now',NOW);
+    const after=run('--jobs',jobs,'--nodes',nodes,'--now',NOW,
+      '--recover-capacity');
+    assert.equal(before.status,0,before.stderr);
+    assert.equal(after.status,0,after.stderr);
+    assert.equal(JSON.parse(before.stdout).proposed,1);
+    assert.equal(JSON.parse(after.stdout).proposed,2);
+    assert.equal(JSON.parse(after.stdout).capacityRecovery.improved,true);
+    assert.notEqual(run('--job',jobs,'--nodes',nodes,'--now',NOW,
+      '--recover-capacity').status,0);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
