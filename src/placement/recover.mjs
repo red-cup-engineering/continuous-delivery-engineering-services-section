@@ -64,6 +64,14 @@ export function recoverFleetCapacity(jobs, nodes, context) {
   if (!baseline.proposed) return unchanged("no-original-admissions");
   if (!baseline.pending.some(p => p.reason === "no-finite-certain-original-placement"))
     return unchanged("no-capacity-related-pending-work");
+  // A large source-declared queue may already cost substantial baseline planning.
+  // Do not add O(jobs × nodes) eligibility probes when the optional recovery
+  // search exceeds its deterministic CPU-work budget. Preserve every original
+  // provisional placement and expose the refusal instead of guessing capacity.
+  const territoryBudget = 4_096;
+  const territoryVolume = jobs.length * nodes.length;
+  if (territoryVolume > territoryBudget)
+    return unchanged("territory-assessment-budget-exceeded");
   const scarcity = jobs.map((job, index) => ({
     job, index, ...availableTerritory(job, nodes, context),
   }));
@@ -106,7 +114,7 @@ export function recoverFleetCapacity(jobs, nodes, context) {
   // and budget changes to original planFleet again.
   const volume = jobs.length * nodes.length;
   const maximumTargetTrials = nodes.length > 1
-    ? Math.min(8, Math.floor(4_096 / Math.max(1, volume))) : 0;
+    ? Math.min(8, Math.floor(territoryBudget / Math.max(1, volume))) : 0;
   for (let i = 0; i < maximumTargetTrials && best.proposed < jobs.length; i++) {
     const waiting = new Set(best.pending
       .filter(p => p.reason === "no-finite-certain-original-placement")
