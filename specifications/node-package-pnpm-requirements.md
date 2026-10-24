@@ -13,3 +13,5 @@ The private AOE consumer has an exact PNPM workspace lock and registry-scoped de
 
 Receiving: unchanged npm workflow tests; executable fake-provider cases for exact pin, frozen lock, credential confinement/removal and failures; a real pinned PNPM frozen install and native AOE tests; actual GitHub runner id/labels/scope and completed exact-source job after independent source review.
 
+
+- NP-10. Public source-only callers may explicitly select the standard Ubuntu 24.04 or latest runner through the existing generator. Generation and static audit shall use the same finite selector as live admission. Public generation is not evidence of public repository ownership: the existing source receiver shall re-read exact repository identity and visibility before any write and refuse a private hosted selection. Larger, unknown and other platform labels are unsupported, not assumed zero-spend. Private callers and effectful release/sync generation retain house-runner admission. A completed source check remains distinct from packed, installed and live consumer receiving.

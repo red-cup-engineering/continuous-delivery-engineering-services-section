@@ -292,3 +292,81 @@ test('release: a committed binding generates a caller of release-publish.yml, an
   const out = generate(d, { runsOn: labels, workflows: ['release'] });
   assert.ok(out.files['.github/workflows/release.yml']);
 });
+
+test('explicit public source callers share standard Ubuntu selection across generation and audit',()=>{
+ for(const label of ['ubuntu-latest','ubuntu-24.04']){
+  const rendered=renderCiSource({node:true,lean:[],content:false},{runsOn:[label],publicRepository:true});
+  const parsed=YAML.parse(rendered);
+  assert.equal(parsed.jobs['node-package'].with['runs-on'],JSON.stringify([label]));
+  const root=fixture({'.github/workflows/ci.yml':rendered});
+  assert.deepEqual(auditRunnerRouting(root,{publicRepository:true}),[]);
+  assert.equal(auditRunnerRouting(root).length,1);
+ }
+ for(const label of ['ubuntu-large','ubuntu-24.04-16core','windows-latest','macos-latest']){
+  assert.throws(()=>renderCiSource({node:true,lean:[],content:false},{runsOn:[label],publicRepository:true}));
+  const root=fixture({'.github/workflows/ci.yml':`on: [push]\njobs:\n  check:\n    runs-on: ${label}\n    steps: [{run: true}]\n`});
+  assert.equal(auditRunnerRouting(root,{publicRepository:true}).length,1);
+ }
+ for(const visibility of [false,undefined,'true'])
+  assert.throws(()=>renderCiSource({node:true,lean:[],content:false},{runsOn:['ubuntu-24.04'],publicRepository:visibility}));
+});
+
+
+test('public Ubuntu receiving verifies the actual consumer and never borrows supplier visibility',async()=>{
+ const {receiveRunnerSelection}=await import('../generator/open-pr.mjs');
+ const repo='owner/consumer';
+ for(const label of ['ubuntu-latest','ubuntu-24.04']){
+  const calls=[];
+  const request=async(method,url)=>{calls.push({method,url});return {id:1,full_name:repo,visibility:'public'};};
+  const receipt=await receiveRunnerSelection({repo,runsOn:[label],request});
+  assert.equal(receipt.execution,'public-standard');assert.equal(receipt.executed,false);
+  assert.deepEqual(calls,[{method:'GET',url:'/repos/'+repo}]);
+  for(const record of [{id:1,full_name:repo,visibility:'private'},{id:1,full_name:'other/repo',visibility:'public'}])
+   await assert.rejects(receiveRunnerSelection({repo,runsOn:[label],request:async()=>record}));
+ }
+ for(const label of ['ubuntu-24.04-large','ubuntu-24.04-16core','windows-latest','macos-latest'])
+  await assert.rejects(receiveRunnerSelection({repo,runsOn:[label],request:async()=>({id:1,full_name:repo,visibility:'public'})}));
+});
+
+test('public source generation forwards the bounded runner to every selected checker',()=>{
+ const root=fixture({'package.json':'{}','lakefile.lean':'', 'README.md':'[package](package.json)'});
+ for(const label of ['ubuntu-latest','ubuntu-24.04']){
+  const options={runsOn:[label],publicRepository:true,workflows:['ci']};
+  const generated=generateSource(root,options);
+  assert.deepEqual(Object.keys(generated.files),['.github/workflows/ci.yml']);
+  const workflow=YAML.parse(generated.files['.github/workflows/ci.yml']);
+  assert.deepEqual(Object.keys(workflow.jobs),['node-package','lean','content']);
+  for(const job of Object.values(workflow.jobs))
+   assert.equal(job.with['runs-on'],JSON.stringify([label]));
+  const received=fixture(generated.files);
+  assert.deepEqual(auditRunnerRouting(received,{publicRepository:true}),[]);
+  assert.equal(auditRunnerRouting(received).length,3);
+ }
+});
+
+test('public opt-in does not admit effectful sync or release generation on hosted runners',()=>{
+ const root=fixture({'package.json':'{}','.gitmodules':'',
+  'release-closure.json':JSON.stringify({packages:['@x/a']})});
+ for(const label of ['ubuntu-latest','ubuntu-24.04']){
+  for(const workflows of [['sync'],['release'],['ci','sync'],['ci','release']])
+   assert.throws(()=>generateSource(root,{runsOn:[label],publicRepository:true,workflows}),
+    /runner labels|self-hosted runner|fallback/);
+ }
+ for(const workflows of [['sync'],['release']]){
+  const generated=generateSource(root,{runsOn,publicRepository:true,workflows});
+  assert.deepEqual(Object.keys(generated.files),[`.github/workflows/${workflows[0]}.yml`]);
+ }
+});
+
+test('public runner audit admits singleton standard selectors but refuses larger or combined selectors',()=>{
+ for(const labels of [['ubuntu-latest'],['ubuntu-24.04'],['ubuntu-24.04','ubuntu-latest'],
+  ['ubuntu-24.04','self-hosted'],['ubuntu-24.04-16core'],['windows-latest'],['macos-latest']]){
+  const direct=fixture({'.github/workflows/check.yml':YAML.stringify({on:['push'],jobs:{check:{
+   'runs-on':labels,steps:[{run:'true'}]}}})});
+  const reusable=fixture({'.github/workflows/check.yml':YAML.stringify({on:['push'],jobs:{check:{
+   uses:`${REUSABLE}/node-package.yml@${REF}`,with:{'runs-on':JSON.stringify(labels)}}}})});
+  const admitted=labels.length===1&&['ubuntu-latest','ubuntu-24.04'].includes(labels[0]);
+  for(const root of [direct,reusable])
+   assert.equal(auditRunnerRouting(root,{publicRepository:true}).length,admitted?0:1);
+ }
+});
