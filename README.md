@@ -166,7 +166,15 @@ allocation overhead. If all Work is placed, or the only pending Work was refused
 unrelated to scarce compute, the planner avoids extra search. A bounded
 augmenting reorder now also handles distinct CPU/memory footprints even when
 eligible-node counts are equal and a single cardinality sort cannot improve
-throughput. Every candidate is rechecked by original `planFleet`; it is
+throughput. When all front insertions fail, the same bounded search can insert
+a waiting original Work unit *between* previously attempted priorities.
+The 3-job/3-one-core-node regression is grounded in Lenticule Science's
+[existing finite Hall eligibility assay](https://github.com/lenticule-science/obsmetrologia/blob/main/docs/preprints/assays/feathers-fleets-farms-agent-check.py):
+baseline 2/3, restored 3/3 with the earlier mandatory Work preserved; a
+genuinely infeasible missing-edge variant remains 2/3 and is refused. Hall's
+unit-capacity criterion is a **test oracle only** here: it is not a matching
+solver, a proof for heterogeneous resources, a new placement authority, or
+production Work. Every candidate is rechecked by original `planFleet`; it is
 accepted only when all previously provisionally admitted Work stays admitted
 and strictly more original units fit. The optional eligibility scan and every alternate original `planFleet` call
 share ONE conservative upper bound of 4,096 `assess` operations beyond the
