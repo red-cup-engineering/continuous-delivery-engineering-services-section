@@ -859,6 +859,39 @@ test('augmentation effort is bounded for a large source Work batch',()=>{
 });
 
 
+test('large Work fleets skip expensive optional territory search without losing original placements',()=>{
+  // 66 real-shape source-declared units and 65 possible resource regions:
+  // a 4,290-assessment recovery scan is beyond the configured 4,096 budget.
+  const nodes=Array.from({length:65},(_,i)=>({
+    id:'held-node-'+i,state:'up',observedAt:NOW,
+    cores:1,memoryGb:2,freeDiskGb:2,bandwidthMbps:100,
+    closureCache:[],capabilities:['node'],cost:{kind:'held'},
+  }));
+  const jobs=Array.from({length:66},(_,i)=>({
+    id:'original-work-'+i,minutes:1,maxMinutes:2,effect:false,
+    visibility:'public',closure:[],
+    needs:{cores:1,memoryGb:1,freeDiskGb:1},
+    requires:{capabilities:['node']},
+  }));
+  const before=structuredClone({nodes,jobs});
+  const baseline=planFleet(jobs,nodes,{now:NOW});
+  assert.equal(baseline.proposed,65);
+  assert.equal(baseline.unplaced,1);
+  const recovered=recoverFleetCapacity(jobs,nodes,{now:NOW});
+  assert.deepEqual(recovered.placements,baseline.placements);
+  assert.deepEqual(recovered.pending,baseline.pending);
+  assert.deepEqual(recovered.residualResources,baseline.residualResources);
+  assert.equal(recovered.capacityRecovery.attempted,false);
+  assert.equal(recovered.capacityRecovery.reason,'territory-assessment-budget-exceeded');
+  assert.deepEqual(recovered.capacityRecovery.effort,{
+    planningPasses:1,territoryAssessments:0,
+  });
+  assert.equal(recovered.executed,0);
+  assert.equal(recovered.leaseReceived,false);
+  assert.equal(recovered.providerBudgetHeld,false);
+  assert.deepEqual({nodes,jobs},before);
+});
+
 test('bounded recovery preserves every baseline admission over 400 heterogeneous Work fixtures',t=>{
   let state=0x5612026;
   const random=()=>{
