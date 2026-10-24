@@ -68,35 +68,87 @@ export function recoverFleetCapacity(jobs, nodes, context) {
     job, index, ...availableTerritory(job, nodes, context),
   }));
   const assessments = scarcity.reduce((sum, row) => sum + row.assessments, 0);
-  const alternative = scarcity.slice()
-    .sort((a, b) => a.slots - b.slots || a.index - b.index)
-    .map(row => row.job);
-  if (alternative.every((job, index) => job.id === jobs[index].id))
-    return unchanged("no-useful-order-change", assessments);
-  const candidate = planFleet(alternative, nodes, context);
+  const cardinality = slots => slots === 0 ? Infinity : slots;
+  const byTerritory = (a, b) =>
+    cardinality(a.slots) - cardinality(b.slots) || a.index - b.index;
   const formerlyPlaced = new Map(baseline.placements.map(p => [p.jobId, p.nodeId]));
-  const nowPlaced = new Map(candidate.placements.map(p => [p.jobId, p.nodeId]));
-  const originalAdmissionsPreserved = [...formerlyPlaced.keys()]
-    .every(id => nowPlaced.has(id));
-  const improved = originalAdmissionsPreserved &&
-    candidate.proposed > baseline.proposed;
+  let best = baseline, bestOrder = jobs;
+  let planningPasses = 1, targetedReorders = 0, acceptedAlternatives = 0;
+  const triedOrders = new Set([JSON.stringify(jobs.map(job => job.id))]);
+  const propose = order => {
+    const key = JSON.stringify(order.map(job => job.id));
+    if (triedOrders.has(key)) return false;
+    triedOrders.add(key);
+    planningPasses++;
+    // Retain original planFleet as the ONLY authority for provisional resource
+    // and provider-budget holds, egress, eligibility and effect refusals.
+    const candidate = planFleet(order, nodes, context);
+    if (candidate.proposed <= best.proposed) return false;
+    const received = new Set(candidate.placements.map(p => p.jobId));
+    // A previous improvement may have admitted additional Work. Do not lose
+    // that Work in a subsequent candidate merely to gain more total slots.
+    if (!best.placements.every(p => received.has(p.jobId))) return false;
+    best = candidate;
+    bestOrder = order;
+    acceptedAlternatives++;
+    return true;
+  };
+
+  // Original cache, transfer, scarcity and queue prices determine each
+  // possible placement; eligible-region count is only a reordering heuristic.
+  const sorted = scarcity.slice().sort(byTerritory).map(row => row.job);
+  if (!sorted.every((job, index) => job.id === jobs[index].id))
+    propose(sorted);
+
+  // A single alternative often misses dissimilar resource footprints with
+  // the same eligible-region cardinality. Try bounded augmenting reorders,
+  // putting an actually waiting unit first, then delegating all constraints
+  // and budget changes to original planFleet again.
+  const volume = jobs.length * nodes.length;
+  const maximumTargetTrials = nodes.length > 1
+    ? Math.min(8, Math.floor(4_096 / Math.max(1, volume))) : 0;
+  for (let i = 0; i < maximumTargetTrials && best.proposed < jobs.length; i++) {
+    const waiting = new Set(best.pending
+      .filter(p => p.reason === "no-finite-certain-original-placement")
+      .map(p => p.jobId));
+    const focus = scarcity.filter(row =>
+      row.slots > 0 && Number.isFinite(row.slots) && waiting.has(row.job.id))
+      .sort(byTerritory);
+    let attempted = false;
+    for (const row of focus) {
+      const order = [row.job, ...bestOrder.filter(job => job.id !== row.job.id)];
+      const key = JSON.stringify(order.map(job => job.id));
+      if (triedOrders.has(key)) continue;
+      targetedReorders++;
+      propose(order);
+      attempted = true;
+      break;
+    }
+    if (!attempted) break;
+  }
+
+  const improved = best.proposed > baseline.proposed;
   const chosen = improved ? {
-    ...candidate,
-    placements: originalOrder(jobs, candidate.placements),
-    pending: originalOrder(jobs, candidate.pending),
-    probes: originalOrder(jobs, candidate.probes),
+    ...best,
+    placements: originalOrder(jobs, best.placements),
+    pending: originalOrder(jobs, best.pending),
+    probes: originalOrder(jobs, best.probes),
   } : baseline;
+  const selected = new Map(chosen.placements.map(p => [p.jobId, p.nodeId]));
   return {
     ...chosen,
     capacityRecovery: {
       policy: "preserve-original-admissions",
-      attempted: true, improved,
+      attempted: planningPasses > 1, improved,
+      ...(planningPasses === 1 ? { reason: "no-useful-order-change" } : {}),
       originalProposed: baseline.proposed, recoveredProposed: chosen.proposed,
-      effort: { planningPasses: 2, territoryAssessments: assessments },
-      newlyPlaced: [...nowPlaced.keys()].filter(id => improved && !formerlyPlaced.has(id)),
+      effort: { planningPasses, territoryAssessments: assessments,
+        targetedReorders, acceptedAlternatives },
+      newlyPlaced: improved ? jobs.map(job => job.id)
+        .filter(id => !formerlyPlaced.has(id) && selected.has(id)) : [],
       relocated: improved ? [...formerlyPlaced].filter(([id, nodeId]) =>
-        nowPlaced.get(id) !== nodeId).map(([id, from]) => ({
-        jobId: id, from, to: nowPlaced.get(id),
+        selected.get(id) !== nodeId).map(([id, from]) => ({
+        jobId: id, from, to: selected.get(id),
       })) : [],
     },
   };
