@@ -917,13 +917,18 @@ test('optional recovery budget counts validated Work rather than inert denied ef
   ];
   const original=planFleet(work,nodes,{now:NOW});
   const selected=recoverFleetCapacity(work,nodes,{now:NOW});
-  assert.equal(original.proposed,4);
+  assert.equal(original.proposed,3);
   assert.equal(selected.proposed,4);
   assert.equal(selected.executed,0);
-  assert.equal(selected.capacityRecovery.attempted,false);
-  assert.equal(selected.capacityRecovery.reason,'no-capacity-related-pending-work');
-  assert.equal(selected.capacityRecovery.effort.optionalAssessmentsUpperBound,0);
-  assert.deepEqual(selected.pending,original.pending);
+  assert.equal(selected.capacityRecovery.attempted,true);
+  assert.equal(selected.capacityRecovery.improved,true);
+  assert.deepEqual(selected.capacityRecovery.newlyPlaced,['valid3']);
+  assert.equal(selected.capacityRecovery.effort.territoryAssessments,260);
+  assert.ok(selected.capacityRecovery.effort.optionalAssessmentsUpperBound<=4096);
+  assert.equal(selected.pending.length,62);
+  assert.ok(selected.pending.every(row=>row.reason==='effect-authority-not-received'));
+  assert.ok(original.placements.every(placed=>
+    selected.placements.some(row=>row.jobId===placed.jobId)));
 });
 
 test('bounded recovery preserves every baseline admission over 400 heterogeneous Work fixtures',t=>{
