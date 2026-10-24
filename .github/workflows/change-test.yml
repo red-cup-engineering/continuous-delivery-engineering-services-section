@@ -51,7 +51,7 @@ jobs:
           fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          repository: red-cup-engineering/continuous-delivery-services-section
+          repository: red-cup-engineering/continuous-delivery-engineering-services-section
           ref: d963167b32c2e724fd17d402fe281c1ca3fe3baa
           path: section
           persist-credentials: false
@@ -132,7 +132,7 @@ jobs:
           package-manager-cache: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          repository: red-cup-engineering/continuous-delivery-services-section
+          repository: red-cup-engineering/continuous-delivery-engineering-services-section
           ref: d963167b32c2e724fd17d402fe281c1ca3fe3baa
           path: section
           persist-credentials: false
@@ -242,7 +242,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          repository: red-cup-engineering/continuous-delivery-services-section
+          repository: red-cup-engineering/continuous-delivery-engineering-services-section
           ref: d963167b32c2e724fd17d402fe281c1ca3fe3baa
           path: section
           persist-credentials: false
