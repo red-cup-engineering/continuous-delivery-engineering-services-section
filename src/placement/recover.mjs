@@ -140,17 +140,28 @@ export function recoverFleetCapacity(jobs, nodes, context) {
     const focus = scarcity.filter(row =>
       row.slots > 0 && Number.isFinite(row.slots) && waiting.has(row.job.id))
       .sort(byTerritory);
-    let attempted = false;
-    for (const row of focus) {
-      const order = [row.job, ...bestOrder.filter(job => job.id !== row.job.id)];
-      const key = JSON.stringify(order.map(job => job.id));
-      if (triedOrders.has(key)) continue;
-      targetedReorders++;
-      propose(order);
-      attempted = true;
-      break;
+    // The finite-fleet Hall examples contain a real blind spot of the
+    // front-only heuristic: a waiting job may need to run AFTER a mandatory
+    // earlier job and BEFORE a flexible one. A front insertion displaces the
+    // mandatory job and must be refused, even though a valid complete
+    // assignment exists. Try all previously permitted front positions first,
+    // then bounded interior positions, preserving the original Work IDs and
+    // delegating every resource, permission and lease proposal to planFleet.
+    let nextOrder = null;
+    for (let position = 0; position <= 8 && nextOrder === null; position++) {
+      for (const row of focus) {
+        const remainder = bestOrder.filter(job => job.id !== row.job.id);
+        if (position > remainder.length) continue;
+        const order = [...remainder.slice(0, position), row.job,
+          ...remainder.slice(position)];
+        if (triedOrders.has(JSON.stringify(order.map(job => job.id)))) continue;
+        nextOrder = order;
+        break;
+      }
     }
-    if (!attempted) break;
+    if (nextOrder === null) break;
+    targetedReorders++;
+    propose(nextOrder);
   }
 
   const improved = best.proposed > baseline.proposed;
