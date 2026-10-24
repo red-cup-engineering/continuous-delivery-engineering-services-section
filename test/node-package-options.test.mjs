@@ -38,7 +38,7 @@ test('PNPM receiving binds immutable original source and confines registry secre
   assert.equal(inputs['supplier-ref'].default,'');
   const steps=workflow.jobs.package.steps;
   const source=steps.find(s=>s.name==='Receive exact PNPM installer source');
-  assert.equal(source.with.repository,'red-cup-engineering/continuous-delivery-services-section');
+  assert.equal(source.with.repository,'red-cup-engineering/continuous-delivery-engineering-services-section');
   assert.equal(source.with.ref,'${{ inputs.supplier-ref }}');
   assert.equal(source.with['persist-credentials'],false);
   const install=steps.find(s=>s.name==='Install original frozen PNPM graph');
