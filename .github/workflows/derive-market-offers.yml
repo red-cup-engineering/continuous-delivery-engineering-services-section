@@ -1,0 +1,217 @@
+name: derive-market-offers
+# Autosell, package side. A FOSS package that declares `package.json#x-market` is sold as a hosted x402 service
+# without anyone writing its market offer: this derives the offer from the package itself, reconciles it with the
+# live catalog, and opens (or updates) ONE pull request in the catalog repository. It never merges, never edits the
+# catalog in place and never pushes to the package repository.
+#
+# The derivation is red-cup-engineering/x402-engineering-services-section apps/derive-market-offers.mjs, checked out
+# at a pinned commit (`x402-ref`), as change-test checks out its controller. See that README, "Autosell".
+#
+# Call it on push to the package's default branch, NOT on pull_request: derivation imports the package's own code.
+# The step that imports it holds no token and no git credential; the catalog write is a separate, final step.
+#
+#   jobs:
+#     market:
+#       uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/derive-market-offers.yml@<commit>
+#       with:
+#         runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'
+#         x402-ref: <40-hex commit of x402-engineering-services-section>
+#         catalog-repository: <owner/repo that holds the catalog file>
+#         agency-checkouts: '[{"repository":"<owner/repo>","ref":"<commit>","path":"agency"}]'
+#         agency-index: agency/agency-index.json
+#       secrets:
+#         catalog-token: ${{ secrets.MARKET_CATALOG_TOKEN }}
+#         house-read-token: ${{ secrets.HOUSE_READ_TOKEN }}
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Explicit JSON runner labels supplied by the caller'
+        type: string
+        required: true
+      x402-ref:
+        description: 'Reviewed immutable 40-character commit of red-cup-engineering/x402-engineering-services-section that provides apps/derive-market-offers.mjs'
+        type: string
+        required: true
+      catalog-repository:
+        description: 'owner/repo that holds the catalog file and receives the pull request (no default: the caller names its market)'
+        type: string
+        required: true
+      catalog-path:
+        description: 'Path of the catalog JSON array inside the catalog repository'
+        type: string
+        default: data/catalog.json
+      catalog-base:
+        description: 'Branch of the catalog repository the pull request targets'
+        type: string
+        default: main
+      package-paths:
+        description: 'JSON array of package directories in the calling repository; each must hold a package.json'
+        type: string
+        default: '["."]'
+      agency-checkouts:
+        description: 'JSON array of {repository, ref, path}: repositories holding the enterprise and office records, checked out read-only under agency-root/<path>'
+        type: string
+        default: '[]'
+      agency-index:
+        description: 'Path of the agency index JSON, relative to the directory the agency-checkouts are placed in'
+        type: string
+        required: true
+      origin:
+        description: 'Market origin written into derived offers; empty keeps the tool default'
+        type: string
+        default: ''
+    secrets:
+      catalog-token:
+        description: 'MARKET_CATALOG_TOKEN: contents:write and pull-requests:write on the catalog repository only'
+        required: true
+      house-read-token:
+        description: 'HOUSE_READ_TOKEN: contents:read on the x402 source and the agency repositories'
+        required: true
+jobs:
+  derive:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      drift: ${{ steps.reconcile.outputs.drift }}
+      refused: ${{ steps.reconcile.outputs.refused }}
+    steps:
+      - name: Require the tokens and a pinned x402 commit
+        env:
+          CATALOG_TOKEN: ${{ secrets.catalog-token }}
+          READ_TOKEN: ${{ secrets.house-read-token }}
+          X402_REF: ${{ inputs.x402-ref }}
+        run: |
+          [ -n "$CATALOG_TOKEN" ] || { echo "::error title=Missing secret catalog-token::The pull request is opened in the catalog repository with a token scoped to it. This workflow does not create credentials."; exit 1; }
+          [ -n "$READ_TOKEN" ] || { echo "::error title=Missing secret house-read-token::The x402 source and the agency records are private. An existing authorized read-token binding is required."; exit 1; }
+          printf '%s' "$X402_REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error title=Unpinned x402-ref::x402-ref must be one 40-character commit, not a branch or tag."; exit 1; }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: package
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/x402-engineering-services-section
+          ref: ${{ inputs.x402-ref }}
+          token: ${{ secrets.house-read-token }}
+          path: x402
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: ${{ inputs.catalog-repository }}
+          ref: ${{ inputs.catalog-base }}
+          token: ${{ secrets.house-read-token }}
+          path: catalog
+          persist-credentials: false
+      - name: Check out the agency records read-only
+        env:
+          CHECKOUTS: ${{ inputs.agency-checkouts }}
+          READ_TOKEN: ${{ secrets.house-read-token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/agency"
+          printf '%s' "$CHECKOUTS" | jq -r '.[] | [.repository, .ref, .path] | @tsv' | while IFS=$'\t' read -r repository ref path; do
+            case "$path" in ''|/*|*..*) echo "::error::agency checkout path must be relative and inside the agency directory"; exit 1 ;; esac
+            printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::agency checkout $repository needs a 40-character ref"; exit 1; }
+            git init -q "$RUNNER_TEMP/agency/$path"
+            git -C "$RUNNER_TEMP/agency/$path" -c "http.extraheader=Authorization: basic $(printf 'x-access-token:%s' "$READ_TOKEN" | base64 -w0)" \
+              fetch -q --depth=1 "https://github.com/$repository.git" "$ref"
+            git -C "$RUNNER_TEMP/agency/$path" checkout -q FETCH_HEAD
+          done
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Install the derivation tool and the packages' own dependencies, without install scripts
+        env:
+          PACKAGE_PATHS: ${{ inputs.package-paths }}
+        run: |
+          (cd x402 && npm install --no-audit --no-fund --ignore-scripts)
+          printf '%s' "$PACKAGE_PATHS" | jq -r '.[]' | while read -r dir; do
+            (cd "package/$dir" && { if [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund; else npm install --ignore-scripts --no-audit --no-fund; fi; })
+          done
+      - name: Derive offers and reconcile with the catalog
+        id: reconcile
+        env:
+          PACKAGE_PATHS: ${{ inputs.package-paths }}
+          CATALOG_PATH: ${{ inputs.catalog-path }}
+          AGENCY_INDEX: ${{ inputs.agency-index }}
+          ORIGIN: ${{ inputs.origin }}
+        run: |
+          set +e
+          dirs=$(printf '%s' "$PACKAGE_PATHS" | jq -r '.[] | "package/" + .')
+          origin=(); [ -z "$ORIGIN" ] || origin=(--origin "$ORIGIN")
+          # shellcheck disable=SC2086
+          node x402/apps/derive-market-offers.mjs --catalog "catalog/$CATALOG_PATH" --agency "$RUNNER_TEMP/agency/$AGENCY_INDEX" "${origin[@]}" \
+            --out "$RUNNER_TEMP/catalog.next.json" --report "$RUNNER_TEMP/reconciliation.json" --summary "$RUNNER_TEMP/summary.md" $dirs
+          code=$?
+          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null
+          echo "drift=$(jq -r '.drift // false' "$RUNNER_TEMP/reconciliation.json" 2>/dev/null || echo false)" >> "$GITHUB_OUTPUT"
+          echo "refused=$([ "$code" = 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          # 0 reconciled, 1 a package or operation refused (the diff for the rest is still proposed), anything else is a tool failure.
+          [ "$code" = 0 ] || [ "$code" = 1 ] || exit "$code"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        with:
+          name: derive-market-offers
+          path: |
+            ${{ runner.temp }}/catalog.next.json
+            ${{ runner.temp }}/reconciliation.json
+            ${{ runner.temp }}/summary.md
+          if-no-files-found: warn
+      - name: Fail the run when a package or operation was refused
+        if: steps.reconcile.outputs.refused == 'true'
+        run: echo "::error title=Market offers refused::A package or operation could not be derived (licence, seller record, service offering, example or schema); see the job summary. Offers that did derive are still proposed."; exit 1
+  propose:
+    needs: derive
+    if: ${{ !cancelled() && needs.derive.outputs.drift == 'true' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: derive-market-offers
+          path: proposal
+      - name: Open or update the catalog pull request
+        env:
+          GH_TOKEN: ${{ secrets.catalog-token }}
+          CATALOG: ${{ inputs.catalog-repository }}
+          CATALOG_PATH: ${{ inputs.catalog-path }}
+          BASE: ${{ inputs.catalog-base }}
+          SOURCE: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          REFUSED: ${{ needs.derive.outputs.refused }}
+        run: |
+          set -euo pipefail
+          branch="autosell/$(printf '%s' "$SOURCE" | tr '/' '-')"
+          title="Market offers derived from $SOURCE"
+          {
+            cat proposal/summary.md
+            printf '\nDerived from %s at %s by derive-market-offers. Merging puts the listed changes on sale as declared (held offers stay held).\n' "$SOURCE" "$SHA"
+            [ "$REFUSED" != true ] || printf '\nSome packages or operations were refused; their existing rows are unchanged. See the workflow run.\n'
+          } > body.md
+          # The catalog is changed through the Git data API, as the CD caller generator's source receiver does: one blob, one tree, one commit, no clone.
+          # Bodies go through jq and --input because the catalog is far larger than one command-line argument may be.
+          api() { gh api "$@"; }
+          base_sha=$(api "repos/$CATALOG/git/ref/heads/$BASE" --jq .object.sha)
+          blob=$(jq -n --rawfile content proposal/catalog.next.json '{content: $content, encoding: "utf-8"}' | api "repos/$CATALOG/git/blobs" --input - --jq .sha)
+          tree=$(jq -n --arg base "$base_sha" --arg path "$CATALOG_PATH" --arg blob "$blob" \
+            '{base_tree: $base, tree: [{path: $path, mode: "100644", type: "blob", sha: $blob}]}' | api "repos/$CATALOG/git/trees" --input - --jq .sha)
+          commit=$(jq -n --arg message "$title" --arg tree "$tree" --arg parent "$base_sha" \
+            '{message: $message, tree: $tree, parents: [$parent]}' | api "repos/$CATALOG/git/commits" --input - --jq .sha)
+          if api "repos/$CATALOG/git/ref/heads/$branch" >/dev/null 2>&1; then
+            jq -n --arg sha "$commit" '{sha: $sha, force: true}' | api -X PATCH "repos/$CATALOG/git/refs/heads/$branch" --input - >/dev/null
+          else
+            jq -n --arg ref "refs/heads/$branch" --arg sha "$commit" '{ref: $ref, sha: $sha}' | api "repos/$CATALOG/git/refs" --input - >/dev/null
+          fi
+          existing=$(api --method GET "repos/$CATALOG/pulls" -f state=open -f head="${CATALOG%%/*}:$branch" --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            jq -n --arg title "$title" --rawfile body body.md '{title: $title, body: $body}' | api -X PATCH "repos/$CATALOG/pulls/$existing" --input - >/dev/null
+            echo "Updated catalog pull request #$existing" >> "$GITHUB_STEP_SUMMARY"
+          else
+            url=$(jq -n --arg title "$title" --arg head "$branch" --arg base "$BASE" --rawfile body body.md '{title: $title, head: $head, base: $base, body: $body}' \
+              | api "repos/$CATALOG/pulls" --input - --jq .html_url)
+            echo "Opened catalog pull request $url" >> "$GITHUB_STEP_SUMMARY"
+          fi
