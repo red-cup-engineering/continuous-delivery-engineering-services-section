@@ -63,10 +63,10 @@ on:
         default: ''
     secrets:
       catalog-token:
-        description: 'MARKET_CATALOG_TOKEN: contents:write and pull-requests:write on the catalog repository only'
-        required: true
+        description: 'MARKET_CATALOG_TOKEN: contents:write and pull-requests:write on the catalog repository only. Optional: without it the reconciled diff is uploaded as an artifact and no pull request is opened.'
+        required: false
       house-read-token:
-        description: 'HOUSE_READ_TOKEN: contents:read on the x402 source and the agency repositories'
+        description: 'HOUSE_READ_TOKEN: contents:read on the x402 source, the catalog and the agency repositories (all private)'
         required: true
 jobs:
   derive:
@@ -77,16 +77,21 @@ jobs:
     outputs:
       drift: ${{ steps.reconcile.outputs.drift }}
       refused: ${{ steps.reconcile.outputs.refused }}
+      can-propose: ${{ steps.tokens.outputs.can-propose }}
     steps:
-      - name: Require the tokens and a pinned x402 commit
+      - name: Require the read token and a pinned x402 commit; note whether a catalog pull request can be opened
+        id: tokens
         env:
           CATALOG_TOKEN: ${{ secrets.catalog-token }}
           READ_TOKEN: ${{ secrets.house-read-token }}
           X402_REF: ${{ inputs.x402-ref }}
         run: |
-          [ -n "$CATALOG_TOKEN" ] || { echo "::error title=Missing secret catalog-token::The pull request is opened in the catalog repository with a token scoped to it. This workflow does not create credentials."; exit 1; }
           [ -n "$READ_TOKEN" ] || { echo "::error title=Missing secret house-read-token::The x402 source and the agency records are private. An existing authorized read-token binding is required."; exit 1; }
           printf '%s' "$X402_REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error title=Unpinned x402-ref::x402-ref must be one 40-character commit, not a branch or tag."; exit 1; }
+          # The pull request is opened with a token scoped to the catalog repository; this workflow does not create credentials.
+          # Without one the run still derives and reconciles, and the diff is an artifact.
+          if [ -n "$CATALOG_TOKEN" ]; then echo "can-propose=true" >> "$GITHUB_OUTPUT"
+          else echo "can-propose=false" >> "$GITHUB_OUTPUT"; echo "::notice title=No catalog-token::No catalog pull request will be opened; the reconciled catalog and diff are uploaded as the derive-market-offers artifact."; fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           path: package
@@ -164,7 +169,7 @@ jobs:
         run: echo "::error title=Market offers refused::A package or operation could not be derived (licence, seller record, service offering, example or schema); see the job summary. Offers that did derive are still proposed."; exit 1
   propose:
     needs: derive
-    if: ${{ !cancelled() && needs.derive.outputs.drift == 'true' }}
+    if: ${{ !cancelled() && needs.derive.outputs.drift == 'true' && needs.derive.outputs.can-propose == 'true' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     permissions:

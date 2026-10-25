@@ -904,9 +904,13 @@ live catalog (`data/catalog.json`) is held by
 `causeway-services/public-market-services-section`, the `parameters` submodule
 of the market site (`market.561.group`, whose repository now resolves to
 `red-cup-engineering/market.561.group`), so that is the repository whose pull
-request is reviewed. A missing token, an unpinned `x402-ref`, or a package that is
+request is reviewed. A missing `house-read-token`, an unpinned `x402-ref`, or a package that is
 refused (no OSI licence, no seller enterprise record, unknown service offering)
 fails the run with the reason in the job summary; whatever else derived is
-still proposed. The pull request is the review: merging it puts the listed
+still proposed. `catalog-token` is optional: without it the run still derives and
+reconciles, uploads `catalog.next.json`, `reconciliation.json` and `summary.md`
+as the `derive-market-offers` artifact, and opens no pull request. A caller that
+cannot read the private repositories at all (no `house-read-token`) should not call
+the workflow; gate the call on that secret in a small preceding job. The pull request is the review: merging it puts the listed
 offers on sale as declared, and a newly derived offer should start
 `saleStatus: "held"`.
