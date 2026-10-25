@@ -87,7 +87,7 @@ test('actual lockfile caller receives immutable source, exact supplier, restart 
   const first = await module.receiveGeneratedCaller(options);
   assert.equal(first.status, 'proposed');
   assert.equal(first.proposal.sourceCommit, p.sourceCommit);
-  assert.deepEqual(first.proposal.inputs, [{ repository: 'red-cup-engineering/continuous-delivery-services-section', commit: supplier.sourceCommit }]);
+  assert.deepEqual(first.proposal.inputs, [{ repository: 'red-cup-engineering/continuous-delivery-engineering-services-section', commit: supplier.sourceCommit }]);
   assert.deepEqual(first.proposal.outputs.map(row => row.path), [lockfilePath]);
   assert.deepEqual(first.runnerReceiving.runnerIds, [91]);
   assert.equal(first.runnerReceiving.executed, false);
@@ -256,6 +256,36 @@ test('actual caller binds source and supplier, receives and verifies its regener
  assert.equal(result.proposal.sourceCommit,p.sourceCommit);assert.equal(result.proposal.inputs[0].commit,supplier.sourceCommit);
  assert.match(p.git(['show',`${result.commit}:.github/workflows/ci.yml`]),new RegExp(supplier.sourceCommit));assert.equal(result.proposal.outputs.length,1);
  const n=writes(p).length;assert.deepEqual(await receiveGeneratedCaller({root:p.root,repo,request:p.request,runsOn:houseRunsOn,workflows:['ci']}),result);assert.equal(writes(p).length,n);
+});
+
+test('explicit no-install caller retains source receipt, unchanged siblings, replay and CLI parity',async t=>{
+ const p=provider(t,{'package.json':JSON.stringify({scripts:{'test:component':'node --test "test/component.test.mjs"'}}),
+  'README.md':'[package](package.json)\n','untouched.txt':'keep\n'});
+ const supplier=provider(t,Object.fromEntries(['generator/generate-ci.mjs','generator/open-pr.mjs',
+  'generator/retained-runner.mjs','src/placement/plan-allowances.mjs'].map(file=>[file,fs.readFileSync(new URL('../'+file,import.meta.url),'utf8')])));
+ const module=await import(pathToFileURL(path.join(supplier.root,'generator/generate-ci.mjs')).href);
+ const nodePackage={packageManager:'npm',paths:['.'],install:false,check:false,nodeVersion:'24.21.0',
+  testScript:'test:component',timeoutMinutes:15,nodeTest:{files:['test/component.test.mjs'],
+   expectedScript:'node --test "test/component.test.mjs"',concurrency:1}};
+ const options={root:p.root,repo,request:p.request,runsOn:['ubuntu-24.04'],publicRepository:true,
+  workflows:['ci'],checks:['node-package'],nodePackage};
+ const result=await module.receiveGeneratedCaller(options);
+ assert.equal(result.status,'proposed');assert.equal(result.proposal.sourceCommit,p.sourceCommit);
+ assert.deepEqual(result.proposal.inputs,[{repository:'red-cup-engineering/continuous-delivery-engineering-services-section',commit:supplier.sourceCommit}]);
+ assert.deepEqual(result.proposal.outputs.map(x=>x.path),['.github/workflows/ci.yml']);
+ const output=p.git(['show',`${result.commit}:.github/workflows/ci.yml`]);
+ assert.match(output,/install: false/);assert.doesNotMatch(output,/content\.yml|lean\.yml|secrets:/);
+ assert.equal(p.git(['show',`${result.commit}:untouched.txt`]),'keep');
+ const count=writes(p).length;assert.deepEqual(await module.receiveGeneratedCaller(options),result);assert.equal(writes(p).length,count);
+ p.git(['checkout','--detach',result.commit]);
+ assert.equal((await module.verifyGeneratedCaller({...options,receiptCommit:result.commit})).status,'verified');
+ const config=path.join(p.root,'no-install-options.json');fs.writeFileSync(config,JSON.stringify(nodePackage));
+ const cli=execFileSync(process.execPath,[path.join(supplier.root,'generator/generate-ci.mjs'),p.root,
+  '--verify-commit',result.commit,'--runs-on','["ubuntu-24.04"]','--public-repo',
+  '--workflows','["ci"]','--checks','["node-package"]','--node-package',config],{encoding:'utf8'});
+ assert.match(cli,/source parity:.*"status":"verified"/);
+ await assert.rejects(()=>module.verifyGeneratedCaller({...options,receiptCommit:result.commit,
+  nodePackage:{...nodePackage,timeoutMinutes:16}}),{code:'generation-drift'});
 });
 
 test('later build consumes retained commit proposal, reruns the producer and rejects drift',async t=>{
@@ -486,3 +516,4 @@ test('overlapping proposed local reusable callee is refused rather than checked 
  p.options.retainedRunnerEvidence.push({path:child,runId:81,jobId:82});
  await assert.rejects(openPullRequest(p.options),{code:'runner-evidence'});assert.equal(writes(p).length,0);
 });
+

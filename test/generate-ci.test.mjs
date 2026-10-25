@@ -388,3 +388,31 @@ test('provider private-field JSON identity rejects missing, null, strings and nu
  for(const value of [undefined,null,0,'', 'false','0',true,{},[]])
   assert.notEqual(canonical(value),'false');
 });
+
+test('explicit CI checks select only requested detected capabilities and omission keeps defaults',()=>{
+ const root=fixture({'package.json':'{}','lakefile.lean':'','README.md':'[package](package.json)'});
+ const defaults=YAML.parse(generate(root,{workflows:['ci']}).files['.github/workflows/ci.yml']);
+ assert.deepEqual(Object.keys(defaults.jobs),['node-package','lean','content']);
+ for(const checks of [['node-package'],['lean'],['content'],['node-package','content']]){
+  const output=generate(root,{workflows:['ci'],checks});
+  assert.deepEqual(Object.keys(YAML.parse(output.files['.github/workflows/ci.yml']).jobs),checks);
+  assert.equal(output.selection.node,checks.includes('node-package'));
+  assert.equal(output.selection.content,checks.includes('content'));
+ }
+ for(const checks of [[],['unknown'],['node-package','node-package'],'node-package',new Array(1)])
+  assert.throws(()=>generate(root,{workflows:['ci'],checks}),/CI checks/);
+ for(const workflows of [undefined,['sync'],['ci','sync'],['ci','release']])
+  assert.throws(()=>generate(root,{workflows,checks:['node-package']}),/workflows:\[ci\]/);
+ for(const checks of [['node-package'],['lean'],['content']])
+  assert.throws(()=>generate(fixture({}),{workflows:['ci'],checks}),/no source capability/);
+});
+
+test('new callers emit the canonical supplier while auditing both original coordinates',()=>{
+ assert.equal(REUSABLE,'red-cup-engineering/continuous-delivery-engineering-services-section/.github/workflows');
+ const generated=renderCi({node:true,lean:[],content:false});
+ assert.ok(generated.includes(`${REUSABLE}/node-package.yml@${REF}`));
+ const legacy=generated.replace(REUSABLE,'red-cup-engineering/continuous-delivery-services-section/.github/workflows');
+ for(const source of [generated,legacy])
+  assert.deepEqual(auditRunnerRouting(fixture({'.github/workflows/ci.yml':source})),[]);
+});
+

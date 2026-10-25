@@ -17,3 +17,94 @@ Public generated jobs carry a job-level provider event visibility/full-name cond
 The optional exact nodeVersion carrier maps to the existing setup-node action through node-version. Its default remains24, preserving existing callers; qualified PNPM consumers select24.19.0 explicitly rather than assuming a moving major establishes original provider identity.
 
 Provider expression semantics follow the original GitHub contexts/expressions contracts: nonexistent properties evaluate to an empty string; loose boolean equality therefore is insufficient. Job-level if is evaluated before dispatch, while github.event remains the triggering payload. References: https://docs.github.com/en/actions/reference/workflows-and-actions/contexts and https://docs.github.com/en/actions/reference/workflows-and-actions/expressions.
+
+## Generic no-install extension (NP-13 through NP-18)
+
+The original generator remains the only producer, and the original node-package
+workflow remains the only native test executor. Two alternatives were compared:
+(a) special-case a media package, copy its test logic or create another workflow;
+(b) express an explicit checker subset and reuse the existing closed native test
+descriptor. Choose (b): the selection is an ordinary source-owned CI contract,
+not media policy. It changes no PNPM installation rule and embeds no consumer
+implementation or private fixture. `checks` selects from detected capabilities;
+it never invents a capability. Omission retains detection of all original checks.
+
+The new npm/no-install generator profile is a closed record with packageManager,
+paths, install, check, nodeVersion, testScript, nodeTest and timeoutMinutes. It
+requires `workflows:['ci']` and `checks:['node-package']`; paths are unique relative
+package directories, bounded to 32, with no parent traversal or expression syntax.
+No registry identity, credential name, PNPM pin, argument vector or unknown field
+is admitted. The existing PNPM profile remains separate. Every selected native
+file pattern and expectedScript retains the NP-9 canonical equality. A generated
+caller binds its immutable supplier in uses/supplier-ref and source in github.sha,
+sets contents:read, and carries no secrets. The workflow checks source identity in
+both checkout jobs and validates no-install restrictions before a test can start.
+The final existing descriptor gate verifies package.json again and executes the
+same Node executable with shell:false. The qualification path performs no
+dependency installation, npm-script/lifecycle execution or check-script execution;
+the original setup-node action may still query installed tool versions.
+
+The reusable `install:false` interface existed before this generator profile.
+Changing every direct no-install caller to require a descriptor would silently
+break that supported contract even though the old generator never emitted it.
+An indexed bounded search returning no callers cannot establish their absence.
+Choose explicit `native-no-install` (boolean, default false), not a global
+reinterpretation of install:false or an unqualified fleet migration. The new
+closed generator profile emits true. Its strict admission, source and actual-Node
+checks apply only under that flag. Existing direct callers retain their original
+install/check/named-script/optional-native-descriptor semantics when it is absent.
+
+Independent review traced the exact pinned setup-node supplier and rejected the
+first candidate's implicit automatic-cache selection. Its action.yml defaults
+package-manager-cache to true; main.ts detects npm, yarn or pnpm in the root
+manifest; cache-restore.ts requires a lockfile and cache-utils.ts queries the
+package manager's cache/store path. Thus even an npm-only workflow could try PNPM
+when the package root declares it, or fail because a dependency-free package has
+no lockfile. The workflow now passes `package-manager-cache: !inputs.native-no-install`
+and no explicit `cache`, preserving prior cache behavior for every legacy caller.
+In strict mode no restore state is retained, so the action's post hook does not
+save a package cache. This does not replace the action or change its pin. Its
+util.ts still probes node/npm/yarn --version; the contract deliberately does not
+claim there is no package-manager process at all.
+
+Source verification covers the exact action-input expression, absent override,
+strict-native fixtures with npm/PNPM root declarations and no lockfile, and the
+legacy install:false named-script continuation. Independent provider execution
+must still verify the real action and no-install consumer; the fixture is not a
+fake action implementation or a claim that the complete workflow has run.
+
+Timeout is execution resource selection, not a universal house allocation:
+GitHub documents an omitted job timeout of 360 minutes. The reusable input keeps
+that effective default for existing npm/PNPM callers. The supported explicit
+domain is integral 1..360; the selected dependency-free receiving uses 15 minutes
+for each of discover and its one package, matching the existing lockfile-fresh
+checker precedent. The sum is 30 allocated-job minutes for that one-path recipe;
+N paths sum to `(1+N)*timeoutMinutes`. Queue/startup delays and provider cancellation
+latency are not a wall-clock termination theorem. A timeout produces a failed or
+cancelled provider attempt, never a passing receipt; reconcile that original run.
+
+Canonical repository identity is `red-cup-engineering/continuous-delivery-engineering-services-section`
+(GitHub ID 1410813101). The historical alias identifies the same original owner but
+cannot be hired through GitHub Actions redirects. New `uses` strings and supplier
+receipt identities are canonical. Audit and lockfile-caller adoption recognize
+both exact coordinates, preserve unrelated policy, and emit only the canonical
+one. Existing immutable-source proposal, complete tree-frame verification and
+later byte parity are unchanged: changing an input requires fresh receiving.
+
+Environmental expectations: the caller repository is independently observed as
+public for standard hosted execution; the selected exact Node release is available;
+the authored tests really need no dependencies; official action pins remain
+received suppliers; and the original provider supplies trustworthy checkout/run
+evidence. Source selection and JSON identity are not an execution authority grant.
+Verification is split between generator/descriptor/refusal unit contracts and
+the original provider's exact-head no-install job, followed by consumer receiving.
+
+Primary provider contracts:
+- https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes
+- https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
+- https://github.com/actions/setup-node/blob/a0853c24544627f65ddf259abe73b1d18a591444/action.yml
+- https://github.com/actions/setup-node/blob/a0853c24544627f65ddf259abe73b1d18a591444/src/main.ts
+- https://github.com/actions/setup-node/blob/a0853c24544627f65ddf259abe73b1d18a591444/src/cache-restore.ts
+- https://github.com/actions/setup-node/blob/a0853c24544627f65ddf259abe73b1d18a591444/src/cache-utils.ts
+- https://github.com/actions/setup-node/blob/a0853c24544627f65ddf259abe73b1d18a591444/src/util.ts
+

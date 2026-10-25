@@ -18,7 +18,8 @@ const sourceTokenSecret = 'EXISTING_SOURCE_READ';
 const bindingOptions = { runsOn, toolWorkspace, sourceTokenSecret };
 const options = { ...bindingOptions, workflows: ['lockfile-fresh'] };
 const file = '.github/workflows/lockfile-fresh.yml';
-const oldUse = `${REUSABLE}/lockfile-fresh.yml@${oldRef}`;
+const oldCoordinate = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
+const oldUse = `${oldCoordinate}/lockfile-fresh.yml@${oldRef}`;
 const newUse = `${REUSABLE}/lockfile-fresh.yml@${REF}`;
 const render = text => renderLockfileFreshCaller(text, bindingOptions);
 function bindExpected(job) {
@@ -90,7 +91,7 @@ for (const [name, change] of [
   ['alias', text => text.replace('name: lockfile-fresh', 'name: &name lockfile-fresh\nrun-name: *name')],
   ['anchor', text => text.replace('name: lockfile-fresh', 'name: &name lockfile-fresh')],
   ['merge declaration', text => text.replace('    with:', '    <<: {permissions: {contents: write}}\n    with:')],
-  ['wrong supplier', text => text.replace(REUSABLE, 'another/owner/.github/workflows')],
+  ['wrong supplier', text => text.replace(oldCoordinate, 'another/owner/.github/workflows')],
   ['wrong workflow', text => text.replace('workflows/lockfile-fresh.yml', 'workflows/other.yml')],
   ['moving supplier', text => text.replace(oldRef, 'main')],
   ['dynamic supplier', text => text.replace(oldRef, '${{ inputs.revision }}')],
@@ -249,3 +250,4 @@ test('selected checker Gitlink source survives one and two-level native Git rece
     assert.notEqual(missingPath.status, 0, 'unbound path must refuse');
   }
 });
+

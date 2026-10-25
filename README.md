@@ -584,12 +584,69 @@ node generator/generate-ci.mjs <repo-dir> [--parent owner/repo] [--pr owner/repo
   [--ref <40-character supplier commit>] [--runs-on '["self-hosted","Linux","X64","bare-cedar-fog"]']
   [--default-branch main] [--token-secret LMT_SUBMODULE_PAT] [--source-token-secret LMT_SUBMODULE_PAT]
   [--tool-workspace <json-file>] [--branch ci/caller-generator]
+  [--workflows '["ci"]'] [--checks '["node-package"]'] [--node-package <json-file>]
   [--verify-commit <40-character received source commit>]
 ```
 
 Generated callers pin the generator checkout's exact commit (or an explicitly selected commit). Sync callers serialize runs and take the hiring repository's actual runner labels and token secret; the nested reusable workflow comes from the same supplier revision, and its engine checkout is immutable. For an existing lockfile-fresh caller, `--tool-workspace` reads `{ "repository": "OWNER/REPO", "revision": "<40-hex-commit>", "checkerPath": "path/to/checker-gitlink" }`; `--source-token-secret` names the hiring repository's existing read credential and is emitted only as the reusable workflow's `source-read-token` secret binding.
 
 Selects `node-package` (any `package.json`), `lean` (a `lakefile.lean`/`lakefile.toml`, one job per directory) and `content` (JSON with a relative `$schema`, or Markdown with relative links), and writes `.github/workflows/ci.yml`. A repository with `.gitmodules` also gets `sync.yml` (advance on dispatch/schedule); `--parent` adds the push-to-main notify. Handwritten workflows are reported against the reusable workflow that covers them and are never removed. With `--pr`, the working tree is not edited: the generator reads the exact committed source into a temporary directory, then receives its output through the Git data API (`GH_TOKEN`) into a draft pull request. The default review branch is `ci/caller-generator`; `--branch` names an existing owning review branch. Symlinks are refused, and submodule working copies, ignored files and uncommitted edits cannot affect generation. Existing handwritten workflows remain untouched.
+
+For an explicitly scoped CI qualification, `checks` (CLI `--checks`) selects a
+unique nonempty subset of those three checks with `workflows:['ci']`; unknown or
+undetected selections refuse. Omit it to retain automatic detection. In
+particular, no-install qualification must not accidentally select `content`,
+which installs its schema checker dependencies. This is generic check selection,
+not a package-specific workflow.
+
+The `nodePackage` option (CLI `--node-package` JSON file) now accepts the closed
+dependency-free npm profile below. The selected manifest must contain the exact
+named script `node --test "test/component.test.mjs"`, without its pre/post hooks.
+The consumer must separately establish that the selected component needs no
+installed dependencies. Existing npm defaults and PNPM install contracts remain.
+
+```json
+{
+  "packageManager": "npm",
+  "paths": ["."],
+  "install": false,
+  "check": false,
+  "nodeVersion": "24.21.0",
+  "testScript": "test:component",
+  "nodeTest": {
+    "files": ["test/component.test.mjs"],
+    "expectedScript": "node --test \"test/component.test.mjs\"",
+    "concurrency": 1
+  },
+  "timeoutMinutes": 15
+}
+```
+
+Use it with `workflows:['ci']`, `checks:['node-package']`, the actual generator
+commit, and an independently admitted runner. Verified public callers may select
+`publicRepository:true,runsOn:['ubuntu-24.04']` (CLI `--public-repo --runs-on
+'["ubuntu-24.04"]'`). No registry, PNPM, credential, mixed argv or unknown profile
+fields are accepted. Generated callers use the canonical original repository
+coordinate, `contents:read`, exact source/supplier pins and no secrets. Both
+checkouts prove the source SHA; the native gate checks actual Node release,
+manifest-script equality and lifecycle absence, then invokes Node with shell:false.
+
+The generator marks this new contract with reusable `native-no-install:true`.
+That opt-in defaults false: existing direct `install:false` callers retain their
+original behavior. Only the strict profile disables setup-node's automatic
+package-manager cache, so an npm/PNPM root declaration without a lockfile cannot
+silently add cache discovery or an installed-manager requirement. Other callers
+keep its prior cache behavior. The pinned official action still reports installed
+node/npm/yarn versions; this is not dependency installation or lifecycle execution.
+
+`timeoutMinutes` maps to reusable `timeout-minutes` for both discover and package
+jobs. Its supported domain is integral 1..360; existing callers retain GitHub's
+previous effective default 360. The explicit 15 here follows the owner's existing
+bounded checker precedent: one discovery plus one package allows at most 30
+allocated job-execution minutes, not an end-to-end queue/startup walltime limit.
+N package paths permit `(1+N)*timeoutMinutes` cumulative job minutes. Source
+receiving, independent review, provider execution and real consumer acceptance
+remain separate; generation alone establishes none of the latter stages.
 
 ## Generated-source receiving
 
@@ -914,3 +971,4 @@ cannot read the private repositories at all (no `house-read-token`) should not c
 the workflow; gate the call on that secret in a small preceding job. The pull request is the review: merging it puts the listed
 offers on sale as declared, and a newly derived offer should start
 `saleStatus: "held"`.
+
