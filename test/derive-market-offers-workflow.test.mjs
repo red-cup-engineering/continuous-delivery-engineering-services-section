@@ -30,3 +30,11 @@ test('the step that imports package code holds no token; the catalog write is a 
   assert.doesNotMatch(propose, /gh pr merge|--admin|auto-merge/u, 'it proposes, it never merges');
   assert.match(text, /--ignore-scripts/u);
 });
+
+test('the catalog token is optional: without it the diff is an artifact and no pull request is opened', () => {
+  assert.match(text, /catalog-token:\n {8}description: [^\n]*\n {8}required: false/u);
+  assert.match(text, /house-read-token:\n {8}description: [^\n]*\n {8}required: true/u);
+  assert.match(text, /can-propose: \$\{\{ steps\.tokens\.outputs\.can-propose \}\}/u);
+  assert.match(text, /propose:\n {4}needs: derive\n {4}if: \$\{\{ [^\n]*needs\.derive\.outputs\.can-propose == 'true' \}\}/u);
+  assert.doesNotMatch(text, /Missing secret catalog-token/u);
+});
