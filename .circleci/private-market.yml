@@ -1,0 +1,116 @@
+# Original Red Cup Continuous Delivery owner. Private Market source stays private.
+# Existing CircleCI GitHub App configuration source:
+#   red-cup-engineering/continuous-delivery-engineering-services-section
+#   main:.circleci/private-market.yml
+# Checkout source: red-cup-engineering/market.561.group (private) at main.
+# App/project/Free-credit admission is an independent provider action.
+version: 2.1
+jobs:
+  original-market-native:
+    docker:
+      - image: cimg/node:24
+    resource_class: small
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Receive exact original private Market source
+          command: |
+            set -euo pipefail
+            test "$CIRCLE_SHA1" = "$(git rev-parse HEAD)" ||
+              { echo "Original GitHub source SHA differs from CircleCI checkout" >&2; exit 78; }
+            [[ "$CIRCLE_SHA1" =~ ^[0-9a-f]{40}$ ]] || exit 78
+            repository="red-cup-engineering/market.561.group"
+            remote="$(git remote get-url origin)"
+            case "$remote" in
+              "git@github.com:$repository"|"git@github.com:$repository.git"|"https://github.com/$repository"|"https://github.com/$repository.git"|"ssh://git@github.com/$repository.git") ;;
+              *) echo "Not original private Market checkout" >&2; exit 78 ;;
+            esac
+            node --input-type=module <<'NODE'
+            import fs from 'node:fs';
+            const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));
+            if (pkg.name!=='@causeway-services/market.561.group' ||
+                pkg.dependencies?.['@red-cup-engineering/jsnode-package-vulnerability-triage-services-section']!=='0.2.0-dev.24')
+              throw Error('Exact CVE supplier 0.2.0-dev.24 was not received into original Market source');
+            console.log('Admitted original Market at',process.env.CIRCLE_SHA1);
+            NODE
+      - run:
+          name: Receive the private Public source at its original immutable gitlink
+          command: |
+            set -euo pipefail
+            # The selected CircleCI GitHub App may already read this private
+            # cross-organization submodule. Otherwise an authorized READ-ONLY
+            # project context supplies PUBLIC_MARKET_READ_TOKEN.
+            if ! GIT_TERMINAL_PROMPT=0 git submodule update --init --checkout parameters; then
+              if [ -z "$(printenv PUBLIC_MARKET_READ_TOKEN || true)" ]; then
+                echo 'CircleCI has no read authority for original Causeway Public source' >&2
+                exit 69
+              fi
+              work="$(mktemp -d)"
+              chmod 700 "$work"
+              trap 'rm -rf "$work"' EXIT
+              cat > "$work/askpass" <<'ASK'
+            #!/bin/sh
+            case "$1" in
+              *Username*) printf '%s\n' x-access-token;;
+              *) printf '%s\n' "$PUBLIC_MARKET_READ_TOKEN";;
+            esac
+            ASK
+              chmod 700 "$work/askpass"
+              GIT_ASKPASS="$work/askpass" GIT_TERMINAL_PROMPT=0 git submodule update --init --checkout parameters
+            fi
+            test "$(git -C parameters rev-parse HEAD)" = "$(git rev-parse HEAD:parameters)" ||
+              { echo 'Public source is not the pinned Market parameter revision' >&2; exit 78; }
+            node --input-type=module <<'NODE'
+            import fs from 'node:fs';
+            const offers=JSON.parse(fs.readFileSync('parameters/data/catalog.json','utf8'));
+            const paths=['/v1/cve/applicability','/v1/cve/advisory/assemble','/v1/cve/propagation/diff'];
+            if(!Array.isArray(offers)||offers.length<135||paths.some(route=>!offers.some(o=>o.route===route)))
+              throw Error('Original Public source lacks the authored CVE services');
+            console.log('Pinned original Public seller rows:',offers.length);
+            NODE
+      - run:
+          name: Receive exact original Engineering Code dependency closure
+          no_output_timeout: 15m
+          command: |
+            set -euo pipefail
+            export NPM_CONFIG_USERCONFIG="$PWD/.npmrc"
+            mkdir -p /tmp/market-native/code /tmp/market-native/pnpm
+            npm install --prefix /tmp/market-native/code --no-save --ignore-scripts --no-audit --no-fund \
+              '@red-cup-engineering/npm-workspace-publication-service@0.14.2'
+            npm install --prefix /tmp/market-native/pnpm --no-save --ignore-scripts --no-audit --no-fund \
+              'pnpm@11.28.5'
+            node /tmp/market-native/code/node_modules/@red-cup-engineering/npm-workspace-publication-service/scripts/pin-exact-dependencies.mjs \
+              --package "$PWD" --migrate-workspace --apply > /tmp/market-native/pinning.json
+            node --input-type=module <<'NODE'
+            import fs from 'node:fs';
+            const receipt=JSON.parse(fs.readFileSync('/tmp/market-native/pinning.json','utf8'));
+            const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));
+            if(receipt.ok!==true||receipt.packages?.length!==1||receipt.packages[0]?.applied!==true ||
+               Object.values(pkg.dependencies??{}).some(version=>version==='workspace:*') ||
+               pkg.dependencies['@red-cup-engineering/jsnode-package-vulnerability-triage-services-section']!=='0.2.0-dev.24')
+              throw Error('Original Code did not select a complete immutable CVE Market dependency closure');
+            console.log('Native Code dependency selections:',receipt.packages[0].rewrites?.length);
+            NODE
+            pnpm=/tmp/market-native/pnpm/node_modules/pnpm/bin/pnpm.cjs
+            node "$pnpm" install --lockfile-only --ignore-workspace --ignore-scripts
+            node "$pnpm" install --frozen-lockfile --ignore-workspace --ignore-scripts
+      - run:
+          name: Compile real seller and execute original complete Market receiving
+          no_output_timeout: 15m
+          command: |
+            set -euo pipefail
+            export NPM_CONFIG_USERCONFIG="$PWD/.npmrc"
+            npm run compile
+            npm run check
+            npm run check:catalog
+            npm test
+            echo 'Received native compiled Public Market seller source and full suite; no deploy/settlement asserted.'
+      - store_artifacts:
+          path: /tmp/market-native/pinning.json
+          destination: original-market/Code-dependency-receipt.json
+workflows:
+  receive-private-market-main:
+    jobs:
+      - original-market-native:
+          filters: pipeline.git.branch == "main"
