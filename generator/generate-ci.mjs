@@ -10,7 +10,12 @@ import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames, receiveRunnerSelection, isPublicStandardRunner, githubRequest, reconcileRetiredIntakeFleet } from './open-pr.mjs';
 
-export const REUSABLE = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
+export const REUSABLE = 'red-cup-engineering/continuous-delivery-engineering-services-section/.github/workflows';
+// Read retained callers at the old same-owner coordinate, but never emit it:
+// GitHub Actions deliberately does not follow reusable-workflow redirects.
+const LEGACY_REUSABLE = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
+const reusableCaller = value => typeof value === 'string'
+  && [REUSABLE, LEGACY_REUSABLE].some(prefix => value.startsWith(prefix + '/'));
 // The generated caller hires this exact source revision, never a moving branch.
 export const REF = execFileSync('git', ['rev-parse', 'HEAD'], {
   cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), encoding: 'utf8',
@@ -86,7 +91,37 @@ const job = (id, file, withs = {}, ref = REF, condition) => {
     + `    uses: ${REUSABLE}/${file}@${revision(ref)}\n` + (w ? `    with:\n${w}` : '');
 };
 
-export function renderCi(sel, { ref = REF, runsOn, nodePackage, publicRepository = false } = {}) {
+function selectChecks(detected, checks) {
+  if (checks === undefined) return detected;
+  if (!Array.isArray(checks) || !checks.length || new Set(checks).size !== checks.length
+      || [...checks].some(name => !['node-package', 'lean', 'content'].includes(name)))
+    throw new TypeError('explicit unique known CI checks required');
+  if (checks.some(name => name === 'node-package' ? !detected.node
+      : name === 'lean' ? !detected.lean.length : !detected.content))
+    throw new TypeError('selected CI check has no source capability');
+  return { node: checks.includes('node-package'),
+    lean: checks.includes('lean') ? detected.lean : [], content: checks.includes('content') };
+}
+
+export function renderCi(detected, { ref = REF, runsOn, nodePackage, publicRepository = false, checks, workflows } = {}) {
+  if (checks !== undefined && (!Array.isArray(workflows) || workflows.length !== 1 || workflows[0] !== 'ci'))
+    throw new TypeError('explicit CI checks require workflows:[ci] only');
+  const sel = selectChecks(detected, checks);
+  const noInstall = nodePackage?.packageManager === 'npm';
+  if (noInstall) {
+    const fields = ['packageManager','paths','install','check','nodeVersion','testScript','nodeTest','timeoutMinutes'];
+    if (!sel.node || checks?.length !== 1 || checks[0] !== 'node-package'
+        || Object.keys(nodePackage).some(key => !fields.includes(key))
+        || fields.some(key => !Object.hasOwn(nodePackage, key) || nodePackage[key] === undefined)
+        || nodePackage.install !== false || nodePackage.check !== false
+        || !Array.isArray(nodePackage.paths) || !nodePackage.paths.length || nodePackage.paths.length > 32
+        || new Set(nodePackage.paths).size !== nodePackage.paths.length
+        || [...nodePackage.paths].some(p => typeof p !== 'string' || p.length > 1024
+          || !(p === '.' || /^(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(p)))
+        || !Number.isInteger(nodePackage.timeoutMinutes) || nodePackage.timeoutMinutes < 1 || nodePackage.timeoutMinutes > 360)
+      throw new TypeError('closed dependency-free npm profile with explicit native tests, paths and timeout required');
+    if (revision(ref) !== REF) throw new TypeError('no-install supplier must equal the generator source commit');
+  }
   const jobs = [];
   const publicHosted = publicRepository === true && isPublicStandardRunner(runsOn);
   const sourceVisibility = publicHosted
@@ -96,17 +131,28 @@ export function renderCi(sel, { ref = REF, runsOn, nodePackage, publicRepository
   if (sel.node) {
     let withs=runner, secrets='';
     if(nodePackage!==undefined){
-      if(!nodePackage || nodePackage.packageManager!=='pnpm' || !Array.isArray(nodePackage.paths)
+      if(!nodePackage || !['pnpm','npm'].includes(nodePackage.packageManager) || !Array.isArray(nodePackage.paths)
           || !nodePackage.paths.length || nodePackage.paths.some(p=>typeof p!=='string'||!p||p.startsWith('/')||p.split('/').includes('..')))
-        throw new TypeError('explicit source-owned PNPM package paths required');
+        throw new TypeError('explicit source-owned package manager and package paths required');
+      if (nodePackage.install !== undefined && (typeof nodePackage.install !== 'boolean' || (!noInstall && !nodePackage.install)))
+        throw new TypeError('no-install requires the closed npm native profile');
+      if (nodePackage.check !== undefined && typeof nodePackage.check !== 'boolean')
+        throw new TypeError('check must be a boolean');
       const secret=nodePackage.registryPasswordSecret??nodePackage.registryTokenSecret;
       if(nodePackage.registryPasswordSecret&&nodePackage.registryTokenSecret)
         throw new TypeError('one named registry credential required');
       if(secret && !/^[A-Z_][A-Z0-9_]*$/.test(secret))throw new TypeError('literal named registry secret required');
       if(secret && (!nodePackage.registryUrl || (nodePackage.registryPasswordSecret&&!nodePackage.registryUsername)))
         throw new TypeError('registry identity required for its named credential');
-      withs={...runner,'package-manager':'pnpm','supplier-ref':revision(ref),
+      withs={...runner,'package-manager':nodePackage.packageManager,'supplier-ref':revision(ref),
         'source-commit':"'${{ github.sha }}'",paths:JSON.stringify(JSON.stringify(nodePackage.paths)),concurrency:1};
+      for (const name of ['install','check']) if (nodePackage[name] !== undefined) withs[name] = nodePackage[name];
+      if (noInstall) withs['native-no-install'] = true;
+      if (nodePackage.timeoutMinutes !== undefined) {
+        if (!Number.isInteger(nodePackage.timeoutMinutes) || nodePackage.timeoutMinutes < 1 || nodePackage.timeoutMinutes > 360)
+          throw new TypeError('positive whole timeoutMinutes from 1 through 360 required');
+        withs['timeout-minutes'] = nodePackage.timeoutMinutes;
+      }
       if(nodePackage.nodeVersion!==undefined){
         if(typeof nodePackage.nodeVersion!=='string'||!/^\d+\.\d+\.\d+$/.test(nodePackage.nodeVersion))throw new TypeError('exact source-owned Node version required');
         withs['node-version']=JSON.stringify(nodePackage.nodeVersion);
@@ -116,7 +162,7 @@ export function renderCi(sel, { ref = REF, runsOn, nodePackage, publicRepository
         withs['pnpm-version']=JSON.stringify(nodePackage.pnpmVersion);
       }
       if(nodePackage.testScript!==undefined){
-        if(!/^[a-zA-Z0-9:._-]+$/.test(nodePackage.testScript))throw new TypeError('named source-owned test script required');
+        if(typeof nodePackage.testScript!=='string'||!/^[a-zA-Z0-9:._-]+$/.test(nodePackage.testScript))throw new TypeError('named source-owned test script required');
         withs['test-script']=JSON.stringify(nodePackage.testScript);
       }
       if(nodePackage.testArguments!==undefined){
@@ -152,7 +198,7 @@ export function renderCi(sel, { ref = REF, runsOn, nodePackage, publicRepository
     d === '.' ? 'lean' : 'lean-' + d.replace(/[^A-Za-z0-9]+/g, '-'), 'lean.yml', { 'working-directory': d, ...runner }, ref, sourceVisibility)));
   if (sel.content) jobs.push(job('content', 'content.yml', runner, ref, sourceVisibility));
   if (!jobs.length) return null;
-  return `# Generated by continuous-delivery-services-section/generator. Do not hand-write CI.\nname: ci\non: [push, pull_request]\njobs:\n${jobs.join('')}`;
+  return `# Generated by continuous-delivery-services-section/generator. Do not hand-write CI.\nname: ci\non: [push, pull_request]\n${noInstall ? 'permissions:\n  contents: read\n' : ''}jobs:\n${jobs.join('')}`;
 }
 
 // sync.yml: the downward chain (a repository with submodules advances them) and,
@@ -220,20 +266,22 @@ export function renderLockfileFreshCaller(source, { ref = REF, runsOn, toolWorks
   const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
   if (!object(value) || !object(value.jobs)) refuse();
   const supplier = `${REUSABLE}/lockfile-fresh.yml@`;
+  const legacySupplier = `${LEGACY_REUSABLE}/lockfile-fresh.yml@`;
   const callers = Object.entries(value.jobs).filter(([, job]) => object(job)
-    && typeof job.uses === 'string' && job.uses.startsWith(supplier));
+    && typeof job.uses === 'string' && [supplier, legacySupplier].some(prefix => job.uses.startsWith(prefix)));
   if (callers.length !== 1) refuse();
   const [id, caller] = callers[0];
   if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(id) || caller.steps !== undefined
       || caller['runs-on'] !== undefined || caller.strategy !== undefined || !object(caller.with)) refuse();
-  revision(caller.uses.slice(supplier.length));
+  const priorSupplier = caller.uses.startsWith(supplier) ? supplier : legacySupplier;
+  const priorRevision = revision(caller.uses.slice(priorSupplier.length));
   let labels;
   try { labels = JSON.parse(caller.with['runs-on']); } catch { refuse(); }
   runnerLabels(labels);
   if (!isDeepStrictEqual(labels, runsOn)) throw new Error('lockfile caller must retain its exact runner selection');
   const selected = supplier + ref;
   const binding = caller.with['supplier-revision'];
-  if (binding !== undefined && binding !== caller.uses.slice(supplier.length))
+  if (binding !== undefined && binding !== priorRevision)
     throw new Error('lockfile supplier checkout differs from its reusable workflow revision');
   const toolInputs = {
     'tool-workspace-repository': toolWorkspace.repository,
@@ -274,7 +322,6 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
   const dir = path.join(root, '.github/workflows');
   if (!fs.existsSync(dir)) return [];
   const findings = [];
-  const shared = REUSABLE + '/';
   for (const name of fs.readdirSync(dir).filter(file => /\.ya?ml$/.test(file)).sort()) {
     const file = '.github/workflows/' + name;
     let doc;
@@ -299,7 +346,7 @@ export function auditRunnerRouting(root, { publicRepository = false } = {}) {
         if (publicRepository === true && isPublicStandardRunner(Array.isArray(selection) ? selection : [selection])) continue;
         try { runnerLabels(Array.isArray(selection) ? selection : [selection]); }
         catch { report('job does not select an explicitly named self-hosted house machine/pool'); }
-      } else if (typeof job.uses === 'string' && (job.uses.startsWith(shared) || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
+      } else if (typeof job.uses === 'string' && (reusableCaller(job.uses) || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
         const value = job.with?.['runs-on'];
         if (value === '${{ inputs.runs-on }}') {
           if (inputs['runs-on']?.required !== true)
@@ -341,7 +388,7 @@ export async function auditRunnerAccess(root, { repo, request } = {}) {
       if (!job || typeof job !== 'object') continue;
       let labels = job['runs-on'];
       if (labels === undefined && typeof job.uses === 'string' &&
-          (job.uses.startsWith(REUSABLE + '/') || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
+          (reusableCaller(job.uses) || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
         const raw = job.with?.['runs-on'];
         try { labels = JSON.parse(raw); } catch { continue; }
       }
@@ -378,7 +425,7 @@ export function reportHandwritten(root, generatedFiles = {}) {
     if (Object.hasOwn(generatedFiles, '.github/workflows/' + f))
       return { file: f, coveredBy: f, note: 'generated caller' };
     const t = fs.readFileSync(path.join(dir, f), 'utf8');
-    if (t.includes(REUSABLE)) return { file: f, coveredBy: null, note: 'already a caller' };
+    if ([REUSABLE, LEGACY_REUSABLE].some(prefix => t.includes(prefix))) return { file: f, coveredBy: null, note: 'already a caller' };
     const coveredBy = /lake|lean-action|leanprover/.test(t) ? 'lean.yml'
       : /\b(npm|pnpm|yarn|setup-node)\b/.test(t) ? 'node-package.yml'
       : /\$schema|markdown|link/i.test(t) ? 'content.yml'
@@ -389,7 +436,9 @@ export function reportHandwritten(root, generatedFiles = {}) {
 
 // Returns {files: {path: content}, handwritten, selection}. Writes nothing.
 export function generate(root, options = {}) {
-  const selection = detect(root);
+  if (options.checks !== undefined && (!Array.isArray(options.workflows) || options.workflows.length !== 1 || options.workflows[0] !== 'ci'))
+    throw new TypeError('explicit CI checks require workflows:[ci] only');
+  const selection = selectChecks(detect(root), options.checks);
   const files = {};
   if (options.workflows !== undefined) {
     if (!Array.isArray(options.workflows) || !options.workflows.length
@@ -484,7 +533,7 @@ function generatorInputs() {
     const committed = execFileSync('git', ['show', `${REF}:${file}`], { cwd: supplier });
     if (!committed.equals(fs.readFileSync(path.join(supplier, file)))) throw new Error('generator implementation differs from its supplier commit');
   }
-  return [{ repository: 'red-cup-engineering/continuous-delivery-services-section', commit: REF }];
+  return [{ repository: 'red-cup-engineering/continuous-delivery-engineering-services-section', commit: REF }];
 }
 
 /** Build-side parity consumes the proposal already retained in its Git commit;
@@ -545,12 +594,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     console.log(JSON.stringify(reading));
     process.exit(reading.unread||reading.refused||reading.indeterminate?1:0);
   }
-  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--source-token-secret', '--branch', '--verify-commit', '--workflows', '--retained-runner-evidence', '--repo', '--tool-workspace'];
+  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--source-token-secret', '--branch', '--verify-commit', '--workflows', '--checks', '--node-package', '--retained-runner-evidence', '--repo', '--tool-workspace'];
   const root = path.resolve(args.find((a, i) => !a.startsWith('--') && !valueOptions.includes(args[i - 1])) ?? '.');
   const options = {
     parent: opt('--parent'), ref: opt('--ref') ?? REF,
     runsOn: opt('--runs-on') ? JSON.parse(opt('--runs-on')) : undefined,
     workflows: opt('--workflows') ? JSON.parse(opt('--workflows')) : undefined,
+    checks: opt('--checks') ? JSON.parse(opt('--checks')) : undefined,
+    nodePackage: opt('--node-package') ? JSON.parse(fs.readFileSync(path.resolve(opt('--node-package')), 'utf8')) : undefined,
     toolWorkspace: opt('--tool-workspace') ? JSON.parse(fs.readFileSync(path.resolve(opt('--tool-workspace')), 'utf8')) : undefined,
     sourceTokenSecret: opt('--source-token-secret'),
     defaultBranch: opt('--default-branch') ?? 'main', tokenSecret: opt('--token-secret'),
@@ -590,3 +641,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     if (!Object.keys(files).length) console.log('nothing selected; no caller written');
   }
 }
+

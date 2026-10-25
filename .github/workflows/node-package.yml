@@ -17,10 +17,18 @@ on:
       concurrency:
         type: number
         default: 4
+      timeout-minutes:
+        description: 'Positive whole minutes per job, 1..360; default retains the prior GitHub job limit'
+        type: number
+        default: 360
       install:
         description: 'Install dependencies; set false only for dependency-free source tests'
         type: boolean
         default: true
+      native-no-install:
+        description: 'Opt into strict dependency-free native receiving; false preserves legacy install:false callers'
+        type: boolean
+        default: false
       check:
         description: 'Run the package check script'
         type: boolean
@@ -50,7 +58,7 @@ on:
         type: string
         default: ''
       source-commit:
-        description: 'Exact reviewed source commit; required for PNPM receiving'
+        description: 'Exact reviewed source commit; required for PNPM or native-no-install receiving'
         type: string
         default: ''
       registry-url:
@@ -71,13 +79,49 @@ on:
 jobs:
   discover:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes >= 1 && inputs.timeout-minutes <= 360 && inputs.timeout-minutes || 360 }}
     outputs:
       dirs: ${{ steps.d.outputs.dirs }}
     steps:
+      - name: Admit bounded package inputs
+        env:
+          TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+          INSTALL: ${{ inputs.install }}
+          NATIVE_NO_INSTALL: ${{ inputs.native-no-install }}
+          CHECK: ${{ inputs.check }}
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+          PNPM_VERSION: ${{ inputs.pnpm-version }}
+          NODE_VERSION: ${{ inputs.node-version }}
+          PATHS: ${{ inputs.paths }}
+          TEST_SCRIPT: ${{ inputs.test-script }}
+          TEST_ARGUMENTS: ${{ inputs.test-arguments }}
+          NODE_TEST: ${{ inputs.node-test }}
+          SUPPLIER_REF: ${{ inputs.supplier-ref }}
+          SOURCE_COMMIT: ${{ inputs.source-commit }}
+          REGISTRY_CONFIGURED: ${{ inputs.registry-url != '' || inputs.registry-username != '' || secrets.registry-token != '' || secrets.registry-password != '' }}
+        run: |
+          set -euo pipefail
+          [[ "$TIMEOUT_MINUTES" =~ ^[0-9]+$ ]] && (( TIMEOUT_MINUTES >= 1 && TIMEOUT_MINUTES <= 360 )) ||
+            { echo '::error::Whole timeout-minutes from 1 through 360 required'; exit 1; }
+          if [ "$NATIVE_NO_INSTALL" = 'true' ]; then
+            [ "$INSTALL" = 'false' ] && [ "$PACKAGE_MANAGER" = 'npm' ] && [ "$CHECK" = 'false' ] && [ -z "$PNPM_VERSION" ] && [ "$REGISTRY_CONFIGURED" = 'false' ] ||
+              { echo '::error::No-install requires npm, no check and no PNPM or registry inputs'; exit 1; }
+            [[ "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ && "$SUPPLIER_REF" =~ ^[a-f0-9]{40}$ ]] ||
+              { echo '::error::Exact source and supplier commits required'; exit 1; }
+            [[ "$NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$TEST_SCRIPT" =~ ^[a-zA-Z0-9:._-]+$ ]] && [ -n "$NODE_TEST" ] ||
+              { echo '::error::Exact Node release and named native test descriptor required'; exit 1; }
+            printf '%s' "$TEST_ARGUMENTS" | jq -e 'type == "array" and length == 0' > /dev/null
+            printf '%s' "$PATHS" | jq -e 'type == "array" and length > 0 and length <= 32 and (unique | length) == length and all(.[]; type == "string" and length <= 1024 and (. == "." or test("^([A-Za-z0-9_-][A-Za-z0-9_.-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$")))' > /dev/null
+          fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ inputs.source-commit || github.sha }}
           persist-credentials: false
+      - name: Verify no-install discovery source
+        if: inputs.native-no-install
+        env:
+          SOURCE_COMMIT: ${{ inputs.source-commit }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" || { echo '::error::Source checkout differs'; exit 1; }
       - id: d
         env:
           PATHS: ${{ inputs.paths }}
@@ -91,6 +135,7 @@ jobs:
     needs: discover
     if: needs.discover.outputs.dirs != '[]'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes >= 1 && inputs.timeout-minutes <= 360 && inputs.timeout-minutes || 360 }}
     strategy:
       fail-fast: false
       max-parallel: ${{ inputs.concurrency }}
@@ -107,12 +152,18 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: ${{ inputs.node-version }}
+          package-manager-cache: ${{ !inputs.native-no-install }}
       - name: Validate package manager and source supplier
         env:
           PACKAGE_MANAGER: ${{ inputs.package-manager }}
           SUPPLIER_REF: ${{ inputs.supplier-ref }}
           SOURCE_COMMIT: ${{ inputs.source-commit }}
+          NATIVE_NO_INSTALL: ${{ inputs.native-no-install }}
         run: |
+          if [ "$NATIVE_NO_INSTALL" = 'true' ]; then
+            [[ "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]] && test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" ||
+              { echo '::error::Exact no-install source checkout required'; exit 1; }
+          fi
           case "$PACKAGE_MANAGER" in
             npm) ;;
             pnpm)
@@ -153,6 +204,8 @@ jobs:
           TEST_SCRIPT: ${{ inputs.test-script }}
           TEST_ARGUMENTS: ${{ inputs.test-arguments }}
           NODE_TEST: ${{ inputs.node-test }}
+          NATIVE_NO_INSTALL: ${{ inputs.native-no-install }}
+          NODE_VERSION: ${{ inputs.node-version }}
         run: |
           node --input-type=module <<'NODE'
           import {spawnSync} from 'node:child_process';
@@ -166,6 +219,9 @@ jobs:
             throw new TypeError('bounded literal named test arguments required');
           let executable='npm',argv=['run','--if-present',script,...(args.length?['--',...args]:[])];
           const native=process.env.NODE_TEST??'';
+          if(process.env.NATIVE_NO_INSTALL==='true'&&!native)throw new TypeError('no-install requires a native test descriptor');
+          if(process.env.NATIVE_NO_INSTALL==='true'&&process.versions.node!==process.env.NODE_VERSION)
+            throw new TypeError('no-install Node release differs from its exact selection');
           if(native){
             if(Buffer.byteLength(native)>16384||args.length)throw new TypeError('one bounded native test descriptor required');
             const descriptor=JSON.parse(native);
@@ -186,3 +242,4 @@ jobs:
           if(result.error)throw new Error('named package test could not start');
           process.exit(result.status??1);
           NODE
+
