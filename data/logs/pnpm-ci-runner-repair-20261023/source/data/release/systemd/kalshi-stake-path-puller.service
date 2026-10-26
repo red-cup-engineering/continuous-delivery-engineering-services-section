@@ -1,0 +1,12 @@
+[Unit]
+Description=Pull and activate the Kalshi stake-path service from the production dist-tag of registry.561.group
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RuntimeDirectory=kalshi-stake-path-puller
+RuntimeDirectoryMode=0700
+# The read token arrives as a systemd credential (systemd.exec(5)); it is never an argument or an environment variable.
+LoadCredentialEncrypted=registry-read-token:/etc/credstore.encrypted/registry-read-token
+ExecStart=/usr/bin/env node scripts/release-pull.mjs --registry https://registry.561.group --name @red-cup-engineering/kalshi-stake-path-service --tag production --root /var/lib/kalshi-stake-path-service --unit kalshi-stake-path-service.service

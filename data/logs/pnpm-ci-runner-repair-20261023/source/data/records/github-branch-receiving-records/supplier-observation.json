@@ -1,0 +1,13 @@
+{
+  "kind": "supplier-observation-receiving",
+  "requirement": "no-divergence-in-submodule-advancement",
+  "failedRun": "https://github.com/561-group/bare-cedar-fog/actions/runs/38204410413",
+  "parentSource": "e01f6c766a5fd4eeb86314a7572c7624a4c1a00b",
+  "engineSource": "cd20b9ff38de741b488854e07d02a18b6d2eee92",
+  "observed": "All 27 supplier heads were unread; no pin or pull was advanced.",
+  "cause": "The hiring checkout supplies an authorization extraheader. The observer added another multivalued extraheader. Two headers reproduce GitHub HTTP 400: Duplicate header Authorization.",
+  "independentRead": "The same authoritative GitHub supplier head is readable with one selected authority after clearing inherited header values.",
+  "repair": "Clear inherited GitHub extraheaders before selecting one ephemeral request authority; select refs/heads explicitly; preserve unread observations separately from proved divergent ancestry.",
+  "credentials": "No credential values appear in this record or subprocess command arguments.",
+  "operatingReceiving": "pending qualified shared source and a new bounded parent run; the failed run is terminal"
+}

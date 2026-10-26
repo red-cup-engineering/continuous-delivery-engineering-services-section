@@ -1,0 +1,25 @@
+name: lean
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Explicit JSON runner labels supplied by the caller'
+        type: string
+        required: true
+      working-directory:
+        type: string
+        default: '.'
+jobs:
+  build:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: leanprover/lean-action@f061402b660e0c34644504b324e830f2991d4865 # v1
+        with:
+          lake-package-directory: ${{ inputs.working-directory }}
+          build: true
+          test: false
+          lint: false

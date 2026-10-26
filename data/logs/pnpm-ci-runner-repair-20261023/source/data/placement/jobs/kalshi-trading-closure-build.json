@@ -1,0 +1,46 @@
+{
+  "id": "kalshi-trading-closure-build",
+  "description": "Materialize and verify the source closure the Kalshi stake-path service loads, as a pure build (no effect on any machine).",
+  "effect": false,
+  "minutes": 20,
+  "requires": {
+    "capabilities": [
+      "node"
+    ]
+  },
+  "needs": {
+    "cores": 2,
+    "memoryGb": 4,
+    "freeDiskGb": 6
+  },
+  "defaultMemberSizeMb": {
+    "min": 1
+  },
+  "closure": [
+    {
+      "id": "red-cup-engineering/kalshi-engineering-services-section"
+    },
+    {
+      "id": "red-cup-engineering/computer-content-address-engineering-services-section"
+    },
+    {
+      "id": "red-cup-engineering/computer-data-engineering-services-section"
+    },
+    {
+      "id": "red-cup-engineering/computer-code-engineering-services-section"
+    },
+    {
+      "id": "red-cup-engineering/financial-engineering-services-section"
+    },
+    {
+      "id": "red-cup-engineering/computer-engineering-services-section"
+    },
+    {
+      "id": "red-cup-engineering/signchain"
+    },
+    {
+      "id": "red-cup-engineering/prediction-market-engineering-services-section"
+    }
+  ],
+  "readings": "The 8 repositories are the weather cycle's measured set (soft-grass-pebble content/research/2026-10-15-the-packages-the-weather-cycle-needs.md, 67 packages). The exact import closure of the stake-path service is the next measurement; until then the job is placed on this superset."
+}

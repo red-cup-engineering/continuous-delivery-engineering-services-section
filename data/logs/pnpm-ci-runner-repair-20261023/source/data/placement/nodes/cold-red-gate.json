@@ -1,0 +1,19 @@
+{
+  "id": "cold-red-gate",
+  "state": "down",
+  "cores": null,
+  "memoryGb": null,
+  "freeDiskGb": null,
+  "capabilities": [
+    "node",
+    "guix",
+    "git",
+    "crg-deployer"
+  ],
+  "bandwidthMbps": null,
+  "closureCache": [],
+  "cost": {
+    "kind": "held"
+  },
+  "measured": "2026-10-15 leader-reported Cold Red Gate outage. Intermittent connector response is not an active machine or production receiving heartbeat."
+}

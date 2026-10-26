@@ -1,0 +1,28 @@
+name: superrepo-advance
+# Upward chain, parent side (requirement 20). Call it from a workflow triggered by
+# repository_dispatch (type section-advanced) and a daily schedule. It is
+# submodule-advance with the moved section named in the pull request.
+on:
+  workflow_call:
+    inputs:
+      source:
+        description: 'owner/repo that dispatched (github.event.client_payload.repository); empty on a schedule'
+        type: string
+        default: ''
+      runs-on:
+        type: string
+        required: true
+    secrets:
+      token:
+        required: false
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  advance:
+    uses: ./.github/workflows/submodule-advance.yml
+    with:
+      note: ${{ inputs.source && format('Triggered by a push to main of {0}.', inputs.source) || 'Scheduled advance.' }}
+      runs-on: ${{ inputs.runs-on }}
+    secrets:
+      token: ${{ secrets.token }}

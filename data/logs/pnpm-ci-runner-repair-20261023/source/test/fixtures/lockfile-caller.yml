@@ -1,0 +1,11 @@
+name: lockfile-fresh
+# The workspace lock may not get staler: every pull request is read against its base by the hired CI/CD
+# section's lockfile-freshness ratchet, and fails only on mismatches it adds.
+on:
+  pull_request:
+jobs:
+  lockfile-fresh:
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/lockfile-fresh.yml@e186963c8a4b9cfe5a90e5e33c3e6e30f56cc282
+    with:
+      # The house runs CI on its own machines (GitHub-hosted runners are not available to this repository).
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'

@@ -1,0 +1,62 @@
+name: absolute-symlinks
+# No committed symbolic link may have an absolute target: it resolves only on the machine that wrote it, and
+# where the path exists a workspace tool follows it into the live tree. Links are read from the index, so the
+# checkout fetches no file contents beyond the links themselves. Paths under `exclude` (default **/legacy/**)
+# are reported, not failed.
+on:
+  workflow_call:
+    inputs:
+      exclude:
+        description: 'Space-separated globs whose absolute links are reported but do not fail'
+        type: string
+        default: '**/legacy/**'
+      runs-on:
+        description: 'JSON runner labels, for repositories without GitHub-hosted runners (e.g. ["self-hosted","Linux","X64","bare-cedar-fog"])'
+        type: string
+        required: true
+jobs:
+  absolute-symlinks:
+    # A newer push to the same pull request or branch supersedes this run: cancel it rather than queue every push.
+    concurrency:
+      group: absolute-symlinks-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: head
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.gitattributes
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          ref: e186963c8a4b9cfe5a90e5e33c3e6e30f56cc282
+          path: section
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Absolute symbolic links
+        env:
+          EXCLUDE: ${{ inputs.exclude }}
+        run: |
+          args=()
+          for glob in $EXCLUDE; do args+=(--exclude "$glob"); done
+          status=0
+          node section/scripts/absolute-symlinks.mjs head "${args[@]}" > links.json || status=$?
+          node -e '
+            const r=require("./links.json");
+            const lines=[`### Absolute symbolic links: ${r.found.length?"`refused`":"`none`"}`,""];
+            for(const l of r.found)lines.push(`- \`${l.path}\` -> \`${l.target}\``);
+            if(r.excluded.length)lines.push(`- excluded: ${r.excluded.length}`);
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join("\n")+"\n");'
+          cat links.json
+          exit $status

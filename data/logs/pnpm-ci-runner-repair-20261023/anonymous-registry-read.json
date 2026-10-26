@@ -1,0 +1,23 @@
+{
+  "at": "2026-10-23T05:54:34.912Z",
+  "evidence": [
+    {
+      "url": "https://registry.561.group/@red-cup-engineering/jsnode-package-services-section/0.5.0",
+      "authorizationHeader": false,
+      "cookieHeader": false,
+      "status": 200,
+      "version": "0.5.0",
+      "integrity": "sha512-QBnwNq1qReDYeBv/HZW97QRvKj32bDKdVOfxr7YJnqv1puAc9uywFayFX+4RuhdMePsNA2Ml6SOBCMt0HsgUzw==",
+      "tarballStatus": 200
+    },
+    {
+      "url": "https://registry.561.group/@red-cup-engineering/computer-data-engineering-services-section/0.7.0",
+      "authorizationHeader": false,
+      "cookieHeader": false,
+      "status": 200,
+      "version": "0.7.0",
+      "integrity": "sha512-IWItETgfzB5YTPU7mWwpFe9m16xzX9A74gwCVHYE7qF5Hd9LaocNujT/7MJ/6rWO+XJt7RkMiAk11PuMgqewcQ==",
+      "tarballStatus": 200
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+steps:
+ - uses: leanprover/lean-action@v1

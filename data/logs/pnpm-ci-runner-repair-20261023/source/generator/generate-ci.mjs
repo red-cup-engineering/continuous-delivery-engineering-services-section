@@ -1,0 +1,587 @@
+// Caller generator (requirement 18): selects node-package, lean and content from
+// a repository's files and writes short callers under .github/workflows/.
+import fs from 'node:fs';
+import { PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES } from '../src/placement/plan-allowances.mjs';
+import YAML from 'yaml';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { isDeepStrictEqual } from 'node:util';
+import { openPullRequest, verifyGeneratedSource, verifyGeneratedTreeFrames, receiveRunnerSelection, githubRequest, reconcileRetiredIntakeFleet } from './open-pr.mjs';
+
+export const REUSABLE = 'red-cup-engineering/continuous-delivery-services-section/.github/workflows';
+// The generated caller hires this exact source revision, never a moving branch.
+export const REF = execFileSync('git', ['rev-parse', 'HEAD'], {
+  cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), encoding: 'utf8',
+}).trim();
+const revision = ref => {
+  if (!/^[a-f0-9]{40}$/.test(ref)) throw new Error('workflow supplier needs an exact source commit');
+  return ref;
+};
+export { PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES };
+export function remainingPrivateOrgActionsMinutes(plan, usedMinutes) {
+  if (!Object.hasOwn(PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES, plan)
+      || !Number.isSafeInteger(usedMinutes) || usedMinutes < 0)
+    throw new TypeError('known GitHub organization plan and nonnegative whole billed minutes required');
+  return Math.max(0, PRIVATE_ORG_ACTIONS_MONTHLY_MINUTES[plan] - usedMinutes);
+}
+
+// The Group's generator may only hire an explicitly identified house runner.
+// "ubuntu-latest" works on some accounts until their hosted-minute budget ends;
+// treating that as the default hides an operational dependency and costs money.
+const STANDARD_LABELS = new Set(['self-hosted', 'linux', 'windows', 'macos', 'x64', 'arm', 'arm64']);
+const runnerLabels = labels => {
+  if (!Array.isArray(labels) || !labels.length || labels.some(label =>
+    typeof label !== 'string' || !/^[A-Za-z0-9_-]+$/.test(label)))
+    throw new Error('runner labels need an explicit nonempty array of GitHub label names');
+  const normalized = labels.map(label => label.toLowerCase());
+  if (new Set(normalized).size !== normalized.length || !normalized.includes('self-hosted')
+      || !normalized.some(label => !STANDARD_LABELS.has(label)))
+    throw new Error('house CI requires a self-hosted runner and a retained machine/pool label; GitHub-hosted runners are not a fallback');
+  return JSON.stringify(JSON.stringify(labels));
+};
+// Mirrors content.yml's walk, so selection matches what content.yml would check.
+const SKIP = new Set(['.git', 'node_modules', '.lake', 'lib']);
+
+function walk(root, dir = '.') {
+  return fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(e => {
+    if (SKIP.has(e.name)) return [];
+    const rel = path.join(dir, e.name);
+    return e.isDirectory() ? walk(root, rel) : [rel];
+  });
+}
+
+function hasRelativeSchema(file) {
+  let j;
+  try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return false; }
+  return !!j && typeof j === 'object' && typeof j.$schema === 'string' && !/^https?:/.test(j.$schema);
+}
+
+function hasRelativeLink(file) {
+  const t = fs.readFileSync(file, 'utf8').replace(/```[\s\S]*?```/g, '');
+  for (const m of t.matchAll(/\]\(([^)\s#]+)(?:#[^)]*)?\)/g)) if (!/^[a-z]+:/i.test(m[1])) return true;
+  return false;
+}
+
+// Returns {node: bool, lean: [workingDirectory...], content: bool}.
+export function detect(root) {
+  const files = walk(root);
+  const base = f => path.basename(f);
+  const lean = files.filter(f => /^lakefile\.(lean|toml)$/.test(base(f)))
+    .map(f => path.dirname(f)).filter((d, i, a) => a.indexOf(d) === i).sort();
+  return {
+    node: files.some(f => base(f) === 'package.json'),
+    lean,
+    content: files.some(f => {
+      const abs = path.join(root, f);
+      return (f.endsWith('.json') && hasRelativeSchema(abs)) || (f.endsWith('.md') && hasRelativeLink(abs));
+    }),
+  };
+}
+
+const job = (id, file, withs = {}, ref = REF, condition) => {
+  const w = Object.entries(withs).map(([k, v]) => `      ${k}: ${v}\n`).join('');
+  return `  ${id}:\n` + (condition ? `    if: ${condition}\n` : '')
+    + `    uses: ${REUSABLE}/${file}@${revision(ref)}\n` + (w ? `    with:\n${w}` : '');
+};
+
+export function renderCi(sel, { ref = REF, runsOn, nodePackage } = {}) {
+  const jobs = [];
+  const runner = {'runs-on': runnerLabels(runsOn)};
+  if (sel.node) {
+    let withs=runner, secrets='';
+    if(nodePackage!==undefined){
+      if(!nodePackage || nodePackage.packageManager!=='pnpm' || !Array.isArray(nodePackage.paths)
+          || !nodePackage.paths.length || nodePackage.paths.some(p=>typeof p!=='string'||!p||p.startsWith('/')||p.split('/').includes('..')))
+        throw new TypeError('explicit source-owned PNPM package paths required');
+      const secret=nodePackage.registryPasswordSecret??nodePackage.registryTokenSecret;
+      if(nodePackage.registryPasswordSecret&&nodePackage.registryTokenSecret)
+        throw new TypeError('one named registry credential required');
+      if(secret && !/^[A-Z_][A-Z0-9_]*$/.test(secret))throw new TypeError('literal named registry secret required');
+      if(secret && (!nodePackage.registryUrl || (nodePackage.registryPasswordSecret&&!nodePackage.registryUsername)))
+        throw new TypeError('registry identity required for its named credential');
+      withs={...runner,'package-manager':'pnpm','supplier-ref':revision(ref),
+        'source-commit':"'${{ github.sha }}'",paths:JSON.stringify(JSON.stringify(nodePackage.paths)),concurrency:1};
+      if(nodePackage.pnpmVersion!==undefined){
+        if(!/^\d+\.\d+\.\d+$/.test(nodePackage.pnpmVersion))throw new TypeError('exact source-owned PNPM version required');
+        withs['pnpm-version']=JSON.stringify(nodePackage.pnpmVersion);
+      }
+      if(nodePackage.testScript!==undefined){
+        if(!/^[a-zA-Z0-9:._-]+$/.test(nodePackage.testScript))throw new TypeError('named source-owned test script required');
+        withs['test-script']=JSON.stringify(nodePackage.testScript);
+      }
+      if(nodePackage.testArguments!==undefined){
+        const args=nodePackage.testArguments;
+        if(!Array.isArray(args)||args.length>32||args.some(value=>typeof value!=='string'||value.length>4096||/[\r\n\0]/.test(value)))
+          throw new TypeError('bounded literal named test argument vector required');
+        withs['test-arguments']=JSON.stringify(JSON.stringify(args));
+      }
+      if(nodePackage.nodeTest!==undefined){
+        const descriptor=nodePackage.nodeTest;
+        if(!descriptor||Array.isArray(descriptor)||Object.keys(descriptor).sort().join(',')!=='concurrency,expectedScript,files'
+            ||!Array.isArray(descriptor.files)||!descriptor.files.length||descriptor.files.length>32
+            ||descriptor.files.some(file=>typeof file!=='string'||file.length>1024||!/^[A-Za-z0-9_./*?-]+$/.test(file)
+              ||file.startsWith('/')||file.startsWith('-')||file.split('/').includes('..'))
+            ||!Number.isInteger(descriptor.concurrency)||descriptor.concurrency<1||descriptor.concurrency>16
+            ||descriptor.expectedScript!=='node --test '+descriptor.files.map(file=>JSON.stringify(file)).join(' ')
+            ||(nodePackage.testArguments?.length))
+          throw new TypeError('exact source-owned native Node test descriptor required');
+        withs['node-test']=JSON.stringify(JSON.stringify(descriptor));
+      }
+      if(nodePackage.registryUrl){
+        const url=new URL(nodePackage.registryUrl);
+        if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash)
+          throw new TypeError('credential-free HTTPS registry required');
+        withs['registry-url']=JSON.stringify(nodePackage.registryUrl);
+      }
+      if(nodePackage.registryUsername)withs['registry-username']=JSON.stringify(nodePackage.registryUsername);
+      if(secret)secrets='    secrets:\n      registry-'+(nodePackage.registryPasswordSecret?'password':'token')+': ${{ secrets.'+secret+' }}\n';
+    }
+    jobs.push(job('node-package','node-package.yml',withs,ref)+secrets);
+  }
+  sel.lean.forEach(d => jobs.push(job(
+    d === '.' ? 'lean' : 'lean-' + d.replace(/[^A-Za-z0-9]+/g, '-'), 'lean.yml', { 'working-directory': d, ...runner }, ref)));
+  if (sel.content) jobs.push(job('content', 'content.yml', runner, ref));
+  if (!jobs.length) return null;
+  return `# Generated by continuous-delivery-services-section/generator. Do not hand-write CI.\nname: ci\non: [push, pull_request]\njobs:\n${jobs.join('')}`;
+}
+
+// sync.yml: the downward chain (a repository with submodules advances them) and,
+// with a parent, the upward chain (a push to main notifies the parent).
+export function renderSync({ submodules, parent, ref = REF, runsOn, defaultBranch = 'main', tokenSecret }) {
+  if (!submodules && !parent) return null;
+  if (parent && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(parent)) throw new Error('parent needs an exact GitHub repository');
+  if (tokenSecret && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tokenSecret)) throw new Error('invalid token secret name');
+  const labels = runnerLabels(runsOn);
+  const on = ['on:'];
+  if (submodules) on.push('  schedule:', "    - cron: '17 6 * * *'", '  repository_dispatch:', '    types: [section-advanced]', '  workflow_dispatch:');
+  if (parent) on.push('  push:', `    branches: [${JSON.stringify(defaultBranch)}]`);
+  else if (submodules) on.push('  push:', `    branches: [${JSON.stringify(defaultBranch)}]`, "    paths: ['.github/workflows/sync.yml']");
+  const jobs = [];
+  const secret = tokenSecret ? `    secrets:\n      token: \${{ secrets.${tokenSecret} }}\n` : '    secrets: inherit\n';
+  const runner = `      runs-on: ${labels}\n`;
+  if (submodules) jobs.push(`  advance:\n${parent ? "    if: github.event_name != 'push'\n" : ''}    uses: ${REUSABLE}/superrepo-advance.yml@${revision(ref)}\n    with:\n      source: \${{ github.event.client_payload.repository }}\n${runner}${secret}`);
+  if (parent) jobs.push(`  notify:\n    if: github.event_name == 'push'\n    uses: ${REUSABLE}/notify-parent.yml@${revision(ref)}\n    with:\n      parent: ${parent}\n${runner}${secret}`);
+  return `# Generated by continuous-delivery-services-section/generator.\nname: sync\n${on.join('\n')}\npermissions:\n  contents: write\n  pull-requests: write\nconcurrency:\n  group: submodule-sync\n  cancel-in-progress: false\njobs:\n${jobs.join('')}`;
+}
+
+// release.yml: publish the packages that a committed binding names (release-closure.json at the repository
+// root: { packages: [names], root?: name }) with release-publish.yml, on every push to the default
+// branch and on demand.
+export function renderRelease(binding, { ref = REF, runsOn, defaultBranch = 'main' } = {}) {
+  const names = v => Array.isArray(v) && v.every(n => typeof n === 'string' && /^@[a-z0-9._-]+\/[a-z0-9._-]+$/.test(n));
+  if (!binding || !names(binding.packages) || !binding.packages.length) throw new Error('release binding needs a nonempty list of scoped package names');
+  if (binding.root !== undefined && (!names([binding.root]) || !binding.packages.includes(binding.root))) throw new Error('release binding root must be one of its packages');
+  if (Object.hasOwn(binding,'drop')) throw new Error('release cannot drop original declared dependencies');
+  const withs = { 'runs-on': runnerLabels(runsOn), packages: JSON.stringify(JSON.stringify(binding.packages)) };
+  if (binding.root) withs.root = JSON.stringify(binding.root);
+  return `# Generated by continuous-delivery-services-section/generator. Do not hand-write CI.\nname: release\non:\n  push:\n    branches: [${JSON.stringify(defaultBranch)}]\n  workflow_dispatch:\npermissions:\n  contents: read\njobs:\n${job('publish', 'release-publish.yml', withs, ref)}`;
+}
+
+/** Adopt only an existing lockfile caller. Its committed YAML is the complete
+ * consumer declaration; changing its supplier must not reconstruct that policy.
+ * This producer and the hired workflow share one exact supplier input. */
+export function renderLockfileFreshCaller(source, { ref = REF, runsOn, toolWorkspace, sourceTokenSecret } = {}) {
+  if (revision(ref) !== REF) throw new Error('lockfile caller supplier must equal the generator source commit');
+  runnerLabels(runsOn);
+  if (!toolWorkspace || typeof toolWorkspace.repository !== 'string'
+      || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(toolWorkspace.repository)
+      || !/^[a-f0-9]{40}$/.test(toolWorkspace.revision ?? '')
+      || typeof toolWorkspace.checkerPath !== 'string' || !toolWorkspace.checkerPath
+      || toolWorkspace.checkerPath.startsWith('/') || toolWorkspace.checkerPath.includes('\\')
+      || toolWorkspace.checkerPath.split('/').some(part => !part || part === '.' || part === '..'))
+    throw new Error('exact composed workspace repository, revision and checker path required');
+  if (typeof sourceTokenSecret !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(sourceTokenSecret))
+    throw new Error('existing source-read secret name required');
+  const refuse = () => { throw new Error('unambiguous existing lockfile-fresh caller required'); };
+  const parse = text => {
+    if (typeof text !== 'string' || !text.isWellFormed() || Buffer.byteLength(text) > 1024 * 1024) refuse();
+    const document = YAML.parseDocument(text, { uniqueKeys: true, merge: false });
+    if (document.errors.length || document.warnings.length) refuse();
+    YAML.visit(document, {
+      Alias: refuse,
+      Node: (_key, node) => { if (node.anchor) refuse(); },
+      Pair: (_key, pair) => { if (pair.key?.value === '<<') refuse(); },
+    });
+    let value;
+    try { value = document.toJS({ maxAliasCount: 0 }); } catch { refuse(); }
+    return { document, value };
+  };
+  const { document, value } = parse(source);
+  const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+  if (!object(value) || !object(value.jobs)) refuse();
+  const supplier = `${REUSABLE}/lockfile-fresh.yml@`;
+  const callers = Object.entries(value.jobs).filter(([, job]) => object(job)
+    && typeof job.uses === 'string' && job.uses.startsWith(supplier));
+  if (callers.length !== 1) refuse();
+  const [id, caller] = callers[0];
+  if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(id) || caller.steps !== undefined
+      || caller['runs-on'] !== undefined || caller.strategy !== undefined || !object(caller.with)) refuse();
+  revision(caller.uses.slice(supplier.length));
+  let labels;
+  try { labels = JSON.parse(caller.with['runs-on']); } catch { refuse(); }
+  runnerLabels(labels);
+  if (!isDeepStrictEqual(labels, runsOn)) throw new Error('lockfile caller must retain its exact runner selection');
+  const selected = supplier + ref;
+  const binding = caller.with['supplier-revision'];
+  if (binding !== undefined && binding !== caller.uses.slice(supplier.length))
+    throw new Error('lockfile supplier checkout differs from its reusable workflow revision');
+  const toolInputs = {
+    'tool-workspace-repository': toolWorkspace.repository,
+    'tool-workspace-revision': toolWorkspace.revision,
+    'tool-workspace-checker-path': toolWorkspace.checkerPath,
+  };
+  const sourceSecret = `\${{ secrets.${sourceTokenSecret} }}`;
+  if (caller.secrets !== undefined && caller.secrets !== 'inherit' && !object(caller.secrets)) refuse();
+  if (object(caller.secrets) && caller.secrets['source-read-token'] !== undefined
+      && caller.secrets['source-read-token'] !== sourceSecret)
+    throw new Error('lockfile caller source-read token differs from its selected existing secret');
+  const callerSecrets = object(caller.secrets) ? structuredClone(caller.secrets) : {};
+  callerSecrets['source-read-token'] = sourceSecret;
+  for (const [name, value] of Object.entries(toolInputs)) {
+    if (caller.with[name] !== undefined && caller.with[name] !== value)
+      throw new Error('lockfile caller tool workspace differs from its committed selection: ' + name);
+  }
+  if (caller.uses === selected && binding === ref
+      && Object.entries(toolInputs).every(([name, value]) => caller.with[name] === value)
+      && isDeepStrictEqual(caller.secrets, callerSecrets)) return source;
+  document.setIn(['jobs', id, 'uses'], selected);
+  document.setIn(['jobs', id, 'with', 'supplier-revision'], ref);
+  for (const [name, value] of Object.entries(toolInputs)) document.setIn(['jobs', id, 'with', name], value);
+  document.setIn(['jobs', id, 'secrets'], callerSecrets);
+  const rendered = document.toString();
+  const expected = structuredClone(value);
+  expected.jobs[id].uses = selected;
+  expected.jobs[id].with['supplier-revision'] = ref;
+  Object.assign(expected.jobs[id].with, toolInputs);
+  expected.jobs[id].secrets = callerSecrets;
+  if (!isDeepStrictEqual(parse(rendered).value, expected)) throw new Error('lockfile caller transformation changed consumer policy');
+  return rendered;
+}
+
+// Audit existing handwritten and generated callers without silently overwriting them.
+// A routing declaration is not evidence that a runner is actually registered or online.
+export function auditRunnerRouting(root, { publicRepository = false } = {}) {
+  const dir = path.join(root, '.github/workflows');
+  if (!fs.existsSync(dir)) return [];
+  const findings = [];
+  const shared = REUSABLE + '/';
+  for (const name of fs.readdirSync(dir).filter(file => /\.ya?ml$/.test(file)).sort()) {
+    const file = '.github/workflows/' + name;
+    let doc;
+    try { doc = YAML.parse(fs.readFileSync(path.join(dir, name), 'utf8'), { uniqueKeys: true }); }
+    catch { findings.push({file, job: null, reason: 'unparseable or duplicate-key workflow YAML'}); continue; }
+    if (!doc || !doc.jobs || typeof doc.jobs !== 'object' || Array.isArray(doc.jobs)) continue;
+    const inputs = doc.on?.workflow_call?.inputs ?? {};
+    for (const [jobId, job] of Object.entries(doc.jobs)) {
+      if (!job || typeof job !== 'object') continue;
+      const report = reason => findings.push({file, job:jobId, reason});
+      const selection = job['runs-on'];
+      if (selection !== undefined) {
+        if (selection === '${{ fromJSON(inputs.runs-on) }}') {
+          if (inputs['runs-on']?.required !== true)
+            report('reusable runner selector has no required caller input');
+          continue;
+        }
+        if (typeof selection === 'string' && selection.includes('${{')) {
+          report('dynamic runner selector has no statically proven house machine identity');
+          continue;
+        }
+        if (publicRepository && typeof selection === 'string'
+            && /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(selection)) continue;
+        try { runnerLabels(Array.isArray(selection) ? selection : [selection]); }
+        catch { report('job does not select an explicitly named self-hosted house machine/pool'); }
+      } else if (typeof job.uses === 'string' && (job.uses.startsWith(shared) || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
+        const value = job.with?.['runs-on'];
+        if (value === '${{ inputs.runs-on }}') {
+          if (inputs['runs-on']?.required !== true)
+            report('reusable workflow forwards a runner without requiring caller selection');
+        } else {
+          let parsed;
+          try { parsed = JSON.parse(value); } catch { parsed = undefined; }
+          if (publicRepository && Array.isArray(parsed) && parsed.length === 1
+              && typeof parsed[0] === 'string'
+              && /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(parsed[0])) continue;
+          try { runnerLabels(parsed); } catch {
+            report('shared delivery caller has no explicit house runner input');
+          }
+        }
+      } else if (job.uses) {
+        report('reusable job is not a verified shared-delivery caller; audit its actual runner supplier');
+      } else if (job.steps && !job.uses) {
+        report('executable job has no runner selection');
+      }
+    }
+  }
+  return findings;
+}
+
+// An optional online audit reuses the existing consumer-repo runner admission.
+// Unlike the static YAML audit it tests registered/online eligibility, not
+// merely labels. It neither creates runners nor claims a completed CI job.
+export async function auditRunnerAccess(root, { repo, request } = {}) {
+  if (typeof repo !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo))
+    throw new TypeError('runner access audit requires an explicit owner/repository');
+  if (typeof request !== 'function') throw new TypeError('runner access audit requires an authenticated GitHub reader');
+  const findings = auditRunnerRouting(root);
+  const dir = path.join(root, '.github/workflows');
+  const selectors = new Map();
+  if (fs.existsSync(dir)) for (const name of fs.readdirSync(dir).filter(f => /\.ya?ml$/.test(f)).sort()) {
+    let doc;
+    try { doc = YAML.parse(fs.readFileSync(path.join(dir,name),'utf8'), {uniqueKeys:true}); }
+    catch { continue; }
+    if (!doc?.jobs || typeof doc.jobs !== 'object') continue;
+    for (const [jobId, job] of Object.entries(doc.jobs)) {
+      if (!job || typeof job !== 'object') continue;
+      let labels = job['runs-on'];
+      if (labels === undefined && typeof job.uses === 'string' &&
+          (job.uses.startsWith(REUSABLE + '/') || /^\.\/\.github\/workflows\/[^/]+\.ya?ml$/.test(job.uses))) {
+        const raw = job.with?.['runs-on'];
+        try { labels = JSON.parse(raw); } catch { continue; }
+      }
+      if (typeof labels === 'string' && labels.includes('${{')) continue;
+      if (typeof labels === 'string') labels = [labels];
+      if (!Array.isArray(labels) || !labels.length || labels.some(s => typeof s !== 'string')) continue;
+      const key = JSON.stringify(labels);
+      if (!selectors.has(key)) selectors.set(key,{labels,usedBy:[]});
+      selectors.get(key).usedBy.push('.github/workflows/' + name + ':' + jobId);
+    }
+  }
+  const access = [];
+  for (const selector of selectors.values()) {
+    try {
+      const receipt = await receiveRunnerSelection({repo,runsOn:selector.labels,request});
+      access.push({ ...selector, state:receipt.execution === 'public-standard'
+        ? 'public-standard-no-private-minutes' : 'registered-online',
+        runnerIds:receipt.runnerIds ?? [], executed:false });
+    } catch (error) {
+      access.push({ ...selector, state:'access-unverified', reason:String(error?.message || error), executed:false });
+    }
+  }
+  return {repo,findings,access,
+    ok:findings.length === 0 && access.length > 0 && access.every(x=>x.state !== 'access-unverified'),
+    executionReceived:false};
+}
+
+// Handwritten workflows other than the generated ones, each against the reusable
+// workflow that covers it (requirement 17). Removal waits on the receiving office.
+export function reportHandwritten(root, generatedFiles = {}) {
+  const dir = path.join(root, '.github/workflows');
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter(f => /\.ya?ml$/.test(f) && !['ci.yml', 'sync.yml'].includes(f)).map(f => {
+    if (Object.hasOwn(generatedFiles, '.github/workflows/' + f))
+      return { file: f, coveredBy: f, note: 'generated caller' };
+    const t = fs.readFileSync(path.join(dir, f), 'utf8');
+    if (t.includes(REUSABLE)) return { file: f, coveredBy: null, note: 'already a caller' };
+    const coveredBy = /lake|lean-action|leanprover/.test(t) ? 'lean.yml'
+      : /\b(npm|pnpm|yarn|setup-node)\b/.test(t) ? 'node-package.yml'
+      : /\$schema|markdown|link/i.test(t) ? 'content.yml'
+      : /gitmodules|submodule/i.test(t) ? 'submodule-advance.yml' : null;
+    return { file: f, coveredBy, note: coveredBy ? 'duplicate pending confirmation' : 'no reusable workflow covers it' };
+  });
+}
+
+// Returns {files: {path: content}, handwritten, selection}. Writes nothing.
+export function generate(root, options = {}) {
+  const selection = detect(root);
+  const files = {};
+  if (options.workflows !== undefined) {
+    if (!Array.isArray(options.workflows) || !options.workflows.length
+        || new Set(options.workflows).size !== options.workflows.length
+        || [...options.workflows].some(name => !['ci','sync','lockfile-fresh','release'].includes(name)))
+      throw new Error('explicit generated workflow selection required');
+  }
+  // Existing defaults remain unchanged. A previously unmanaged checker is
+  // adopted only by the existing explicit workflow selection, never by guessing
+  // from a package/lockfile or treating a handwritten workflow as a template.
+  const selected = options.workflows ?? ['ci', 'sync'];
+  for (const name of selected) {
+    let content;
+    if (name === 'ci') content = renderCi(selection, options);
+    else if (name === 'sync') content = renderSync({ ...options, submodules: fs.existsSync(path.join(root, '.gitmodules')) });
+    else if (name === 'lockfile-fresh') {
+      const file = path.join(root, '.github/workflows/lockfile-fresh.yml');
+      const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+      if (stat && !stat.isFile()) throw new Error('lockfile caller requires a regular source file');
+      if (stat) {
+        const bytes = fs.readFileSync(file), source = bytes.toString('utf8');
+        if (!bytes.equals(Buffer.from(source))) throw new Error('lockfile caller requires lossless UTF-8 source');
+        content = renderLockfileFreshCaller(source, options);
+      }
+    } else if (name === 'release') {
+      const file = path.join(root, 'release-closure.json');
+      if (fs.existsSync(file)) content = renderRelease(JSON.parse(fs.readFileSync(file, 'utf8')), options);
+    } else throw new Error('explicit generated workflow selection required');
+    if (content) files[`.github/workflows/${name}.yml`] = content;
+    else if (options.workflows !== undefined) throw new Error('selected workflow has no source capability');
+  }
+  return { files, handwritten: reportHandwritten(root, files), runnerFindings: auditRunnerRouting(root, {publicRepository:options.publicRepository}), selection };
+}
+
+// The review consumer generates from Git's immutable source, not a dirty or
+// ignored working-tree file. The temporary tree contains only this owner's
+// tracked regular files, never another submodule's working copy or a symlink.
+export function generateFromSource(root, options = {}, sourceRevision) {
+  const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  // Receiving produces from HEAD. Later parity must use the original immutable
+  // generation base: a received output is never its own trusted input template.
+  const sourceCommit = revision(git(['rev-parse', '--verify',
+    sourceRevision === undefined ? 'HEAD^{commit}' : `${revision(sourceRevision)}^{commit}`]).trim());
+  const rows = git(['ls-tree', '-r', '-z', '--full-tree', sourceCommit]).split('\0').filter(Boolean);
+  const temporary = fs.mkdtempSync(path.join(tmpdir(), 'cd-generated-source-'));
+  try {
+    const selected = [];
+    for (const row of rows) {
+      const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);
+      if (!match) throw new Error('invalid generation source tree');
+      const [, mode, type, blob, file] = match;
+      // Match the actual detector's source boundary before materialization.
+      // Ignored libraries and unrelated blobs cannot affect these callers.
+      if (type === 'commit' || file.split('/').some(part => SKIP.has(part))) continue;
+      const needed = file === '.gitmodules' || file.endsWith('.json') || file.endsWith('.md')
+        || /^lakefile\.(lean|toml)$/.test(path.basename(file))
+        || /^\.github\/workflows\/[^/]+\.ya?ml$/.test(file);
+      if (!needed) continue;
+      if (file.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')
+          || (process.platform === 'win32' && file.includes('\\'))) throw new Error('invalid generation source path');
+      if (mode === '120000') throw new Error('caller generation needs regular source inputs; symlink input is unsupported');
+      selected.push({blob,file});
+    }
+    // One bounded immutable Git reading replaces one child process per blob.
+    const objects = selected.length ? execFileSync('git', ['cat-file', '--batch'], {
+      cwd: root, input: selected.map(row => row.blob).join('\n') + '\n', maxBuffer: 32 * 1024 * 1024,
+    }) : Buffer.alloc(0);
+    let cursor = 0;
+    for (const {blob,file} of selected) {
+      const end = objects.indexOf(10, cursor);
+      const header = end < 0 ? null : /^([a-f0-9]{40}) blob ([0-9]+)$/.exec(objects.subarray(cursor,end).toString('ascii'));
+      const size = header ? Number(header[2]) : NaN;
+      if (!header || header[1] !== blob || !Number.isSafeInteger(size)
+          || end + 1 + size >= objects.length || objects[end + 1 + size] !== 10) throw new Error('incomplete generation source blob');
+      const target = path.join(temporary,file);
+      fs.mkdirSync(path.dirname(target), {recursive:true});
+      fs.writeFileSync(target,objects.subarray(end + 1,end + 1 + size));
+      cursor = end + 2 + size;
+    }
+    if (cursor !== objects.length) throw new Error('unexpected generation source blob output');
+    return { ...generate(temporary, options), sourceCommit,
+      sourceReading: {trackedLeaves: rows.length, selectedBlobs: selected.length,
+        blobReadProcesses: selected.length ? 1 : 0, stagedBytes: objects.length} };
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
+function generatorInputs() {
+  const supplier = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  for (const file of ['generator/generate-ci.mjs', 'generator/open-pr.mjs', 'generator/retained-runner.mjs']) {
+    const committed = execFileSync('git', ['show', `${REF}:${file}`], { cwd: supplier });
+    if (!committed.equals(fs.readFileSync(path.join(supplier, file)))) throw new Error('generator implementation differs from its supplier commit');
+  }
+  return [{ repository: 'red-cup-engineering/continuous-delivery-services-section', commit: REF }];
+}
+
+/** Build-side parity consumes the proposal already retained in its Git commit;
+ * there is no new receipt repository. A different source tree needs fresh
+ * generation receiving, even when a subset of its outputs happens to match. */
+export async function verifyGeneratedCaller({ root, receiptCommit, ...options }) {
+  revision(receiptCommit);
+  const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const message = git(['show', '-s', '--format=%B', receiptCommit]);
+  const lines = message.split('\n');
+  let proposal;
+  try { proposal = JSON.parse(lines.at(-1)); } catch { throw new Error('received commit has no generated-source proposal'); }
+  if (!lines.includes(`Generated-source identity: ${proposal.id}`)) throw new Error('received generation identity differs');
+  if (git(['show', '-s', '--format=%P', receiptCommit]) !== proposal.sourceCommit) throw new Error('received generation parent differs');
+  const currentSourceCommit = revision(git(['rev-parse', 'HEAD^{commit}']));
+  if (git(['rev-parse', `${currentSourceCommit}^{tree}`]) !== git(['rev-parse', `${receiptCommit}^{tree}`])) throw new Error('current source tree differs from received generation');
+  const readTree=async sha=>({sha,truncated:false,tree:git(['ls-tree','-z',sha]).split('\0').filter(Boolean).map(row=>{
+    const match=/^(\d+) (\w+) ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);
+    if(!match)throw new Error('invalid parity source tree');
+    return {mode:match[1],type:match[2],sha:match[3],path:match[4]};
+  })});
+  const produced = generateFromSource(root, options, proposal.sourceCommit);
+  if (produced.sourceCommit !== proposal.sourceCommit) throw new Error('generation source differs from retained proposal');
+  const verified = verifyGeneratedSource(proposal, { files: produced.files, inputs: generatorInputs() });
+  let transformation;
+  try {transformation=await verifyGeneratedTreeFrames(verified,git(['rev-parse',verified.sourceCommit+'^{tree}']),git(['rev-parse',receiptCommit+'^{tree}']),readTree);}
+  catch(error){error.code='output-mismatch';throw error;}
+  return { status: 'verified', receiptCommit, sourceCommit: currentSourceCommit,
+    generationSourceCommit: produced.sourceCommit, proposal: verified, transformation };
+}
+
+// The same producer is used for first receiving and later byte-parity checking.
+// It does not need a model, a workflow permission change or a new service.
+export async function receiveGeneratedCaller({ root, repo, token, request, branch, proveTreePatch, deriveTreePatch, retainedRunnerEvidence, ...options }) {
+  const produced = generateFromSource(root, options);
+  if (!Object.keys(produced.files).length) return { status: 'empty', ...produced };
+  const inputs = generatorInputs();
+  const result = await openPullRequest({ repo, branch, files: produced.files, sourceCommit: produced.sourceCommit, inputs, token, request, runsOn: options.runsOn,proveTreePatch,deriveTreePatch,retainedRunnerEvidence,
+    title: 'Call the continuous-delivery services section' });
+  // Exercise the receiving contract on the actual producer, not an unused helper.
+  const regenerated = generateFromSource(root, options);
+  if (regenerated.sourceCommit !== produced.sourceCommit) throw new Error('source checkout moved during generation receiving');
+  verifyGeneratedSource(result.proposal, { files: regenerated.files, inputs });
+  return result;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  const args = process.argv.slice(2);
+  const opt = n => { const i = args.indexOf(n); return i < 0 ? undefined : args[i + 1]; };
+  if (args.includes('--retire-obsolete-intake-fleet')) {
+    if (!process.env.GH_TOKEN) throw new Error('fleet reconciliation requires an already authorized GitHub token; no effect attempted');
+    const organizations=(opt('--organizations')??'').split(',').filter(Boolean);
+    const maxChanges=opt('--max-changes')===undefined?400:Number(opt('--max-changes'));
+    const reading=await reconcileRetiredIntakeFleet({
+      organizations,apply:args.includes('--apply'),maxChanges,
+    },{request:githubRequest(process.env.GH_TOKEN)});
+    // Counts only. Never publish private organization inventory into public CI logs.
+    console.log(JSON.stringify(reading));
+    process.exit(reading.unread||reading.refused||reading.indeterminate?1:0);
+  }
+  const valueOptions = ['--parent', '--pr', '--ref', '--runs-on', '--default-branch', '--token-secret', '--source-token-secret', '--branch', '--verify-commit', '--workflows', '--retained-runner-evidence', '--repo', '--tool-workspace'];
+  const root = path.resolve(args.find((a, i) => !a.startsWith('--') && !valueOptions.includes(args[i - 1])) ?? '.');
+  const options = {
+    parent: opt('--parent'), ref: opt('--ref') ?? REF,
+    runsOn: opt('--runs-on') ? JSON.parse(opt('--runs-on')) : undefined,
+    workflows: opt('--workflows') ? JSON.parse(opt('--workflows')) : undefined,
+    toolWorkspace: opt('--tool-workspace') ? JSON.parse(fs.readFileSync(path.resolve(opt('--tool-workspace')), 'utf8')) : undefined,
+    sourceTokenSecret: opt('--source-token-secret'),
+    defaultBranch: opt('--default-branch') ?? 'main', tokenSecret: opt('--token-secret'),
+    publicRepository: args.includes('--public-repo'),
+  };
+  if (args.includes('--audit-runner-access')) {
+    const reading = await auditRunnerAccess(root, {repo:opt('--repo'),
+      request:githubRequest(process.env.GH_TOKEN)});
+    console.log(JSON.stringify(reading,null,2));
+    process.exit(reading.ok ? 0 : 1);
+  }
+  if (args.includes('--audit-runners')) {
+    const findings = auditRunnerRouting(root, {publicRepository:args.includes('--public-repo')});
+    console.log(JSON.stringify({root,findings},null,2));
+    process.exit(findings.length ? 1 : 0);
+  }
+  if (args.includes('--pr') && args.includes('--verify-commit')) throw new Error('select source receiving or build parity, not both');
+  if (args.includes('--verify-commit')) {
+    console.log('source parity:', JSON.stringify(await verifyGeneratedCaller({ root, receiptCommit: opt('--verify-commit'), ...options })));
+    process.exit(0);
+  }
+  const { files, handwritten, runnerFindings, selection } = args.includes('--pr') ? generateFromSource(root, options) : generate(root, options);
+  console.log('selected:', JSON.stringify(selection));
+  for (const h of handwritten) console.log(`handwritten ${h.file}: ${h.coveredBy ?? '-'} (${h.note})`);
+  for (const issue of runnerFindings) console.log(`runner drift ${issue.file}:${issue.job ?? '-'}: ${issue.reason}`);
+  if (args.includes('--pr')) {
+    const retainedRunnerEvidence = opt('--retained-runner-evidence') === undefined ? undefined
+      : JSON.parse(fs.readFileSync(path.resolve(opt('--retained-runner-evidence')), 'utf8'));
+    const result = await receiveGeneratedCaller({ root, repo: opt('--pr'), branch: opt('--branch'), token: process.env.GH_TOKEN, retainedRunnerEvidence, ...options });
+    console.log('source receiving:', JSON.stringify(result));
+  } else {
+    for (const [p, c] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true });
+      fs.writeFileSync(path.join(root, p), c);
+      console.log('wrote', p);
+    }
+    if (!Object.keys(files).length) console.log('nothing selected; no caller written');
+  }
+}

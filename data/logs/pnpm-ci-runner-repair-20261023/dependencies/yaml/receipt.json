@@ -1,0 +1,17 @@
+{
+  "version": "2.8.3",
+  "dist": {
+    "shasum": "a0d6bd2efb3dd03c59370223701834e60409bd7d",
+    "tarball": "https://registry.npmjs.org/yaml/-/yaml-2.8.3.tgz",
+    "fileCount": 233,
+    "integrity": "sha512-AvbaCLOO2Otw/lW5bmh9d/WEdcDFdQp2Z2ZUH3pX9U2ihyUY0nvLv7J6TrWowklRGPYbB/IuIMfYgxaCPg5Bpg==",
+    "signatures": [
+      {
+        "sig": "MEQCICALJHbe+G1OS1tHaaHjrFgCqUUu5ggaRmLxytTVE1geAiBxRnSUA/BMy9gMlZWk7OYUpf5bj0vZMx1GDl0QyJZB3g==",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "unpackedSize": 684613
+  },
+  "integrity": "sha512-AvbaCLOO2Otw/lW5bmh9d/WEdcDFdQp2Z2ZUH3pX9U2ihyUY0nvLv7J6TrWowklRGPYbB/IuIMfYgxaCPg5Bpg=="
+}

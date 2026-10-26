@@ -1,0 +1,36 @@
+name: Agent work
+description: Receive a concrete requirement, branch or unfinished effect
+body:
+  - type: textarea
+    id: result
+    attributes:
+      label: Required result
+      description: What needs to work for its actual consumer?
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source and current evidence
+      description: Exact repository, branch, commit, paths and successful observations.
+    validations:
+      required: true
+  - type: textarea
+    id: work
+    attributes:
+      label: Work already done and work remaining
+      description: Preserve capabilities and identify competing source owners or incomplete integrations.
+    validations:
+      required: true
+  - type: textarea
+    id: receiving
+    attributes:
+      label: Receiving criteria
+      description: Evidence that will establish source, operating and consumer results.
+    validations:
+      required: true
+  - type: textarea
+    id: obstruction
+    attributes:
+      label: Execution obstruction
+      description: Exact denied operation, intended effect, failure boundary, expected revision and provider readback. A denied call does not establish missing user authorization.

@@ -1,0 +1,6 @@
+on: [push]
+jobs:
+  use:
+    uses: ./.github/workflows/node-package.yml
+    with:
+      runs-on: '["self-hosted","Linux","X64","bare-cedar-fog"]'

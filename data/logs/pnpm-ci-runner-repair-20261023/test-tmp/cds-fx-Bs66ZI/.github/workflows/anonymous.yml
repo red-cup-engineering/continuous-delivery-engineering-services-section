@@ -1,0 +1,6 @@
+on: [push]
+jobs:
+  test:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - run: true

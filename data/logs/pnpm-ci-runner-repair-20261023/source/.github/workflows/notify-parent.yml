@@ -1,0 +1,31 @@
+name: notify-parent
+# Upward chain, section side (requirement 19/20). Call it on push to main; it sends
+# repository_dispatch to the parent, whose superrepo-advance caller moves the pin.
+on:
+  workflow_call:
+    inputs:
+      parent:
+        description: 'owner/repo of the parent repository'
+        type: string
+        required: true
+      event-type:
+        type: string
+        default: section-advanced
+      runs-on:
+        type: string
+        required: true
+    secrets:
+      token:
+        description: 'PAT allowed to create a repository_dispatch on the parent'
+        required: true
+jobs:
+  notify:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    env:
+      GH_TOKEN: ${{ secrets.token }}
+      PARENT: ${{ inputs.parent }}
+      EVENT: ${{ inputs.event-type }}
+    steps:
+      - run: |
+          gh api "repos/$PARENT/dispatches" -f "event_type=$EVENT" \
+            -f "client_payload[repository]=$GITHUB_REPOSITORY" -f "client_payload[sha]=$GITHUB_SHA"

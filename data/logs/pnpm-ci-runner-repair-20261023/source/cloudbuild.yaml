@@ -1,0 +1,41 @@
+# This is the owning Continuous Delivery section's provider-native Cloud Build
+# self-check, NOT a replacement for its GitHub reusable workflows or LAGOON.
+# Only bind through a qualified GitHub source trigger: exact commit, no deploy.
+# Trigger MUST bind _NODE_IMAGE to a verified node:24 image by @sha256:digest.
+# Trigger MUST use a dedicated read-only build identity; no secrets.
+# A missing toolchain digest refuses at Cloud Build substitution time.
+timeout: 900s
+options:
+  machineType: E2_STANDARD_2
+  logging: CLOUD_LOGGING_ONLY
+  sourceProvenanceHash:
+    - SHA256
+steps:
+  - id: source-and-test
+    name: '${_NODE_IMAGE}'
+    entrypoint: bash
+    env:
+      - 'BUILDER_IMAGE=${_NODE_IMAGE}'
+    args:
+      - -euc
+      - |
+        # The provider's GitHub source trigger must supply an exact revision.
+        # '$$' escapes a shell '$' from Cloud Build substitution processing.
+        # Build triggers and explicit submissions supply COMMIT_SHA. Cloud
+        # Build workspace snapshots need not contain .git: fetch the exact
+        # public owning revision rather than trusting a synthetic checkout.
+        source_commit="$COMMIT_SHA"
+        [[ "$$source_commit" =~ ^[a-f0-9]{40}$$ ]] || { echo "exact source commit required" >&2; exit 78; }
+        [[ "$$BUILDER_IMAGE" =~ @sha256:[0-9a-f]{64}$$ ]] || { echo "unpinned builder" >&2; exit 78; }
+        source_root="$$(mktemp -d)"
+        trap 'rm -rf "$$source_root"' EXIT
+        git -C "$$source_root" init -q
+        git -C "$$source_root" -c credential.helper= fetch --quiet --depth=1 \
+          https://github.com/red-cup-engineering/continuous-delivery-services-section.git "$$source_commit"
+        revision="$$(git -C "$$source_root" rev-parse --verify FETCH_HEAD)"
+        test "$$revision" = "$$source_commit"
+        git -C "$$source_root" checkout --quiet --detach "$$revision"
+        cd "$$source_root"
+        test -s package-lock.json
+        npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+        npm test

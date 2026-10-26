@@ -1,0 +1,7 @@
+name: civic
+on: [push]
+jobs:
+  check:
+    runs-on: [self-hosted, Linux, X64, bare-cedar-fog]
+    steps:
+      - run: true

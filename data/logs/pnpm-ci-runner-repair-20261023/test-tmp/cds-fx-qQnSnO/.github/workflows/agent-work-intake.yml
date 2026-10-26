@@ -1,0 +1,4 @@
+on: [push]
+jobs:
+  receive:
+    uses: red-cup-engineering/continuous-delivery-services-section/.github/workflows/agent-work.yml@1f320a71cfb2452eb1b11f252ed0e0f8bf88acf3

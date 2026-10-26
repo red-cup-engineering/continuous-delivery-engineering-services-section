@@ -1,0 +1,80 @@
+name: Reconcile retired branch-intake fleet
+on:
+  workflow_dispatch:
+    inputs:
+      organizations:
+        description: 'Exact admitted GitHub organization list, comma-separated'
+        required: true
+        type: string
+        default: '561-group,red-cup-engineering,lenticule-science,coesite-operations,causeway-services'
+      apply:
+        description: 'Delete only positively identified retired caller blobs, after complete read-only preflight'
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: retained-fleet-reconciliation
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Bind authored CI outputs to section data
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd_workspace=$(realpath -e "$GITHUB_WORKSPACE")
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$GITHUB_JOB" =~ ^[A-Za-z0-9_-]+$ ]]
+          cd_ci_run="$cd_workspace/data/logs/public-source-ci-logs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          cd_ci_data="$cd_ci_run/$GITHUB_JOB"
+          cd_paths=("$cd_workspace/data" "$cd_workspace/data/logs" "$cd_workspace/data/logs/public-source-ci-logs"
+            "$cd_ci_run" "$cd_ci_data" "$cd_ci_data"/{npm-cache,corepack,cache,state,config,data,temporary})
+          for selected_path in "${cd_paths[@]}"; do
+            if [[ -e "$selected_path" || -L "$selected_path" ]]; then
+              [[ -d "$selected_path" && ! -L "$selected_path" && -O "$selected_path" ]] || exit 1
+            fi
+          done
+          mkdir -p "${cd_paths[@]}"
+          for selected_path in "${cd_paths[@]}"; do
+            [[ $(realpath -e "$selected_path") == "$selected_path" ]] || exit 1
+          done
+          {
+            printf 'CD_ARTIFACT_ROOT=%s\n' "$cd_ci_data"
+            printf 'npm_config_cache=%s\n' "$cd_ci_data/npm-cache"
+            printf 'COREPACK_HOME=%s\n' "$cd_ci_data/corepack"
+            printf 'XDG_CACHE_HOME=%s\n' "$cd_ci_data/cache"
+            printf 'XDG_STATE_HOME=%s\n' "$cd_ci_data/state"
+            printf 'XDG_CONFIG_HOME=%s\n' "$cd_ci_data/config"
+            printf 'XDG_DATA_HOME=%s\n' "$cd_ci_data/data"
+            printf 'TMPDIR=%s\n' "$cd_ci_data/temporary"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Receive exact fleet source before any remote effect
+        run: |
+          npm ci --legacy-peer-deps --no-audit --no-fund
+          node --check generator/open-pr.mjs
+          node --check generator/generate-ci.mjs
+          node --test test/retired-intake-fleet.test.mjs
+      - name: Reconcile existing GitHub repository consumers
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_GITHUB_TOKEN }}
+          FLEET_ORGANIZATIONS: ${{ inputs.organizations }}
+          FLEET_APPLY: ${{ inputs.apply }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Existing fleet write/read credential not connected; no repository changes attempted." >&2
+            exit 1
+          fi
+          args=(--retire-obsolete-intake-fleet --organizations "$FLEET_ORGANIZATIONS")
+          if [ "$FLEET_APPLY" = 'true' ]; then args+=(--apply); fi
+          node generator/generate-ci.mjs "${args[@]}"

@@ -1,0 +1,1 @@
+{"version":"1.2.3","name":"@x/a","dependencies":{"@x/b":"workspace:*","@x/earlier":"workspace:*","@x/nowhere":"workspace:*","yaml":"2.8.3"}}

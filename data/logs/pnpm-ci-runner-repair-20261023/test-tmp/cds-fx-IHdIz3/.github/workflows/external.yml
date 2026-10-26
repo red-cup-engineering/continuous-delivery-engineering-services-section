@@ -1,0 +1,4 @@
+on: [push]
+jobs:
+  use:
+    uses: some-third-party/unknown/.github/workflows/ci.yml@b3f9a3322ba776fd0899e3d724bd61dbeafb4792

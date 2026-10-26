@@ -1,0 +1,279 @@
+name: change-test
+# Test a pull request the way every machine that pins this repository will receive it: the release controller's
+# change test (red-cup-engineering/guix-machine-release-service scripts/test-change.mjs) composes each machine's
+# admitted workspace with this commit in place of the pinned one, installs from the house registry, builds as a
+# release is assembled, and fails only on regressions this change introduces.
+#
+# - machines: which machines pin this repository (their recursive Gitlink closure), unless `machine` names one.
+# - change-test: one leg per machine; its conclusion is that machine's check. Sources are formed with the house
+#   read token in one step; the change's own code (builds, tests) then runs in a step that holds no token and no
+#   git credential, and the checkout keeps none (persist-credentials: false).
+# - report: one pull-request comment with every machine's verdict, updated in place on every run.
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Explicit JSON runner labels supplied by the caller'
+        type: string
+        required: true
+      machine:
+        description: 'One machine to test against (owner/repo, or owner/repo:path for a snapshot below the root); empty tests every machine in `machines` that pins this repository'
+        type: string
+        default: ''
+      machines:
+        description: 'JSON array of machines (owner/repo, or owner/repo:path) whose committed recursive Gitlinks are read for pins of this repository'
+        type: string
+        default: '[]'
+      controller-ref:
+        description: 'Reviewed immutable 40-character commit of red-cup-engineering/guix-machine-release-service; must provide complete v2 source preparation; execution remains held without a separately qualified runtime'
+        type: string
+        default: 1456c04103a8011f2d751e0a0a10c347a08c7829
+    secrets:
+      house-read-token:
+        description: 'HOUSE_READ_TOKEN: a token with contents:read on every repository the machines pin'
+        required: false
+jobs:
+  machines:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      machines: ${{ steps.pins.outputs.machines }}
+    steps:
+      - name: Require the house read token
+        env:
+          HOUSE_READ_TOKEN: ${{ secrets.house-read-token }}
+        run: |
+          if [ -z "$HOUSE_READ_TOKEN" ]; then
+            echo "::error title=Missing secret HOUSE_READ_TOKEN::The change test reads machine snapshots and clones every repository they pin, most of them private. An existing authorized read-token binding is required; this workflow does not create credentials or access grants."
+            exit 1
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          ref: d963167b32c2e724fd17d402fe281c1ca3fe3baa
+          path: section
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Machines that pin this repository
+        id: pins
+        env:
+          HOUSE_READ_TOKEN: ${{ secrets.house-read-token }}
+          MACHINE: ${{ inputs.machine }}
+          MACHINES: ${{ inputs.machines }}
+          CONTROLLER_REF: ${{ inputs.controller-ref }}
+        run: |
+          node section/scripts/hosted-change.mjs --admit-source-controller "$CONTROLLER_REF"
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOUSE_READ_TOKEN" | base64 -w0)"
+          git init -q "$RUNNER_TEMP/discovery-controller"
+          git -C "$RUNNER_TEMP/discovery-controller" remote add origin https://github.com/red-cup-engineering/guix-machine-release-service.git
+          git -C "$RUNNER_TEMP/discovery-controller" fetch -q --depth=1 origin "$CONTROLLER_REF"
+          git -C "$RUNNER_TEMP/discovery-controller" -c core.hooksPath=/dev/null checkout -q --detach "$CONTROLLER_REF"
+          node section/scripts/hosted-change.mjs --verify-controller "$RUNNER_TEMP/discovery-controller" "$CONTROLLER_REF"
+          # Validate the entire candidate list before any read. An unread source aborts discovery.
+          node section/scripts/pinning-machines.mjs --candidates "$MACHINE" "$MACHINES" > "$RUNNER_TEMP/candidates.txt"
+          pairs=()
+          while IFS= read -r machine; do
+            repo="${machine%%:*}"; snapshot=""; [ "$machine" != "$repo" ] && snapshot="${machine#*:}/"
+            file="$RUNNER_TEMP/machine-${#pairs[@]}.sources.json"
+            # Resolve once, then read and test that exact snapshot even if its default branch moves.
+            # The token goes only to these request headers; nothing writes it to configuration.
+            curl -fsS -H "Authorization: Bearer $HOUSE_READ_TOKEN" -H 'Accept: application/vnd.github+json' \
+              "https://api.github.com/repos/$repo/commits/HEAD" -o "$file.commit"
+            commit=$(node section/scripts/pinning-machines.mjs --commit "$file.commit")
+            if [ -z "$MACHINE" ]; then
+              checkout="$RUNNER_TEMP/discovery-machine-${#pairs[@]}"
+              git init -q "$checkout"
+              git -C "$checkout" remote add origin "https://github.com/$repo.git"
+              git -C "$checkout" fetch -q --depth=1 origin "$commit"
+              git -C "$checkout" -c core.hooksPath=/dev/null checkout -q --detach "$commit"
+              node "$RUNNER_TEMP/discovery-controller/scripts/materialize-sources.mjs" \
+                "$checkout/$snapshot" "$RUNNER_TEMP/discovery-sources-${#pairs[@]}" > "$file"
+            fi
+            pairs+=("$machine@$commit=$file")
+          done < "$RUNNER_TEMP/candidates.txt"
+          mode=--plan; [ -z "$MACHINE" ] || mode=--forced-plan
+          machines=$(node section/scripts/pinning-machines.mjs "$mode" "${{ github.repository }}" "${pairs[@]}")
+          echo "Machines pinning ${{ github.repository }}: $machines"
+          echo "machines=$machines" >> "$GITHUB_OUTPUT"
+
+  change-test:
+    needs: machines
+    if: needs.machines.result == 'success' && needs.machines.outputs.machines != '[]'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.machines.outputs.machines) }}
+    env:
+      HOUSE: ${{ github.workspace }}/.house
+      MACHINE: ${{ matrix.machine }}
+      MACHINE_COMMIT: ${{ matrix.machineCommit }}
+      MACHINE_SLUG: ${{ matrix.id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: change
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          ref: d963167b32c2e724fd17d402fe281c1ca3fe3baa
+          path: section
+          persist-credentials: false
+      - name: Controller and machine
+        env:
+          HOUSE_READ_TOKEN: ${{ secrets.house-read-token }}
+          CONTROLLER_REF: ${{ inputs.controller-ref }}
+        run: |
+          # Credentials reach git only through this step's environment, never its configuration files.
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOUSE_READ_TOKEN" | base64 -w0)"
+          if [[ ! "$CONTROLLER_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::controller-ref must name one reviewed immutable 40-character commit"
+            exit 1
+          fi
+          node section/scripts/hosted-change.mjs --admit-source-controller "$CONTROLLER_REF"
+          # Fetch only the reviewed commit; immutability alone is not source admission.
+          git init -q "$HOUSE/controller"
+          git -C "$HOUSE/controller" remote add origin https://github.com/red-cup-engineering/guix-machine-release-service.git
+          git -C "$HOUSE/controller" fetch -q --depth=1 origin "$CONTROLLER_REF"
+          git -C "$HOUSE/controller" -c core.hooksPath=/dev/null checkout -q --detach "$CONTROLLER_REF"
+          test "$(git -C "$HOUSE/controller" rev-parse HEAD)" = "$CONTROLLER_REF"
+          node section/scripts/hosted-change.mjs --verify-controller "$HOUSE/controller" "$CONTROLLER_REF"
+          # Retain the entire authenticated repository root; select a nested definition separately.
+          repo="${MACHINE%%:*}"; snapshot=""; [ "$MACHINE" != "$repo" ] && snapshot="${MACHINE#*:}"
+          git init -q "$HOUSE/machine-repository"
+          git -C "$HOUSE/machine-repository" remote add origin "https://github.com/$repo.git"
+          git -C "$HOUSE/machine-repository" fetch -q --depth=1 origin "$MACHINE_COMMIT"
+          git -C "$HOUSE/machine-repository" -c core.hooksPath=/dev/null checkout -q --detach "$MACHINE_COMMIT"
+          echo "SNAPSHOT=$HOUSE/machine-repository${snapshot:+/$snapshot}" >> "$GITHUB_ENV"
+          test "$(git -C "$HOUSE/machine-repository" rev-parse HEAD)" = "$MACHINE_COMMIT"
+      # Each job prepares fresh sources. Candidate code can write the comparison
+      # directories; those bytes must not return through a cache when credentials
+      # become available in another preparation run.
+      - name: Form the sources (holds the read token; runs none of the change's code)
+        env:
+          HOUSE_READ_TOKEN: ${{ secrets.house-read-token }}
+          CONTROLLER_REF: ${{ inputs.controller-ref }}
+          CHANGE_REPOSITORY: ${{ github.repository }}
+          CHANGE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOUSE_READ_TOKEN" | base64 -w0)"
+          repo="${MACHINE%%:*}"; definition=""; [ "$MACHINE" != "$repo" ] && definition="${MACHINE#*:}"
+          if [ "$CHANGE_REPOSITORY" = "$repo" ]; then
+            change_args=("--candidate-snapshot=$GITHUB_WORKSPACE/change${definition:+/$definition}")
+          else
+            change_args=("$CHANGE_REPOSITORY=$GITHUB_WORKSPACE/change")
+          fi
+          node "$HOUSE/controller/scripts/materialize-sources.mjs" --export-change "$SNAPSHOT" "$HOUSE/carriers" \
+            "${change_args[@]}" > materialized.json 2> materialize.log || {
+              tail -c 4000 materialize.log; cp materialized.json verdict.json 2>/dev/null; exit 1; }
+          node section/scripts/hosted-change.mjs --prepare-expectation "$HOUSE/controller" "$CONTROLLER_REF" \
+            "$HOUSE/carriers" materialized.json "$MACHINE" "$MACHINE_COMMIT" "$CHANGE_REPOSITORY" "$CHANGE_COMMIT" "$HOUSE/preparation"
+          cat materialized.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: change-preparation-${{ env.MACHINE_SLUG }}
+          path: ${{ env.HOUSE }}/preparation/expectation.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Change test (no token, no git network)
+        id: test
+        run: |
+          set +e
+          # Only the reviewed helper runs on the acquisition host. Candidates run in
+          # a bounded non-root container with no network or preparation-host mounts.
+          # No runtime binding is supplied until its owner has qualified the image.
+          digest=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("materialized.json","utf8")).sha256)')
+          node section/scripts/hosted-change.mjs --run "$HOUSE/controller" "$HOUSE/carriers" "$HOUSE/result" \
+            "$GITHUB_WORKSPACE/section/scripts" "${{ inputs.controller-ref }}" "$digest" "$HOUSE/preparation" > verdict.json 2> test-change.log
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          tail -c 4000 test-change.log
+          verdict=$(node -e 'try{console.log(JSON.parse(require("fs").readFileSync("verdict.json","utf8")).verdict)}catch{console.log("not-run")}')
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $MACHINE: \`$verdict\`"
+            echo "Commit \`$(git -C change rev-parse HEAD)\` against \`$MACHINE@$MACHINE_COMMIT\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - name: Keep the verdict for the report
+        if: always()
+        run: |
+          mkdir -p "result/$MACHINE_SLUG"
+          node -e 'require("fs").writeFileSync(process.argv[1],JSON.stringify({machine:process.env.MACHINE,machineCommit:process.env.MACHINE_COMMIT,id:process.env.MACHINE_SLUG,commit:process.argv[2],status:process.argv[3]===""?null:Number(process.argv[3])}))' \
+            "result/$MACHINE_SLUG/meta.json" "$(git -C change rev-parse HEAD)" "${{ steps.test.outputs.status }}"
+          cp verdict.json "result/$MACHINE_SLUG/verdict.json" 2>/dev/null || : > "result/$MACHINE_SLUG/verdict.json"
+          cat materialize.log test-change.log 2>/dev/null | tail -c 3000 > "result/$MACHINE_SLUG/log-tail.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: change-test-${{ env.MACHINE_SLUG }}
+          path: result/${{ env.MACHINE_SLUG }}/
+          retention-days: 7
+
+  report:
+    needs: [machines, change-test]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: red-cup-engineering/continuous-delivery-services-section
+          ref: d963167b32c2e724fd17d402fe281c1ca3fe3baa
+          path: section
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.machines.result == 'success' && needs.machines.outputs.machines != '[]'
+        with:
+          pattern: change-test-*
+          path: results
+          merge-multiple: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.machines.result == 'success' && needs.machines.outputs.machines != '[]'
+        with:
+          pattern: change-preparation-*
+          path: preparations
+          merge-multiple: false
+      - name: One comment, updated in place
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MACHINES: ${{ needs.machines.outputs.machines }}
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_CONTROLLER: ${{ inputs.controller-ref }}
+          DISCOVERY: ${{ needs.machines.result }}
+        run: |
+          args=(results --preparations preparations --controller-commit "$EXPECTED_CONTROLLER" --expected "$EXPECTED_MACHINES" --commit "$EXPECTED_COMMIT" --discovery "$DISCOVERY"
+                --repository "${{ github.repository }}" --none "${{ github.repository }}")
+          status=0
+          node section/scripts/change-test-comment.mjs "${args[@]}" --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}" || status=$?
+          node section/scripts/change-test-comment.mjs "${args[@]}" >> "$GITHUB_STEP_SUMMARY" || status=$?
+          exit "$status"

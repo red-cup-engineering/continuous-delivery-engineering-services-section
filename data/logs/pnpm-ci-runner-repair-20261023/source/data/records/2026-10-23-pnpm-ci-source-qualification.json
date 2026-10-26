@@ -1,0 +1,58 @@
+{
+  "kind": "continuous-delivery.pnpm-ci-source-qualification",
+  "version": 1,
+  "sourceBase": "5a584886407eee8bedc38e55b4eb017626a5dd07",
+  "contracts": [
+    "NP-1",
+    "NP-2",
+    "NP-3",
+    "NP-4",
+    "NP-5",
+    "NP-6",
+    "NP-7",
+    "NP-9"
+  ],
+  "sourceChecks": {
+    "command": "npm run test:public-source-contract",
+    "tests": 199,
+    "pass": 199,
+    "fail": 0,
+    "runnerAuditFindings": 0
+  },
+  "nativeFixture": {
+    "pnpmVersion": "11.28.5",
+    "pinSource": "workflow",
+    "packageManagerField": false,
+    "dependencies": 0,
+    "frozen": true,
+    "lifecycleScripts": false,
+    "sourceBytesUnchanged": true,
+    "credentialMaterialized": false
+  },
+  "downstreamReceiving": {
+    "state": "pending",
+    "conditions": [
+      "independent exact-source receiving",
+      "fresh original host byte/inode/physical and memory admission",
+      "actual scoped GitHub registration/labels/listening",
+      "accepted exact consumer source and completed native CI job"
+    ],
+    "credentialCondition": "Use existing anonymous read where received; require an explicit original-custody read consumer only if the native read actually refuses."
+  },
+  "nativeNodeTest": {
+    "originalScript": "node --test \"test/**/*.test.mjs\"",
+    "descriptor": {
+      "expectedScript": "node --test \"test/**/*.test.mjs\"",
+      "files": [
+        "test/**/*.test.mjs"
+      ],
+      "concurrency": 1
+    },
+    "actualFiles": 2,
+    "concurrentOverlapControl": "refused EEXIST",
+    "boundedNativeResult": "pass 2/2",
+    "lifecycleHooksSkipped": false,
+    "sourceBytesChanged": false
+  },
+  "receivedMain": "6f3ff9c129c9a14cfc1c00052d2971b9c49c71d9"
+}

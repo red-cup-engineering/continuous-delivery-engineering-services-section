@@ -1,0 +1,40 @@
+0 verbose cli /home/emsenn/.local/lib/nodejs/node-v24.19.0-linux-x64/bin/node /home/emsenn/.local/bin/npm
+1 info using npm@11.17.0
+2 info using node@v24.19.0
+3 silly config load:file:/home/emsenn/.local/lib/nodejs/node-v24.19.0-linux-x64/lib/node_modules/npm/npmrc
+4 silly config load:file:/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/source/.npmrc
+5 silly config load:file:/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-install-pykdX8/bootstrap.npmrc
+6 silly config load:file:/home/emsenn/.local/lib/nodejs/node-v24.19.0-linux-x64/etc/npmrc
+7 verbose title npm exec pnpm install --frozen-lockfile --ignore-scripts --network-concurrency=4 --child-concurrency=1 --store-dir=/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-store --config.cache-dir=/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-cache --config.userconfig=/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-install-pykdX8/registry.npmrc
+8 verbose argv "exec" "--yes" "--registry" "https://registry.npmjs.org/" "--cache" "/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-cache/bootstrap" "--userconfig" "/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-install-pykdX8/bootstrap.npmrc" "--package" "pnpm@11.28.5" "--" "pnpm" "install" "--frozen-lockfile" "--ignore-scripts" "--network-concurrency=4" "--child-concurrency=1" "--store-dir=/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-store" "--config.cache-dir=/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-cache" "--config.userconfig=/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-install-pykdX8/registry.npmrc"
+9 verbose logfile logs-max:10 dir:/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-cache/bootstrap/_logs/2026-10-23T05_21_37_706Z-
+10 verbose logfile /home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/runner-temp/node-package-cache/bootstrap/_logs/2026-10-23T05_21_37_706Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:738197504 maxSize:184549376 maxEntrySize:92274688
+13 http fetch GET 200 https://registry.npmjs.org/npm 449ms
+14 http fetch GET 200 https://registry.npmjs.org/pnpm 545ms (cache miss)
+15 silly packumentCache heap:738197504 maxSize:184549376 maxEntrySize:92274688
+16 silly idealTree buildDeps
+17 silly fetch manifest pnpm@11.28.5
+18 silly packumentCache full:https://registry.npmjs.org/pnpm cache-miss
+19 http fetch GET 200 https://registry.npmjs.org/pnpm 455ms (cache miss)
+20 silly packumentCache full:https://registry.npmjs.org/pnpm set size:undefined disposed:false
+21 silly placeDep ROOT pnpm@11.28.5 OK for:  want: 11.28.5
+22 silly reify moves {}
+23 silly audit bulk request { pnpm: [ '11.28.5' ] }
+24 http cache pnpm@https://registry.npmjs.org/pnpm/-/pnpm-11.28.5.tgz 1ms (cache hit)
+25 silly tarball no local data for pnpm@https://registry.npmjs.org/pnpm/-/pnpm-11.28.5.tgz. Extracting by manifest.
+26 http fetch POST 200 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 144ms
+27 silly audit report {}
+28 http fetch GET 200 https://registry.npmjs.org/pnpm/-/pnpm-11.28.5.tgz 2536ms (cache miss)
+29 verbose cwd /home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/native-pnpm-fixture/source
+30 verbose os Linux 6.18.54.1-microsoft-standard-WSL2
+31 verbose node v24.19.0
+32 verbose npm  v11.17.0
+33 notice
+33 notice New major version of npm available! 11.17.0 -> 12.2.1
+33 notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+33 notice To update run: npm install -g npm@12.2.1
+33 notice  { force: true, Symbol(proc-log.meta): true }
+34 verbose exit 0
+35 info ok

@@ -1,0 +1,36 @@
+# Original public Red Cup source-contract pipeline for qualifying OSS credits.
+# Separate provider-native execution configuration, SAME engineering owner.
+# Checkout source must be THIS public repository; never a private code mirror.
+version: 2.1
+jobs:
+  public-engineering-source:
+    docker:
+      - image: cimg/node:24
+    resource_class: small
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Qualify original public repository and revision
+          command: |
+            set -euo pipefail
+            : "${CIRCLE_SHA1:?CircleCI checked-out commit required}"
+            [[ "$CIRCLE_SHA1" =~ ^[a-f0-9]{40}$ ]] || exit 78
+            test "$(git rev-parse --verify HEAD)" = "$CIRCLE_SHA1" || exit 78
+            remote="$(git remote get-url origin)"
+            case "$remote" in
+              git@github.com:red-cup-engineering/continuous-delivery-services-section|git@github.com:red-cup-engineering/continuous-delivery-services-section.git|https://github.com/red-cup-engineering/continuous-delivery-services-section|https://github.com/red-cup-engineering/continuous-delivery-services-section.git|ssh://git@github.com/red-cup-engineering/continuous-delivery-services-section.git) ;;
+              *) echo 'foreign or private checkout forbidden in public OSS build' >&2; exit 78 ;;
+            esac
+      - run:
+          name: Install original pinned public parser
+          command: npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+      - run:
+          name: Execute original shared public source-contract test suite
+          command: npm run test:public-source-contract
+          no_output_timeout: 15m
+workflows:
+  public-source-contract:
+    jobs:
+      - public-engineering-source:
+          filters: pipeline.git.branch == "main"

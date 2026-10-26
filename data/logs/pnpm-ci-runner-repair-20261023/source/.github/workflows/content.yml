@@ -1,0 +1,56 @@
+name: content
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Explicit JSON runner labels supplied by the caller'
+        type: string
+        required: true
+      links:
+        description: 'check relative markdown links'
+        type: boolean
+        default: true
+jobs:
+  validate:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - run: npm install --no-save --no-audit --no-fund --prefix /tmp/v ajv@8 ajv-formats@3
+      - name: validate
+        env:
+          LINKS: ${{ inputs.links }}
+          NODE_PATH: /tmp/v/node_modules
+        run: |
+          cat > /tmp/v.js <<'JS'
+          const fs = require('fs'), path = require('path');
+          const Ajv = require('ajv/dist/2020'), addFormats = require('ajv-formats');
+          const walk = d => fs.readdirSync(d, {withFileTypes: true}).flatMap(e =>
+            ['.git','node_modules','lib'].includes(e.name) ? [] :
+            e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
+          const files = walk('.');
+          const ajv = new Ajv({strict: false, allErrors: true}); addFormats(ajv);
+          let bad = 0;
+          const fail = m => { console.log('::error::' + m); bad++; };
+          for (const f of files.filter(f => f.endsWith('.json'))) {
+            let j; try { j = JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { fail(f + ': invalid JSON'); continue; }
+            const s = j && typeof j === 'object' ? j.$schema : null;
+            if (typeof s === 'string' && !/^https?:/.test(s)) {
+              const sp = path.resolve(path.dirname(f), s);
+              if (!fs.existsSync(sp)) { fail(f + ': schema not found ' + s); continue; }
+              const v = ajv.compile(JSON.parse(fs.readFileSync(sp, 'utf8')));
+              if (!v(j)) fail(f + ': ' + ajv.errorsText(v.errors));
+            }
+          }
+          if (process.env.LINKS === 'true') for (const f of files.filter(f => f.endsWith('.md'))) {
+            const t = fs.readFileSync(f, 'utf8').replace(/```[\s\S]*?```/g, '');
+            for (const m of t.matchAll(/\]\(([^)\s#]+)(?:#[^)]*)?\)/g)) {
+              const l = m[1]; if (/^[a-z]+:/i.test(l)) continue;
+              if (!fs.existsSync(path.resolve(path.dirname(f), decodeURIComponent(l)))) fail(f + ': broken link ' + l);
+            }
+          }
+          process.exit(bad ? 1 : 0);
+          JS
+          node /tmp/v.js

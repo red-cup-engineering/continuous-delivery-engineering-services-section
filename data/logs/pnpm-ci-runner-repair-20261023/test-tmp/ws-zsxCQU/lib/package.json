@@ -1,0 +1,1 @@
+{"version":"1.2.3","name":"@x/lib","dependencies":{"@x/deep":"workspace:*"},"devDependencies":{"t":"1"}}

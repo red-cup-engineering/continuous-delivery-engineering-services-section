@@ -1,0 +1,62 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Full private-composition receiving is preserved in the original reusable
+  # node-package.yml, but cannot be an automatic prerequisite for this PUBLIC
+  # source check while the old Bare Cedar Fog runner is not an independent
+  # available executor. An authorized consumer must select an observed runner.
+  agent-work-contract:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Source-only tests in this public repository use an isolated standard
+    # hosted runner. Machine/regression receiving remains with the real consumers.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Bind authored CI outputs to section data
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd_workspace=$(realpath -e "$GITHUB_WORKSPACE")
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$GITHUB_JOB" =~ ^[A-Za-z0-9_-]+$ ]]
+          cd_ci_run="$cd_workspace/data/logs/public-source-ci-logs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          cd_ci_data="$cd_ci_run/$GITHUB_JOB"
+          cd_paths=("$cd_workspace/data" "$cd_workspace/data/logs" "$cd_workspace/data/logs/public-source-ci-logs"
+            "$cd_ci_run" "$cd_ci_data" "$cd_ci_data"/{npm-cache,corepack,cache,state,config,data,temporary})
+          for selected_path in "${cd_paths[@]}"; do
+            if [[ -e "$selected_path" || -L "$selected_path" ]]; then
+              [[ -d "$selected_path" && ! -L "$selected_path" && -O "$selected_path" ]] || exit 1
+            fi
+          done
+          mkdir -p "${cd_paths[@]}"
+          for selected_path in "${cd_paths[@]}"; do
+            [[ $(realpath -e "$selected_path") == "$selected_path" ]] || exit 1
+          done
+          {
+            printf 'CD_ARTIFACT_ROOT=%s\n' "$cd_ci_data"
+            printf 'npm_config_cache=%s\n' "$cd_ci_data/npm-cache"
+            printf 'COREPACK_HOME=%s\n' "$cd_ci_data/corepack"
+            printf 'XDG_CACHE_HOME=%s\n' "$cd_ci_data/cache"
+            printf 'XDG_STATE_HOME=%s\n' "$cd_ci_data/state"
+            printf 'XDG_CONFIG_HOME=%s\n' "$cd_ci_data/config"
+            printf 'XDG_DATA_HOME=%s\n' "$cd_ci_data/data"
+            printf 'TMPDIR=%s\n' "$cd_ci_data/temporary"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+      - name: Install pinned generator parser
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Check standalone public source contracts
+        run: |
+          npm run test:public-source-contract

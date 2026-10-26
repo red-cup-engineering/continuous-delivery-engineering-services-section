@@ -1,0 +1,8 @@
+import fs from "node:fs";import path from "node:path";import {createRequire} from "node:module";
+const metro=fs.realpathSync("/gnu/store/mgvc0wl50pmq6s7ivnkylh3qa2s8lwqp-registry-runtime/node_modules/.pnpm/@red-cup-engineering+metroplat@0.10.2_640f55875b80ec96727476b2d61a4f01/node_modules/@red-cup-engineering/metroplat");
+const agency=fs.realpathSync("/var/guix/profiles/per-user/emsenn/bare-cedar-fog-release/agency");
+const {rulesJudge}=await import(path.join(metro,"src/offices.mjs"));
+const require=createRequire(path.join(metro,"package.json"));const {releaseAgency}=await import(require.resolve("@red-cup-engineering/organizing/agency/held"));
+const input={actor:"https://bare-cedar-fog.561.group/actors/codex",verb:"duty-worktree-open",input:{repository:"red-cup-engineering/continuous-delivery-services-section",branch:"codex/pnpm-ci-runner-repair-20261023"}};
+try{const result=await rulesJudge({agencyRoot:agency,dataRoot:"/home/emsenn/.local/state/561-group/bare-cedar-fog.561.group/settlement"})(input);fs.writeFileSync("/home/emsenn/info/lib/emsenn/services/561-group/services/engineering-services-section/services/computer-engineering-services-section/services/computer-systems-engineering-services-section/services/computer-code-development-system-services-section/services/continuous-delivery-services-section/data/logs/pnpm-ci-runner-repair-20261023/rule-check-logs/worktree-open.json",JSON.stringify({method:"direct-installed-owner-judgment",metro,agency,input,result},null,2)+"\n");const {findings,advice,incomplete,...summary}=result;console.log(JSON.stringify({summary,findings:findings?.length,advice:advice?.length,incomplete:incomplete?.length}));}finally{releaseAgency(agency);}
+
