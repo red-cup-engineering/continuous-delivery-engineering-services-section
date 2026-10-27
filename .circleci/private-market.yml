@@ -29,10 +29,15 @@ jobs:
             node --input-type=module <<'NODE'
             import fs from 'node:fs';
             const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));
+            const cve='@red-cup-engineering/jsnode-package-vulnerability-triage-services-section';
+            const edition=pkg.dependencies?.[cve];
             if (pkg.name!=='@causeway-services/market.561.group' ||
-                pkg.dependencies?.['@red-cup-engineering/jsnode-package-vulnerability-triage-services-section']!=='0.2.0-dev.24')
-              throw Error('Exact CVE supplier 0.2.0-dev.24 was not received into original Market source');
-            console.log('Admitted original Market at',process.env.CIRCLE_SHA1);
+                typeof edition!=='string' ||
+                !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(edition) ||
+                !pkg.receivingTests?.includes('test/cve-change-set-market.test.mjs') ||
+                !fs.existsSync('test/cve-change-set-market.test.mjs'))
+              throw Error('Original Market must select one exact published CVE supplier and its actual receiving tests');
+            console.log('Admitted original Market source and CVE edition',process.env.CIRCLE_SHA1,edition);
             NODE
       - run:
           name: Receive the private Public source at its original immutable gitlink
@@ -76,6 +81,7 @@ jobs:
             set -euo pipefail
             export NPM_CONFIG_USERCONFIG="$PWD/.npmrc"
             mkdir -p /tmp/market-native/code /tmp/market-native/pnpm
+            cp package.json /tmp/market-native/source-package.json
             npm install --prefix /tmp/market-native/code --no-save --ignore-scripts --no-audit --no-fund \
               '@red-cup-engineering/npm-workspace-publication-service@0.14.2'
             npm install --prefix /tmp/market-native/pnpm --no-save --ignore-scripts --no-audit --no-fund \
@@ -86,10 +92,13 @@ jobs:
             import fs from 'node:fs';
             const receipt=JSON.parse(fs.readFileSync('/tmp/market-native/pinning.json','utf8'));
             const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));
+            const source=JSON.parse(fs.readFileSync('/tmp/market-native/source-package.json','utf8'));
+            const cve='@red-cup-engineering/jsnode-package-vulnerability-triage-services-section';
             if(receipt.ok!==true||receipt.packages?.length!==1||receipt.packages[0]?.applied!==true ||
                Object.values(pkg.dependencies??{}).some(version=>version==='workspace:*') ||
-               pkg.dependencies['@red-cup-engineering/jsnode-package-vulnerability-triage-services-section']!=='0.2.0-dev.24')
-              throw Error('Original Code did not select a complete immutable CVE Market dependency closure');
+               typeof source.dependencies?.[cve]!=='string' ||
+               pkg.dependencies?.[cve]!==source.dependencies[cve])
+              throw Error('Original Code changed or failed to receive the source-selected exact CVE supplier');
             console.log('Native Code dependency selections:',receipt.packages[0].rewrites?.length);
             NODE
             pnpm=/tmp/market-native/pnpm/node_modules/pnpm/bin/pnpm.cjs
