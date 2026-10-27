@@ -1,12 +1,143 @@
 // Place a job on the node that can run it at the lowest price. Unknown quantities are intervals
 // (min 0, max unbounded), never zero. Price is minutes of wall time plus scarcity.
 import { minutePrice, quoteBudget, budgetAvailable, hold, holdBudget } from './allowance.mjs';
+import { createHash } from 'node:crypto';
 
 const iv = q => q == null ? { min: 0, max: Infinity } : typeof q === 'number' ? { min: q, max: q } : { min: q.min ?? 0, max: q.max ?? Infinity };
 const add = (a, b) => ({ min: a.min + b.min, max: a.max + b.max });
 const mul = (a, k) => ({ min: a.min * k, max: a.max * k });
 const fit = (have, need) => { const h = iv(have); return h.min >= need ? 'certain' : h.max >= need ? 'possible' : 'no'; };
 const worst = (...xs) => xs.includes('no') ? 'no' : xs.includes('possible') ? 'possible' : 'certain';
+
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const reference = value => typeof value === 'string' && value.trim().length >= 8 && value.length <= 2048;
+const oid = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+const sourceIdentity = value => record(value) && Object.keys(value).length === 3 && Number.isSafeInteger(value.repositoryId) && value.repositoryId > 0
+  && typeof value.repository === 'string' && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.repository) && oid(value.commit);
+const sameSource = (a,b) => sourceIdentity(a) && sourceIdentity(b) && a.repositoryId === b.repositoryId
+  && a.repository === b.repository && a.commit === b.commit;
+const workspace = value => typeof value === 'string' && value.startsWith('/') && !value.includes('\0')
+  && !value.split('/').some(part => part === '.' || part === '..');
+const measuredInterval = value => typeof value === 'number' ? Number.isFinite(value) && value >= 0
+  : record(value) && Number.isFinite(value.min) && Number.isFinite(value.max) && value.min >= 0 && value.max >= value.min;
+function jobDigest(value) {
+  const active=new Set();
+  const canonical=value=>{
+    if(value===null || typeof value==='boolean' || typeof value==='string') return JSON.stringify(value);
+    if(typeof value==='number' && Number.isFinite(value)) return JSON.stringify(value);
+    if(!record(value) && !Array.isArray(value)) throw new TypeError('JSON job required');
+    if(active.has(value) || (Object.getPrototypeOf(value)!==Object.prototype && !Array.isArray(value)))
+      throw new TypeError('plain acyclic JSON job required');
+    if(Array.isArray(value) && Object.keys(value).length!==value.length)
+      throw new TypeError('dense JSON job arrays required');
+    active.add(value);
+    const result=Array.isArray(value)?'['+value.map(canonical).join(',')+']'
+      :'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonical(value[key])).join(',')+'}';
+    active.delete(value);return result;
+  };
+  const bytes=canonical(value);
+  if(Buffer.byteLength(bytes)>1024*1024) throw new TypeError('bounded JSON job required');
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** Opt-in receiving preflight, not a runner provisioner or an authority reader.
+ * The owning host supplies a synchronous, read-only admission reader which has
+ * independently authenticated the issuer and current source-bound evidence.
+ * JSON, a label, a local tool, or a true callback result cannot supply it.
+ * effect:false excludes consequential external effects, not ordinary test I/O.
+ */
+export function preflightSessionExecution(job,node,{now,readSessionAdmission}={}) {
+  if(job.sessionExecution === undefined && node.sessionExecution === undefined) return null;
+  const why=[], wanted=job.sessionExecution, observed=node.sessionExecution, at=Date.parse(now);
+  if(!record(wanted) || !['local-qualification','github-jit'].includes(wanted.mode)
+      || !reference(wanted.scope) || !reference(wanted.sessionId) || !sourceIdentity(wanted.source) || !workspace(wanted.workspacePath))
+    why.push('session-job-identity-required');
+  if(typeof job.id !== 'string' || !job.id.trim() || typeof node.id !== 'string' || !node.id.trim())
+    why.push('session-job-or-node-identity-required');
+  if(job.effect !== false) why.push('session-external-effect-free-job-required');
+  if(!Number.isFinite(job.minutes) || job.minutes <= 0 || !Number.isFinite(job.maxMinutes)
+      || job.maxMinutes < job.minutes || job.maxMinutes <= 0)
+    why.push('session-maximum-runtime-required');
+  const until=at+job.maxMinutes*60_000;
+  if(!record(observed) || !reference(observed.scope) || !reference(observed.observationRef) || !reference(observed.sessionId)
+      || !Number.isFinite(Date.parse(observed.observedAt)) || !Number.isFinite(at)
+      || at < Date.parse(observed.observedAt) || at-Date.parse(observed.observedAt) > 3_600_000)
+    why.push('session-observation-stale-or-absent');
+  if(wanted?.scope !== observed?.scope || wanted?.sessionId !== observed?.sessionId || wanted?.workspacePath !== observed?.workspacePath
+      || !sameSource(wanted?.source,observed?.source) || observed?.checkoutHead !== wanted?.source?.commit
+      || observed?.checkoutClean !== true)
+    why.push('session-source-head-or-workspace-differs');
+  if(!Number.isFinite(until) || !Number.isFinite(Date.parse(observed?.expiresAt))
+      || Date.parse(observed.expiresAt) < until)
+    why.push('session-lifetime-does-not-cover-job');
+  if(observed?.lifecycle !== 'foreground-single-job' || observed?.maxJobs !== 1
+      || observed?.activeJobs !== 0 || observed?.completedJobs !== 0)
+    why.push('session-single-job-lifecycle-unreceived');
+  if(!Number.isSafeInteger(job.needs?.freeInodes) || job.needs.freeInodes <= 0
+      || !Number.isSafeInteger(node.freeInodes) || node.freeInodes < 0)
+    why.push('session-inode-capacity-unmeasured');
+  else if(node.freeInodes < job.needs.freeInodes) why.push('too-small:freeInodes');
+  for(const key of ['cores','memoryGb','freeDiskGb'])
+    if(!Number.isFinite(job.needs?.[key]) || job.needs[key] < 0 || !Number.isFinite(node[key]) || node[key] < 0
+        || (key === 'cores' && job.needs[key] <= 0)) why.push('session-resource-unmeasured:'+key);
+    else if(node[key] < job.needs[key]) why.push('too-small:'+key);
+  // The occupied session includes source transfer and any queue/away time,
+  // not merely the optimistic test duration. Unknown quantities are not zero.
+  let digest,observationDigest;
+  try {
+    digest=jobDigest(job);
+    observationDigest=jobDigest(node);
+    if(!Array.isArray(job.closure) || !Number.isFinite(node.startupMinutes) || node.startupMinutes<0
+        || !Number.isFinite(node.queuedMinutes) || node.queuedMinutes<0
+        || (node.state==='intermittent' && (!Number.isFinite(node.expectedAwayMinutes) || node.expectedAwayMinutes<0)))
+      why.push('session-placement-time-unmeasured');
+    else {
+      const cached=Array.isArray(node.closureCache)?new Set(node.closureCache):null;
+      const membersValid=cached && node.closureCache.every(id=>typeof id==='string' && id.trim())
+        && job.closure.every(member=>record(member) && typeof member.id==='string' && member.id.trim()
+          && (cached.has(member.id) || measuredInterval(member.sizeMb??job.defaultMemberSizeMb)));
+      const missing=membersValid?job.closure.filter(member=>!cached.has(member.id)):[];
+      const needsTransfer=missing.some(member=>iv(member.sizeMb??job.defaultMemberSizeMb).max>0);
+      const bandwidthValid=!needsTransfer || (measuredInterval(node.bandwidthMbps) && iv(node.bandwidthMbps).min>0);
+      const transfer=membersValid && bandwidthValid?fetchMinutes(job,node).minutes.max:NaN;
+      if(!Number.isFinite(transfer) || transfer<0) why.push('session-transfer-time-unmeasured');
+      const occupied=transfer+job.minutes+node.startupMinutes+node.queuedMinutes
+        +(node.state==='intermittent'?node.expectedAwayMinutes:0);
+      if(!Number.isFinite(occupied) || occupied>job.maxMinutes)
+        why.push('session-maximum-does-not-cover-placement-time');
+    }
+  } catch { why.push('session-original-job-unqualified'); }
+  // Do not consult authority on a source/capacity/lifecycle mismatch.
+  if(why.length) return {ok:false,why};
+  if(typeof readSessionAdmission !== 'function') return {ok:false,why:['session-admission-unreceived']};
+  const subject={jobId:job.id,nodeId:node.id,scope:wanted.scope,sessionId:wanted.sessionId,mode:wanted.mode,
+    source:{...wanted.source},workspacePath:wanted.workspacePath,maxMinutes:job.maxMinutes,
+    observationRef:observed.observationRef,jobDigest:digest,observationDigest};
+  let admission;
+  try { admission=readSessionAdmission(structuredClone(subject)); }
+  catch { return {ok:false,why:['session-admission-read-failed']}; }
+  const sameSubject=record(admission?.subject) && Object.keys(subject).length === Object.keys(admission.subject).length
+    && ['jobId','nodeId','scope','sessionId','mode','workspacePath','maxMinutes','observationRef','jobDigest','observationDigest'].every(key=>admission.subject[key]===subject[key])
+    && sameSource(admission.subject.source,subject.source);
+  if(!record(admission) || admission.kind !== 'session-execution-admission.v1' || admission.state !== 'received'
+      || !sameSubject || !reference(admission.issuer) || !reference(admission.evidenceRef)
+      || !oid(admission.verifierRevision) || !reference(admission.reviewRef) || !reference(admission.lifecycleRef)
+      || !reference(admission.isolationRef) || admission.credentialPolicy !== 'no-job-secrets'
+      || !Number.isFinite(Date.parse(admission.observedAt)) || Date.parse(admission.observedAt) > at
+      || at-Date.parse(admission.observedAt) > 3_600_000
+      || !Number.isFinite(Date.parse(admission.expiresAt)) || Date.parse(admission.expiresAt) < until)
+    return {ok:false,why:['session-admission-identity-or-evidence-unreceived']};
+  const isolation=wanted.mode==='github-jit'?'clean-one-job':'reviewed-local-source';
+  if(admission.isolation !== isolation) return {ok:false,why:['session-isolation-unreceived']};
+  if(wanted.mode==='github-jit' && (!record(admission.runner) || !Number.isSafeInteger(admission.runner.id)
+      || admission.runner.id <= 0 || admission.runner.repositoryId !== wanted.source.repositoryId
+      || admission.runner.ephemeral !== true || admission.runner.scope !== 'trusted-exact-head'
+      || !reference(admission.runner.evidenceRef)))
+    return {ok:false,why:['session-runner-registration-unreceived']};
+  return {ok:true,mode:wanted.mode,scope:wanted.scope,sessionId:wanted.sessionId,source:{...wanted.source},
+    evidenceRef:admission.evidenceRef,expiresAt:new Date(Math.min(Date.parse(observed.expiresAt),Date.parse(admission.expiresAt))).toISOString(),
+    executed:false,leaseRequired:true};
+}
 
 export function fetchMinutes(job, node) {
   const cached = new Set(node.closureCache ?? []);
@@ -17,8 +148,10 @@ export function fetchMinutes(job, node) {
   return { missing: missing.map(m => m.id), minutes: { min: div(mb.min, bw.max), max: div(mb.max, bw.min) } };
 }
 
-export function assess(job, node, { ledger = null, budgets = {}, now }) {
+export function assess(job, node, { ledger = null, budgets = {}, now, readSessionAdmission }) {
   const why = [];
+  const session=preflightSessionExecution(job,node,{now,readSessionAdmission});
+  if(session && !session.ok) why.push(...session.why);
   if (job.mustRunOn && !job.mustRunOn.includes(node.id)) why.push('job-names-other-nodes');
   if (!['up','intermittent'].includes(node.state)) why.push('node-not-observed-up');
   const nowMs=Date.parse(now),nodeAt=Date.parse(node.observedAt);
@@ -90,12 +223,13 @@ export function assess(job, node, { ledger = null, budgets = {}, now }) {
     }
   } else if(node.cost?.kind!=='held')
     why.push('unsupported-or-unpriced-provider');
-  if (why.length) return { nodeId: node.id, feasible: false, why };
+  if (why.length) return { nodeId: node.id, feasible: false, why:[...new Set(why)] };
   const fetch = fetchMinutes(job, node);
   let price = add(fetch.minutes, mul(iv(job.minutes), 1 + scarcity));
   price = add(price, iv(node.queuedMinutes ?? 0));
   if (node.state === 'intermittent') price = add(price, iv(node.expectedAwayMinutes));
-  return { nodeId: node.id, feasible: true, certainty: worst(...Object.values(f)), price, missing: fetch.missing, scarcityPerMinute: scarcity, budgetHold };
+  return { nodeId: node.id, feasible: true, certainty: worst(...Object.values(f)), price, missing: fetch.missing, scarcityPerMinute: scarcity, budgetHold,
+    ...(session?{sessionExecution:session}:{}) };
 }
 
 const rank = a => [a.certainty === 'certain' ? 0 : 1, Number.isFinite(a.price.max) ? 0 : 1, a.price.max, a.price.min];
@@ -121,7 +255,7 @@ export function place(job, nodes, ctx) {
  * a single-writer original budget hold and fencing token before execution.
  * Job ordering is the caller's independently governed priority ordering.
  */
-export function planFleet(jobs,nodes,{ledger=null,budgets={},now}={}){
+export function planFleet(jobs,nodes,{ledger=null,budgets={},now,readSessionAdmission}={}){
   if(!Array.isArray(jobs)||!Array.isArray(nodes)||!jobs.length||
     !Number.isFinite(Date.parse(now))||jobs.length>1000||nodes.length>256)
     throw new TypeError('bounded original jobs, nodes and observation time required');
@@ -154,14 +288,14 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now}={}){
       pending.push({jobId:job.id,reason:'original-job-closure-or-maximum-runtime-unmeasured'});
       continue;
     }
-    const dimensions=['cores','memoryGb','freeDiskGb'];
+    const dimensions=['cores','memoryGb','freeDiskGb',...(job.sessionExecution===undefined?[]:['freeInodes'])];
     if(dimensions.some(k=>!Number.isFinite(job.needs?.[k])||job.needs[k]<0)||
       job.needs.cores<=0){
       pending.push({jobId:job.id,reason:'explicit-compute-footprint-required'});
       continue;
     }
     const view=place(job,provisionalNodes,
-      {now,ledger:provisionalLedger,budgets:provisionalBudgets});
+      {now,ledger:provisionalLedger,budgets:provisionalBudgets,readSessionAdmission});
     // Only candidates with finite worst-case runtime and *certain* measured
     // resources can acquire provisional capacity. Possible measurements
     // request probes; a chosen node name alone is never dispatch authority.
@@ -208,14 +342,19 @@ export function planFleet(jobs,nodes,{ledger=null,budgets={},now}={}){
     }
     const resourceHold=Object.fromEntries(dimensions.map(k=>[k,job.needs[k]]));
     for(const key of dimensions)node[key]-=resourceHold[key];
+    if(candidate.sessionExecution) for(const alias of provisionalNodes)
+      if(alias.sessionExecution?.scope===node.sessionExecution.scope && alias.sessionExecution?.sessionId===node.sessionExecution.sessionId)
+        alias.sessionExecution.activeJobs = 1;
     placements.push({jobId:job.id,nodeId:node.id,resourceHold,
       budgetHold:candidate.budgetHold,price:candidate.price,
-      state:'proposed-not-executed',leaseRequired:true});
+      state:'proposed-not-executed',leaseRequired:true,
+      ...(candidate.sessionExecution?{sessionExecution:candidate.sessionExecution}:{})});
   }
   return {kind:'original-fleet-placement-proposal',at:now,placements,pending,probes,
     proposed:placements.length,unplaced:pending.length,
     executed:0,providerBudgetHeld:false,leaseReceived:false,
     // Remaining are temporary hypothetical amounts, not provider readback.
     residualResources:provisionalNodes.map(n=>({nodeId:n.id,
-      cores:n.cores,memoryGb:n.memoryGb,freeDiskGb:n.freeDiskGb}))};
+      cores:n.cores,memoryGb:n.memoryGb,freeDiskGb:n.freeDiskGb,
+      ...(n.sessionExecution===undefined?{}:{freeInodes:n.freeInodes})}))};
 }

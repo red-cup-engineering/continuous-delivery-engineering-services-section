@@ -530,6 +530,107 @@ supervisor, process and native work readback.
 
 ## Runner custody: normative Group default (2026-10-13)
 
+### Session-bound runner preflight and its receiving boundary
+
+A foreground development session is useful compute, but is not thereby a
+registered CI runner or a durable service. The existing resource planner now
+has an **opt-in** `sessionExecution` contract on the original job and node.
+`src/placement/place.mjs` applies it before ordinary placement. A node carrying
+this contract refuses a job that omits it, so dropping the job field cannot
+silently turn a bounded session into an unrestricted pool. Ordinary jobs on
+ordinary nodes retain their existing behavior.
+
+The original job's `sessionExecution` contains `mode` (`local-qualification` or
+`github-jit`), the original host/provider custody `scope`, `sessionId`,
+`workspacePath`, and `source` with exactly
+`repositoryId`, `repository` and a full immutable `commit`. Its normal `needs`
+must also include positive whole `freeInodes`, alongside measured cores, RAM
+and free bytes. `effect: false` means no consequential external effects; it
+does not claim that a compiler or test performs no ordinary local file I/O.
+Duration and maximum duration remain the existing `minutes` and `maxMinutes`.
+
+The node's `sessionExecution` is a host-observed binding of that same session,
+custody scope, workspace and source, with `checkoutHead`, `checkoutClean`, `observationRef`,
+`observedAt`, `expiresAt`, `lifecycle: foreground-single-job`, `maxJobs: 1`,
+`activeJobs: 0` and `completedJobs: 0`. The observation may be at most one hour
+old. Both current lifecycle and admission expiry must cover the entire maximum
+job duration. The node also supplies measured nonnegative `startupMinutes` and
+`queuedMinutes`, plus `expectedAwayMinutes` when intermittent. Startup, worst-case
+source transfer, queue/away time and estimated execution must all fit inside
+`maxMinutes`; unknown timing refuses. This maximum bounds the whole occupied
+lifecycle, not just a test subprocess. Missing lifetime guarantees refuse: a timestamp guessed from
+the current time is not host lifecycle evidence. `node.freeInodes` measures the
+same selected workspace filesystem as `freeDiskGb`; free bytes elsewhere are
+not a substitute. Fleet planning provisionally holds inodes and occupies the
+session's one job slot across every node alias sharing its original custody
+scope and session identity, without mutating original observations. Equal
+session strings in different provider/host custody scopes are not conflated.
+
+**Narrow host receiving interface, not another authority store.** The existing
+host may compose a synchronous, read-only `readSessionAdmission(subject)` in
+the context passed to `place`, `assess` or `planFleet`. This is an explicit
+interface for a still-required host integration, not an installed provider.
+The subject binds job ID, node ID, custody scope, session ID, mode, exact source
+identity, workspace, maximum duration and the original session observation
+reference. Its `jobDigest` is SHA-256 of the complete bounded, acyclic, dense
+JSON job with recursively sorted object keys. The host must compare that digest
+against its actual original job, including command/configuration, closure,
+resource needs and effects; a changed job cannot reuse a prior admission. The
+same canonical digest rule binds the complete original node observation as
+`observationDigest`, so reusing an observation reference with changed resource
+or cache claims does not reuse its admission. Every uncached closure member
+must have a finite nonnegative ordered size interval; a nonempty transfer also
+requires a finite ordered positive bandwidth interval. Negative members may
+not cancel positive transfer time.
+The host must independently authenticate the issuer, verify the exact review,
+source checkout, lifecycle, isolation and no-job-secrets conditions, and check
+current revocation/expiry through its original evidence owners before returning
+an admission. No credential or grant is created by calling this interface.
+
+The received envelope has kind `session-execution-admission.v1`, state
+`received`, that exact `subject`, an `issuer`, `evidenceRef`, immutable
+`verifierRevision`, `reviewRef`, `lifecycleRef`, `isolationRef`, current
+`observedAt`, bounded `expiresAt`, and `credentialPolicy: no-job-secrets`.
+These references are necessary identity checks, **not cryptographic proof**.
+The planner trusts only the separately installed host reader to authenticate
+them; this module cannot authenticate a fabricated reader implementation.
+An arbitrary true callback, a JSON file, tool presence or a runner label is
+not this interface's implementation. The CLI deliberately has no flag to load
+an admission file, callback module or authorization environment variable.
+Without the real receiver it returns `session-admission-unreceived`.
+
+`local-qualification` requires the host's `reviewed-local-source` isolation
+classification: supervised, independently reviewed original source without
+job secrets. That name is a trust classification, not OS sandboxing or a
+license for arbitrary PR code. `github-jit` instead requires a genuinely
+`clean-one-job` boundary plus the original provider's received positive runner
+ID, exact repository ID, `ephemeral: true`, `scope: trusted-exact-head` and an
+evidence reference. Registration and supplying its credentials are separate
+Operations/host-custody effects, requiring their actual permission controls.
+This evaluator creates neither. A JIT runner's automatic deregistration does
+not itself clean the host, isolate another process, or preserve diagnostics.
+
+**Why this arrangement:** ordinary one-hour node freshness cannot prove a
+session survives a job, that the workspace has allocatable inodes, or that its
+checkout and admission concern the same exact head. Extending the existing
+placement/lease/receiving chain keeps one owner. A second runner controller,
+copied machine catalogue, persistent daemon in an unqualified session, and
+silent fallback to paid hosted CI are rejected alternatives. A public-only
+runner assay cannot receive private source; a local test cannot stand in for
+GitHub registration. Source observations are useful even when admission is
+missing, but refusals are preserved rather than promoted to authorization.
+
+**Continuation and receipts:** the current preflight emits proposals only,
+with `executed: false` and `leaseRequired: true`. The existing durable executor
+must retain original source/configuration, logical job, attempt, fencing token,
+provider job/runner IDs where applicable, logs and artifact digests, and actual
+independent acceptance. An uncertain job result is reconciled at its original
+destination; session loss or lease expiry does not authorize replay. No
+background polling, registration retry, credential storage or cleanup daemon
+is added here. A source patch must retain ordinary runtime/machine integration
+gates. Unit-test fixtures demonstrate refusal and interface composition, not
+installed admission, operating runner access or consumer receiving.
+
 **Use our own machines for ordinary Group CI, change receiving, branch intake, and releases. Do not select GitHub-hosted runners as an implicit fallback.** The existing caller generator requires a `self-hosted` label and an explicit machine or pool identity. For example, `["self-hosted","Linux","X64","bare-cedar-fog"]` names a machine observed completing jobs for `561-group`. A different organization or repository may not have permission to use it.
 
 A callable workflow does **not** provide the runner: its *owning repository* must have a registered, authorized, online runner (or access to an organization/enterprise runner group) with every requested label. A runner registered in the `561-group` organization is **not** automatically available to `causeway-services`, `red-cup-engineering`, `coesite-operations`, or `lenticule-science`. Runner provisioning is an Operations/host-custody responsibility; do not create a made-up machine catalogue or hand-wave access by copying labels. No repo should silently spend GitHub-hosted minutes when house capacity is absent. If a house runner is not reachable, say `runner-capacity-unreceived`, retain the work, and repair the actual organization registration, runner group permissions, or machine service.
