@@ -30,7 +30,7 @@ test("private Market CircleCI retains original source, authorized submodule and 
   assert.match(steps[1].run.command, /repository="red-cup-engineering\/market\.561\.group"/u);
   assert.match(steps[2].run.command, /git submodule update --init --checkout parameters/u);
   assert.match(steps[3].run.command, /cp package\.json \/tmp\/market-native\/source-package\.json/u);
-  assert.match(steps[3].run.command, /pnpm\.cjs" install --frozen-lockfile/u);
+  assert.match(steps[3].run.command, /node "\$pnpm" install --frozen-lockfile/u);
   assert.match(steps[4].run.command, /npm run compile\nnpm run check\nnpm run check:catalog\nnpm test/u);
   assert.deepEqual(config.workflows["receive-private-market-main"].jobs, [
     { "original-market-native": { filters: 'pipeline.git.branch == "main"' } },
@@ -68,7 +68,7 @@ test("post-pinning native acceptance compares the selected supplier against orig
   const script = extractNode(steps[3].run.command);
   assert.match(script, /source-package\.json/u);
   assert.match(script, /pkg\.dependencies\?\.\[cve\]!==source\.dependencies\[cve\]/u);
-  assert.match(script, /receipt\.packages\[0\]\.applied!==true/u);
+  assert.match(script, /receipt\.packages\[0\]\?\.applied!==true/u);
   assert.doesNotMatch(script, /0\.2\.0-dev\.24/u,
     "the obsolete supplier version must not survive in the live receiver");
 });
