@@ -41,6 +41,34 @@ the live receiver checks the consumer repository identity and visibility again.
 Private source, larger runner labels and effectful release/sync generation do
 not inherit that route. No CI result is implied by a runner selector alone.
 
+## Source-selected CircleCI receiving for private Market
+
+The original `.circleci/private-market.yml` has a free-runner-capable
+alternative to private GitHub-hosted Actions, subject to an installed CircleCI
+project/GitHub App, original private-source read rights, and independently
+confirmed remaining Free credits. The GitHub-hosted private pool is recorded
+as exhausted; merely editing a workflow does not restore that quota.
+
+The private Market's CVE consumer moved beyond the historical
+`0.2.0-dev.24` source edition. The original CircleCI receiver formerly
+hard-coded that historical version **twice**, so it would reject the actual
+current Market manifest `0.2.0-dev.27` before running its own tests.
+It now admits a single exact released supplier version from the checked-out
+Market's authored `package.json`, requires the original native CVE
+receiving test, freezes the source manifest before Code pinning, and rejects
+a source-to-installed supplier edition change. The existing immutable checkout,
+Causeway parameters gitlink, frozen dependency install, catalog compilation,
+CVE routes, whole Market tests and non-deployment policy remain unchanged.
+
+`test/circleci-private-market-source.test.mjs` executes the original
+CircleCI source-admission Node program with current and future exact suppliers
+and with missing/local-only/malformed ones. This is actual source-contract
+qualification on the **public** CD owner; it is not proof that CircleCI is
+connected or has Free credit, or that the private Market has been built,
+deployed, sold, or independently delivered. That receiving belongs to the
+existing CircleCI project, source owners and economic ledger, not an invented
+second seller.
+
 ## Release integrity: no ghost packages or sacrificed dependencies
 
 The original `src/release/closure.mjs` and `scripts/release-pack.mjs` must preserve every declared runtime and optional dependency. A missing internal owner, unresolved local `workspace:`/`file:`/`link:` coordinate, or dependency cycle is an **actual refusal before packing or publication**, never an apparent success with a smaller manifest. The old `--drop` release shortcut and generated workflow input have been retired. Existing Code-owned npm publication/version-policy and the genuine registry remain the authoritative release tools; this CD source never invents an external version or grants registry writes. An exact packed archive only qualifies source preservation; a real registry write, native LAGOON construction, installed MetroPlat and market receiving remain distinct outcomes.
