@@ -1,0 +1,107 @@
+# Existing Red Cup public Continuous Delivery is the CircleCI configuration owner.
+# GitHub App configuration source: red-cup-engineering/continuous-delivery-engineering-services-section
+# Selected PRIVATE checkout source: red-cup-engineering/agent-organization-engine.
+# Receives original Organizing #69 on its current development branch or main;
+# CircleCI project, selected grant, Free credit, and actual run remain unproved.
+# Do not mirror source, publish a package, install a host, or enable paid capacity.
+version: 2.1
+jobs:
+  qualify-original-organizing-dispatch:
+    docker:
+      - image: cimg/node:24
+    resource_class: small
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Admit exact original private Organizing Git source
+          command: |
+            set -euo pipefail
+            : "$CIRCLE_SHA1"
+            [[ "$CIRCLE_SHA1" =~ ^[0-9a-f]{40}$ ]] || { echo "40-character original source SHA required" >&2; exit 78; }
+            test "$(git rev-parse --verify HEAD)" = "$CIRCLE_SHA1" || { echo "CircleCI checkout differs from claimed source" >&2; exit 78; }
+            repository="red-cup-engineering/agent-organization-engine"
+            remote="$(git remote get-url origin)"
+            case "$remote" in
+              "git@github.com:$repository"|"git@github.com:$repository.git"|"https://github.com/$repository"|"https://github.com/$repository.git"|"ssh://git@github.com/$repository.git") ;;
+              *) echo "Incorrect original private Organizing repository" >&2; exit 78 ;;
+            esac
+            case "$CIRCLE_BRANCH" in
+              main|fix/delegated-work-source-context-20261020) ;;
+              *) echo "Unselected Organizing development branch" >&2; exit 78 ;;
+            esac
+            echo "Admitted original Organizing Git checkout $CIRCLE_SHA1"
+      - run:
+          name: Admit original Node 24 source and packed-receiving contract
+          command: |
+            set -euo pipefail
+            node -e 'if(process.versions.node.split(".")[0]!=="24"){throw Error("Node 24 required")}'
+            node --input-type=module <<'NODE'
+            import {readFileSync, existsSync} from 'node:fs';
+            const dir='lib/organizing/';
+            const pkg=JSON.parse(readFileSync(dir+'package.json','utf8'));
+            const required=[
+              'test/work/source-context.test.mjs',
+              'test/native-work-dispatch.test.mjs',
+              'test/dispatch-unallocated-contract.test.mjs',
+              'test/package-receiving-carrier.test.mjs'
+            ];
+            if(pkg.name!=='@red-cup-engineering/organizing' ||
+              pkg.scripts?.test!=='node --test "test/**/*.test.mjs"' ||
+              !existsSync(dir+'pnpm-lock.yaml') ||
+              !Array.isArray(pkg.receivingTests) ||
+              pkg.receivingTests.length<4 ||
+              required.some(path=>!pkg.receivingTests.includes(path) || !existsSync(dir+path)) ||
+              new Set(pkg.receivingTests).size!==pkg.receivingTests.length)
+              throw Error('Original Organizing source or receiving-test contract changed');
+            console.log('Original receiving-test declarations:',pkg.receivingTests.length);
+            NODE
+      - run:
+          name: Install frozen original dependency closure and execute complete source suite
+          no_output_timeout: 15m
+          command: |
+            set -euo pipefail
+            mkdir -p /tmp/organizing-ci-pnpm /tmp/organizing-ci-artifact
+            npm install --prefix /tmp/organizing-ci-pnpm --no-save --ignore-scripts --no-audit --no-fund pnpm@11.28.5
+            pnpm="node /tmp/organizing-ci-pnpm/node_modules/pnpm/bin/pnpm.cjs"
+            cd lib/organizing
+            $pnpm --version
+            $pnpm install --frozen-lockfile
+            $pnpm test
+      - run:
+          name: Qualify actual packed Organizing carrier and ALL declared receiving tests
+          no_output_timeout: 15m
+          command: |
+            set -euo pipefail
+            pnpm="node /tmp/organizing-ci-pnpm/node_modules/pnpm/bin/pnpm.cjs"
+            cd lib/organizing
+            $pnpm pack --pack-destination /tmp/organizing-ci-artifact
+            archive="$(find /tmp/organizing-ci-artifact -maxdepth 1 -type f -name '*.tgz' -print)"
+            test -n "$archive" && test -f "$archive" || { echo "Expected one packed artifact" >&2; exit 78; }
+            sha256sum "$archive"
+            mkdir -p /tmp/organizing-ci-unpacked
+            tar -xzf "$archive" -C /tmp/organizing-ci-unpacked
+            cd /tmp/organizing-ci-unpacked/package
+            node --input-type=module <<'NODE'
+            import {readFileSync, statSync} from 'node:fs';
+            const pkg=JSON.parse(readFileSync('package.json','utf8'));
+            const tests=pkg.receivingTests;
+            const required=['test/work/source-context.test.mjs','test/native-work-dispatch.test.mjs',
+              'test/dispatch-unallocated-contract.test.mjs','test/package-receiving-carrier.test.mjs'];
+            if(pkg.name!=='@red-cup-engineering/organizing' || !Array.isArray(tests) ||
+              tests.length<4 || new Set(tests).size!==tests.length ||
+              required.some(test=>!tests.includes(test))) throw Error('Incomplete original packed manifest');
+            for(const file of tests){
+              if(typeof file!=='string'||!/^test\/[a-zA-Z0-9/_-]+\.test\.mjs$/.test(file) || !statSync(file).isFile())
+                throw Error('Missing or unqualified packed receiver: '+file);
+            }
+            console.log('Exact packed original receivers:',tests.length);
+            NODE
+            $pnpm install --prod --no-frozen-lockfile
+            node -p 'require("./package.json").receivingTests.join("\n")' |
+              xargs node --test --test-concurrency=1
+workflows:
+  private-original-organizing-receiving:
+    jobs:
+      - qualify-original-organizing-dispatch:
+          filters: pipeline.git.branch == "main" or pipeline.git.branch == "fix/delegated-work-source-context-20261020"
