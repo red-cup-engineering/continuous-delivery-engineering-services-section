@@ -96,3 +96,18 @@ test('source registry policy and workspace release-age exclusions remain untouch
  assert.equal(fs.readFileSync(path.join(input.directory,'pnpm-workspace.yaml'),'utf8'),workspace);
 });
 
+test('a held runner\'s declared package directory holds the store and cache across jobs',()=>{
+ const input=fixture(),persistent=path.join(path.dirname(input.directory),'runner-packages');fs.mkdirSync(persistent,{mode:0o700});
+ let seen;
+ const result=installPnpm({...input,persistent},{run:(command,args,options)=>{seen={args,env:options.env};return {status:0};}});
+ assert.ok(seen.args.includes('--store-dir='+path.join(fs.realpathSync(persistent),'node-package-store')));
+ assert.equal(seen.env.XDG_CACHE_HOME,path.join(fs.realpathSync(persistent),'node-package-cache'));
+ assert.equal(result.packageStore,'runner');
+ assert.deepEqual(fs.readdirSync(input.temporary),[],'job temp holds no package store');
+ assert.equal(installPnpm(input,{run:()=>({status:0})}).packageStore,'job','without a declaration the store stays in job temp');
+});
+test('an unsafe runner package directory refuses before any execution',()=>{
+ const input=fixture(),shared=path.join(path.dirname(input.directory),'shared-packages');fs.mkdirSync(shared,{mode:0o777});fs.chmodSync(shared,0o777);
+ for(const persistent of ['relative/store',shared,input.directory,os.homedir()])
+  assert.throws(()=>installPnpm({...input,persistent},{run:()=>assert.fail('must refuse before execution')}),/runner package directory/);
+});
