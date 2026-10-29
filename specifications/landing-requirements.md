@@ -33,6 +33,8 @@ A section is a repository that owns its child sections. A parent's gitlink to a 
 - LD-8. Each section declares its test contract in one place the lander reads (by default `npm test` from a frozen install). A section without one lands on a successful build alone, and the landing says so.
 - LD-9. The lander replaces the pull-request-per-level chain of `submodule-advance`, `superrepo-advance` and `notify-parent`; those are deleted when it serves their callers.
 
+- LD-10. No central registry. Every node serves its own package registry from its own store and resolves house packages from it, from its section tree, or from peers. Peers replicate by content address, so no node, Cloudflare Worker or bucket is the canonical copy. A build or landing on a node never waits on another node's or a provider's availability or request allowance. Leader, 2026-10-29: "We don't want 'the house registry' we want decentralized registries that's the whole point. We can't wait an arbitrary 2 and a half hours because of our own bad engineering."
+
 ## Prior art
 
 - Bors (Rust): the "not rocket science rule", where the main branch only ever holds commits tested exactly as merged.
