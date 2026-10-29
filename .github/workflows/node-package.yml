@@ -189,7 +189,12 @@ jobs:
           REGISTRY_USERNAME: ${{ inputs.registry-username }}
           REGISTRY_TOKEN: ${{ secrets.registry-token }}
           REGISTRY_PASSWORD: ${{ secrets.registry-password }}
-        run: node "$GITHUB_WORKSPACE/.ci-supplier/scripts/node-package-install.mjs"
+          # A held runner keeps its pnpm store in its own persistent tool cache, so the next job links what is
+          # already there instead of writing the whole graph into job temp again; a hosted runner stays in temp.
+          NODE_PACKAGE_STORE_ROOT: ${{ runner.environment == 'self-hosted' && format('{0}/node-package-root', runner.tool_cache) || '' }}
+        run: |
+          if [ -n "$NODE_PACKAGE_STORE_ROOT" ]; then mkdir -p "$NODE_PACKAGE_STORE_ROOT" && chmod 700 "$NODE_PACKAGE_STORE_ROOT"; fi
+          node "$GITHUB_WORKSPACE/.ci-supplier/scripts/node-package-install.mjs"
       - name: Install dependencies when needed
         if: inputs.install && inputs.package-manager == 'npm'
         run: if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
