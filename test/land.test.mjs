@@ -134,3 +134,45 @@ test('a change that adds a failure to a red main is refused, naming only the new
   assert.deepEqual(result.introduced, ['b holds']);
   assert.equal(remoteMain(t, 'section'), before);
 });
+
+test('a contract runs within its budget and what it spent is recorded', () => {
+  const { root, section } = forest();
+  propose(section, 'budgeted', 'notes', 'two\n');
+  const result = landChangeSet({ root, identity, budget: calmBudget(300), proposals: [parseProposal('services/section=budgeted')] });
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  const [spent] = result.tested[0].budget;
+  assert.equal(spent.state, 'ran');
+  assert.ok(spent.runtime && spent.cpu, JSON.stringify(spent));
+});
+
+test('a contract its budget kills holds the change: nothing is refused or pushed', () => {
+  const { t, root, section } = forest();
+  const before = [remoteMain(t, 'section'), remoteMain(t, 'root')];
+  git(section, 'switch', '--quiet', '-c', 'hungry', 'origin/main');
+  write(section, 'check.mjs', 'const a = []; for (let i = 0; i < 400; i++) a.push(Buffer.alloc(1 << 20, 1));\n');
+  git(section, 'commit', '--quiet', '-am', 'hungry test'); git(section, 'push', '--quiet', 'origin', 'hungry');
+  const result = landChangeSet({ root, identity, budget: calmBudget(150), proposals: [parseProposal('services/section=hungry')] });
+  assert.equal(result.state, 'held', JSON.stringify(result));
+  assert.equal(result.reason, 'over-budget');
+  assert.deepEqual([remoteMain(t, 'section'), remoteMain(t, 'root')], before);
+});
+
+test('one baseline run serves every proposal judged against the same red target', () => {
+  const { root, section } = redForest();
+  const runs = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'baseline-runs-')), 'runs');
+  git(section, 'switch', '--quiet', '-c', 'counted', 'origin/main');
+  write(section, 'count.test.mjs', `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(runs)}, process.cwd() + '\\n');\n`);
+  git(section, 'add', '.'); git(section, 'commit', '--quiet', '-m', 'count runs'); git(section, 'push', '--quiet', 'origin', 'counted:main');
+  propose(section, 'one', 'notes', 'first\n');
+  propose(section, 'two', 'notes', 'second\n');
+  const baselines = new Map();
+  for (const branch of ['one', 'two'])
+    assert.equal(landChangeSet({ root, identity, dryRun: true, baselines, proposals: [parseProposal(`services/section=${branch}`)] }).state, 'tested');
+  const lines = fs.readFileSync(runs, 'utf8').trim().split('\n');
+  assert.equal(lines.filter(l => /wt-base-/.test(l)).length, 1, lines.join('\n'));
+  assert.equal(lines.filter(l => !/wt-base-/.test(l)).length, 2);
+});
+function calmBudget(memoryMb) {
+  return { memoryMb, telemetry: () => ({ availableMb: 8000, memoryFullPct: 0, ioFullPct: 0 }),
+    ledger: fs.mkdtempSync(path.join(os.tmpdir(), 'land-ledger-')) };
+}

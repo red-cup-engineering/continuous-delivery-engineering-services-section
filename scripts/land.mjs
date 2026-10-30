@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseSize, withinBudget } from './within-budget.mjs';
 
 const git = (cwd, args, env) => execFileSync('git', args,
   { cwd, encoding: 'utf8', env: env ? { ...process.env, ...env } : process.env, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -68,7 +69,12 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
 // LD-8: the section's own test contract, read from its package.json. LD-11: when the
 // candidate's lockfile equals the one installed in the section's checkout, the
 // installed node_modules is linked rather than reinstalled.
-function runContract(node, dir, timeoutMs) {
+//
+// With a budget, each step runs through within-budget: admitted against the node's
+// telemetry, contained to its memory, and measured. A step the node could not admit,
+// or that its budget killed, is the environment's verdict, not the change's: the
+// contract reports `environment` and the change is held, never refused for it.
+function runContract(node, dir, { timeoutMs, budget }) {
   const manifest = path.join(dir, 'package.json');
   const pkg = fs.existsSync(manifest) ? JSON.parse(fs.readFileSync(manifest, 'utf8')) : null;
   if (!pkg?.scripts?.test) return { section: node.section, contract: 'none', ok: true };
@@ -84,13 +90,25 @@ function runContract(node, dir, timeoutMs) {
   // The contract runs as its own top-level process: a test runner's context inherited
   // from whatever runs the lander would make a nested runner report to it and exit 0.
   const { NODE_TEST_CONTEXT, ...env } = process.env;
+  const spent = [];
   for (const [cmd, args] of steps) {
-    const r = spawnSync(cmd, args, { cwd: dir, encoding: 'utf8', timeout: timeoutMs, env: { ...env, CI: '1' } });
-    const output = `${r.stdout || ''}${r.stderr || ''}${r.error ? `\n${r.error.message}` : ''}`;
-    if (r.status !== 0) return { section: node.section, contract: `${cmd} ${args.join(' ')}`, ok: false,
-      failures: failingTests(output), log: tail(output) };
+    let status, output;
+    if (budget) {
+      const r = withinBudget({ command: cmd, args, cwd: dir, env: { ...env, CI: '1' }, memoryMb: budget.memoryMb,
+        waitMs: budget.waitMs, telemetry: budget.telemetry, ledger: budget.ledger, rules: budget.rules, name: `${node.section} ${cmd} ${args[0]}`, timeoutMs });
+      spent.push(r.budget);
+      if (r.budget.state !== 'ran') return { section: node.section, contract: `${cmd} ${args.join(' ')}`, ok: false,
+        environment: r.budget.state, budget: spent, log: tail(r.output) };
+      ({ status, output } = r);
+    } else {
+      const r = spawnSync(cmd, args, { cwd: dir, encoding: 'utf8', timeout: timeoutMs, env: { ...env, CI: '1' } });
+      status = r.status;
+      output = `${r.stdout || ''}${r.stderr || ''}${r.error ? `\n${r.error.message}` : ''}`;
+    }
+    if (status !== 0) return { section: node.section, contract: `${cmd} ${args.join(' ')}`, ok: false,
+      failures: failingTests(output), log: tail(output), ...(budget && { budget: spent }) };
   }
-  return { section: node.section, contract: 'npm test', ok: true };
+  return { section: node.section, contract: 'npm test', ok: true, ...(budget && { budget: spent }) };
 }
 
 // Names of failing tests in node:test spec output (✖ name) and TAP (not ok N - name).
@@ -108,12 +126,21 @@ export function failingTests(output) {
 // The candidate is judged against the target instead: it passes when every test
 // failing on the candidate also fails, by name, on the target. The target's own
 // failures are reported as that section's debt, not charged to the proposal.
-function judgeAgainstTarget(node, candidate, scratch, worktrees, timeoutMs) {
-  if (candidate.ok || !candidate.failures.length) return candidate;
-  const dir = path.join(scratch, `wt-base-${worktrees.length}`);
-  git(node.abs, ['worktree', 'add', '--quiet', '--detach', dir, node.base]);
-  worktrees.push([node.abs, dir]);
-  const base = runContract(node, dir, timeoutMs);
+//
+// The target's result depends only on the target commit, so one run serves every
+// proposal judged against it: `baselines` carries it across a drain.
+function judgeAgainstTarget(node, candidate, scratch, worktrees, run) {
+  if (candidate.ok || candidate.environment || !candidate.failures.length) return candidate;
+  const key = `${path.resolve(node.abs, git(node.abs, ['rev-parse', '--git-common-dir']))} ${node.base}`;
+  let base = run.baselines?.get(key);
+  if (!base) {
+    const dir = path.join(scratch, `wt-base-${worktrees.length}`);
+    git(node.abs, ['worktree', 'add', '--quiet', '--detach', dir, node.base]);
+    worktrees.push([node.abs, dir]);
+    base = runContract(node, dir, run);
+    if (base.environment) return { ...candidate, environment: base.environment, budget: base.budget };
+    run.baselines?.set(key, base);
+  }
   if (base.ok || !base.failures.length) return candidate;
   const known = new Set(base.failures);
   const introduced = candidate.failures.filter(name => !known.has(name));
@@ -122,7 +149,8 @@ function judgeAgainstTarget(node, candidate, scratch, worktrees, timeoutMs) {
 }
 
 export function landChangeSet({ root, proposals, target = 'main', identity = landerIdentity(), dryRun = false,
-  lockWaitMs = 10 * 60_000, testTimeoutMs = 30 * 60_000 }) {
+  lockWaitMs = 10 * 60_000, testTimeoutMs = 30 * 60_000, budget, baselines }) {
+  const run = { timeoutMs: testTimeoutMs, budget, baselines };
   const top = path.resolve(root);
   const nodes = new Map();
   for (const p of proposals) for (const link of chainOf(top, p.section)) {
@@ -188,8 +216,10 @@ export function landChangeSet({ root, proposals, target = 'main', identity = lan
       const dir = path.join(scratch, `wt-${worktrees.length}`);
       git(n.abs, ['worktree', 'add', '--quiet', '--detach', dir, n.candidate]);
       worktrees.push([n.abs, dir]);
-      const result = judgeAgainstTarget(n, runContract(n, dir, testTimeoutMs), scratch, worktrees, testTimeoutMs);
+      const result = judgeAgainstTarget(n, runContract(n, dir, run), scratch, worktrees, run);
       results.push(result);
+      if (result.environment) return { state: 'held', reason: result.environment, section: n.section, command: result.contract,
+        budget: result.budget, tested: results };
       if (!result.ok) return { state: 'refused', reason: 'test', section: n.section, command: result.contract,
         introduced: result.introduced || result.failures, log: result.log, tested: results };
     }
@@ -223,11 +253,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const target = opt('--target') || 'main';
   const host = opt('--host');
   const dryRun = flag('--dry-run');
+  const memory = opt('--memory');
   if (!args.length) {
-    console.error('usage: land.mjs [--root DIR] [--target BRANCH] [--host NAME] [--dry-run] SECTION=[REMOTE:]REF ...');
+    console.error('usage: land.mjs [--root DIR] [--target BRANCH] [--host NAME] [--memory SIZE] [--dry-run] SECTION=[REMOTE:]REF ...');
     process.exit(2);
   }
-  const result = landChangeSet({ root, target, dryRun, proposals: args.map(parseProposal), identity: landerIdentity(host) });
+  const result = landChangeSet({ root, target, dryRun, budget: memory && { memoryMb: parseSize(memory) }, proposals: args.map(parseProposal), identity: landerIdentity(host) });
   console.log(JSON.stringify(result, null, 2));
   process.exit(['landed', 'tested', 'unchanged'].includes(result.state) ? 0 : 1);
 }
