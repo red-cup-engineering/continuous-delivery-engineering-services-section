@@ -15,6 +15,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { landChangeSet, landerIdentity } from './land.mjs';
 import { resolveConflict } from './resolve.mjs';
+import { parseSize } from './within-budget.mjs';
 
 export function repositorySlug(url) {
   const m = /github\.com[:/]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(url || '');
@@ -114,7 +115,7 @@ export function localRepository(slug, index, cacheDir) {
 }
 
 export function drain({ root, pulls, identity = landerIdentity(), cacheDir, dryRun = false, comment = githubComment,
-  locate, resolve, onResult = () => {}, testTimeoutMs = 15 * 60_000 }) {
+  locate, resolve, budget, baselines = new Map(), onResult = () => {}, testTimeoutMs = 15 * 60_000 }) {
   const { index, duplicates } = mountIndex(root);
   const find = locate || (slug => localRepository(slug, index, cacheDir));
   const { queue, skipped } = planDrain(pulls);
@@ -125,7 +126,7 @@ export function drain({ root, pulls, identity = landerIdentity(), cacheDir, dryR
     try {
       if (!pull.sameRepository && pull.sameRepository !== undefined) throw new Error('head is in another repository');
       const repo = find(pull.slug);
-      const land = ref => ({ ...landChangeSet({ root: repo, target: pull.base, identity, dryRun, testTimeoutMs,
+      const land = ref => ({ ...landChangeSet({ root: repo, target: pull.base, identity, dryRun, testTimeoutMs, budget, baselines,
         proposals: [{ section: '.', remote: 'origin', ref }] }),
         base: git(repo, ['ls-remote', 'origin', `refs/heads/${pull.base}`]).split(/\s/)[0], target: pull.base });
       result = land(`refs/pull/${pull.number}/head`);
@@ -142,7 +143,8 @@ export function drain({ root, pulls, identity = landerIdentity(), cacheDir, dryR
     const record = { slug: pull.slug, number: pull.number, draft: pull.draft, state: result.state, reason: result.reason,
       section: result.section, conflicts: result.conflicts, introduced: result.introduced, error: result.error,
       landed: result.landed, targetFailures: result.tested?.flatMap(t => t.targetFailures || []).length || undefined,
-      resolution: result.resolution && { state: result.resolution.state, reason: result.resolution.reason, conflicts: result.resolution.conflicts, files: result.resolution.files, dropped: result.resolution.dropped } };
+      resolution: result.resolution && { state: result.resolution.state, reason: result.resolution.reason, conflicts: result.resolution.conflicts, files: result.resolution.files, dropped: result.resolution.dropped },
+      spent: result.tested?.flatMap(t => t.budget || []).map(b => ({ step: b.name, peakMb: b.peakMb, runtime: b.runtime, waitedMs: b.waitedMs, state: b.state })) };
     if (!dryRun && result.state === 'landed' && result.resolution?.dropped?.length) {
       const body = ['The lander landed this pull request after bringing it up to date with its base. These changes of the pull request were not carried, because the base removed the files they changed:',
         ...result.resolution.dropped.map(d => `- \`${d.file}\`${d.deletedBy ? `, removed by ${d.deletedBy}` : ''}`),
@@ -170,13 +172,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const limit = Number(opt('--limit', '0'));
   const cacheDir = opt('--cache', path.join(os.homedir(), '.cache', 'lander'));
   const dryRun = flag('--dry-run');
+  const memory = opt('--memory');
   const resolve = flag('--resolve') ? resolveConflict : undefined;
   let pulls = githubPulls(owners);
   if (only) pulls = pulls.filter(p => p.slug === only.toLowerCase());
   if (limit) pulls = planDrain(pulls).queue.slice(0, limit);
-  const { results, duplicates } = drain({ root, pulls, cacheDir, dryRun, resolve, identity: landerIdentity(opt('--host')),
+  const { results, duplicates } = drain({ root, pulls, cacheDir, dryRun, resolve, budget: memory && { memoryMb: parseSize(memory) }, identity: landerIdentity(opt('--host')),
     onResult: r => console.log(JSON.stringify(r)) });
   for (const d of duplicates) console.error(JSON.stringify({ duplicateMount: d }));
   const count = s => results.filter(r => r.state === s).length;
-  console.error(JSON.stringify({ landed: count('landed'), tested: count('tested'), refused: count('refused'), partial: count('partial'), skipped: count('skipped'), unchanged: count('unchanged') }));
+  console.error(JSON.stringify({ landed: count('landed'), held: count('held'), tested: count('tested'), refused: count('refused'), partial: count('partial'), skipped: count('skipped'), unchanged: count('unchanged') }));
 }
