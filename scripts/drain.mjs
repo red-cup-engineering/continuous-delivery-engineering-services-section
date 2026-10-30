@@ -69,9 +69,13 @@ export function githubPulls(owners) {
   }
   const pulls = [];
   for (const slug of repos) {
-    const page = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${slug}/pulls?state=open&per_page=100`])).flat();
-    for (const p of page) pulls.push({ slug, number: p.number, title: p.title, draft: p.draft, base: p.base.ref,
-      head: p.head.sha, createdAt: p.created_at, sameRepository: p.head.repo?.full_name?.toLowerCase() === slug });
+    const lines = gh(['api', '--paginate', `repos/${slug}/pulls?state=open&per_page=100`, '--jq',
+      '.[] | {number, title, draft, base: .base.ref, head: .head.sha, createdAt: .created_at, headRepository: .head.repo.full_name}']);
+    for (const line of lines.split('\n').filter(Boolean)) {
+      const p = JSON.parse(line);
+      pulls.push({ slug, number: p.number, title: p.title, draft: p.draft, base: p.base, head: p.head,
+        createdAt: p.createdAt, sameRepository: (p.headRepository || '').toLowerCase() === slug });
+    }
   }
   return pulls;
 }
