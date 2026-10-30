@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { landChangeSet, landerIdentity } from './land.mjs';
+import { resolveConflict } from './resolve.mjs';
 
 export function repositorySlug(url) {
   const m = /github\.com[:/]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(url || '');
@@ -70,11 +71,11 @@ export function githubPulls(owners) {
   const pulls = [];
   for (const slug of repos) {
     const lines = gh(['api', '--paginate', `repos/${slug}/pulls?state=open&per_page=100`, '--jq',
-      '.[] | {number, title, draft, base: .base.ref, head: .head.sha, createdAt: .created_at, headRepository: .head.repo.full_name}']);
+      '.[] | {number, title, body, draft, base: .base.ref, head: .head.sha, headRef: .head.ref, createdAt: .created_at, headRepository: .head.repo.full_name}']);
     for (const line of lines.split('\n').filter(Boolean)) {
       const p = JSON.parse(line);
-      pulls.push({ slug, number: p.number, title: p.title, draft: p.draft, base: p.base, head: p.head,
-        createdAt: p.createdAt, sameRepository: (p.headRepository || '').toLowerCase() === slug });
+      pulls.push({ slug, number: p.number, title: p.title, body: p.body, draft: p.draft, base: p.base, head: p.head,
+        headRef: p.headRef, createdAt: p.createdAt, sameRepository: (p.headRepository || '').toLowerCase() === slug });
     }
   }
   return pulls;
@@ -113,7 +114,7 @@ export function localRepository(slug, index, cacheDir) {
 }
 
 export function drain({ root, pulls, identity = landerIdentity(), cacheDir, dryRun = false, comment = githubComment,
-  locate, onResult = () => {}, testTimeoutMs = 15 * 60_000 }) {
+  locate, resolve, onResult = () => {}, testTimeoutMs = 15 * 60_000 }) {
   const { index, duplicates } = mountIndex(root);
   const find = locate || (slug => localRepository(slug, index, cacheDir));
   const { queue, skipped } = planDrain(pulls);
@@ -124,15 +125,24 @@ export function drain({ root, pulls, identity = landerIdentity(), cacheDir, dryR
     try {
       if (!pull.sameRepository && pull.sameRepository !== undefined) throw new Error('head is in another repository');
       const repo = find(pull.slug);
-      const base = git(repo, ['ls-remote', 'origin', `refs/heads/${pull.base}`]).split(/\s/)[0];
-      result = { ...landChangeSet({ root: repo, target: pull.base, identity, dryRun, testTimeoutMs,
-        proposals: [{ section: '.', remote: 'origin', ref: `refs/pull/${pull.number}/head` }] }), base, target: pull.base };
+      const land = ref => ({ ...landChangeSet({ root: repo, target: pull.base, identity, dryRun, testTimeoutMs,
+        proposals: [{ section: '.', remote: 'origin', ref }] }),
+        base: git(repo, ['ls-remote', 'origin', `refs/heads/${pull.base}`]).split(/\s/)[0], target: pull.base });
+      result = land(`refs/pull/${pull.number}/head`);
+      // A conflict is brought up to date on the pull request's own branch, then landed
+      // from that branch, since the forge's pull ref follows the push asynchronously.
+      if (resolve && !dryRun && result.reason === 'conflict' && pull.headRef) {
+        const resolution = resolve({ repo, pull, target: pull.base });
+        result.resolution = resolution;
+        if (resolution.state === 'resolved') result = { ...land(`refs/heads/${pull.headRef}`), resolution };
+      }
     } catch (e) {
       result = { state: 'refused', reason: 'error', error: e.message.split('\n').slice(0, 5).join('\n'), target: pull.base };
     }
     const record = { slug: pull.slug, number: pull.number, draft: pull.draft, state: result.state, reason: result.reason,
       section: result.section, conflicts: result.conflicts, introduced: result.introduced, error: result.error,
-      landed: result.landed, targetFailures: result.tested?.flatMap(t => t.targetFailures || []).length || undefined };
+      landed: result.landed, targetFailures: result.tested?.flatMap(t => t.targetFailures || []).length || undefined,
+      resolution: result.resolution && { state: result.resolution.state, reason: result.resolution.reason, conflicts: result.resolution.conflicts, files: result.resolution.files } };
     if (!dryRun && ['refused', 'partial'].includes(result.state) && result.reason !== 'error') {
       try { record.commented = comment(pull, refusalComment(result), marker(pull, result)); }
       catch (e) { record.commentError = e.message; }
@@ -153,10 +163,11 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const limit = Number(opt('--limit', '0'));
   const cacheDir = opt('--cache', path.join(os.homedir(), '.cache', 'lander'));
   const dryRun = flag('--dry-run');
+  const resolve = flag('--resolve') ? resolveConflict : undefined;
   let pulls = githubPulls(owners);
   if (only) pulls = pulls.filter(p => p.slug === only.toLowerCase());
   if (limit) pulls = planDrain(pulls).queue.slice(0, limit);
-  const { results, duplicates } = drain({ root, pulls, cacheDir, dryRun, identity: landerIdentity(opt('--host')),
+  const { results, duplicates } = drain({ root, pulls, cacheDir, dryRun, resolve, identity: landerIdentity(opt('--host')),
     onResult: r => console.log(JSON.stringify(r)) });
   for (const d of duplicates) console.error(JSON.stringify({ duplicateMount: d }));
   const count = s => results.filter(r => r.state === s).length;

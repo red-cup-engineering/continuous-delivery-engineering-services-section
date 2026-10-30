@@ -58,3 +58,59 @@ test('drains pull-request refs: lands the passing one, comments on the failing o
   assert.match(comments[0].body, /`npm test` fails/);
   assert.match(comments[0].mark, new RegExp(`<!-- lander ${pulls[1].head} [0-9a-f]{40} -->`));
 });
+
+// A repository whose main and pull request #1 (branch feature) both rewrote `notes`.
+function conflicted() {
+  const t = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-test-'));
+  const origin = path.join(t, 'r.git');
+  git(t, 'init', '--quiet', '--bare', origin);
+  const repo = path.join(t, 'r');
+  git(t, 'clone', '--quiet', origin, repo);
+  fs.writeFileSync(path.join(repo, 'notes'), 'seed\n');
+  fs.writeFileSync(path.join(repo, 'other'), 'untouched\n');
+  git(repo, 'add', '.'); git(repo, 'commit', '--quiet', '-m', 'seed'); git(repo, 'push', '--quiet', 'origin', 'main');
+  git(repo, 'switch', '--quiet', '-c', 'feature');
+  fs.writeFileSync(path.join(repo, 'notes'), 'feature\n');
+  git(repo, 'commit', '--quiet', '-am', 'feature'); git(repo, 'push', '--quiet', 'origin', 'feature');
+  git(repo, 'push', '--quiet', 'origin', 'feature:refs/pull/1/head');
+  const head = git(repo, 'rev-parse', 'HEAD');
+  git(repo, 'switch', '--quiet', 'main');
+  fs.writeFileSync(path.join(repo, 'notes'), 'main\n');
+  git(repo, 'commit', '--quiet', '-am', 'main moved'); git(repo, 'push', '--quiet', 'origin', 'main');
+  const pull = { slug: 'o/r', number: 1, title: 'feature', draft: true, base: 'main', head, headRef: 'feature',
+    createdAt: '2026-10-01', sameRepository: true };
+  return { origin, repo, pull, remote: ref => git(repo, 'ls-remote', origin, ref).split(/\s/)[0] };
+}
+const resolver = { GIT_AUTHOR_NAME: 'Claude (resolver)', GIT_AUTHOR_EMAIL: 'claude+resolver@test.561.group', GIT_COMMITTER_NAME: 'Claude (resolver)', GIT_COMMITTER_EMAIL: 'claude+resolver@test.561.group' };
+
+test('a conflicted pull request is resolved on its own branch and then landed', async () => {
+  const { resolveConflict } = await import('../scripts/resolve.mjs');
+  const { repo, pull, remote } = conflicted();
+  const briefs = [];
+  const agent = (dir, brief) => { briefs.push(brief); fs.writeFileSync(path.join(dir, 'notes'), 'main\nfeature\n'); return { ok: true, output: '' }; };
+  const { results } = drain({ root: repo, pulls: [pull], identity, locate: () => repo, comment: () => assert.fail('no comment owed'),
+    resolve: args => resolveConflict({ ...args, identity: resolver, agent }) });
+  assert.equal(results[0].state, 'landed', JSON.stringify(results[0]));
+  assert.deepEqual(results[0].resolution, { state: 'resolved', reason: undefined, conflicts: ['notes'], files: undefined });
+  assert.match(briefs[0], /- notes/);
+  const feature = remote('refs/heads/feature');
+  assert.equal(git(repo, 'log', '-1', '--format=%ae', feature), 'claude+resolver@test.561.group');
+  assert.equal(git(repo, 'show', `${remote('refs/heads/main')}:notes`), 'main\nfeature');
+});
+
+test('a resolution that leaves markers or touches another file is not pushed', async () => {
+  const { resolveConflict } = await import('../scripts/resolve.mjs');
+  for (const [agent, reason] of [
+    [() => ({ ok: true, output: '' }), 'markers-left'],
+    [dir => { fs.writeFileSync(path.join(dir, 'notes'), 'both\n'); fs.writeFileSync(path.join(dir, 'other'), 'changed\n'); return { ok: true, output: '' }; }, 'outside-conflict'],
+  ]) {
+    const { repo, pull, remote } = conflicted();
+    const comments = [];
+    const { results } = drain({ root: repo, pulls: [pull], identity, locate: () => repo, comment: (p, body) => { comments.push(body); return true; },
+      resolve: args => resolveConflict({ ...args, identity: resolver, agent }) });
+    assert.equal(results[0].state, 'refused');
+    assert.equal(results[0].resolution.reason, reason);
+    assert.equal(remote('refs/heads/feature'), pull.head, 'the pull request branch is untouched');
+    assert.equal(comments.length, 1);
+  }
+});
