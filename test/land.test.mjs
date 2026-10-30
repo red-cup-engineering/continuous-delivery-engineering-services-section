@@ -92,3 +92,45 @@ test('a forge pull-request ref is one more channel', () => {
   assert.equal(result.state, 'landed', JSON.stringify(result));
   assert.ok(git(section, 'merge-base', '--is-ancestor', head, remoteMain(t, 'section')) === '');
 });
+
+// A section whose main already fails test `a`; tests `a` and `b` pass while their
+// files read yes.
+function redForest() {
+  const f = forest();
+  const { section } = f;
+  git(section, 'switch', '--quiet', '-c', 'red', 'origin/main');
+  write(section, 'package.json', JSON.stringify({ name: 'section', scripts: { test: 'node --test' } }));
+  for (const name of ['a', 'b']) {
+    write(section, `${name}.test.mjs`, `import test from 'node:test'; import fs from 'node:fs'; import assert from 'node:assert';\n` +
+      `test('${name} holds', () => assert.equal(fs.readFileSync('${name}', 'utf8').trim(), 'yes'));\n`);
+    write(section, name, name === 'a' ? 'no\n' : 'yes\n');
+  }
+  git(section, 'add', '.'); git(section, 'commit', '--quiet', '-m', 'main fails a');
+  git(section, 'push', '--quiet', 'origin', 'red:main');
+  return f;
+}
+
+test('names failing tests from node:test and TAP output', async () => {
+  const { failingTests } = await import('../scripts/land.mjs');
+  assert.deepEqual(failingTests('✔ fine (1ms)\n✖ a holds (2.5ms)\n✖ failing tests:\nnot ok 3 - b holds # time=1\n'), ['a holds', 'b holds']);
+  assert.deepEqual(failingTests('Error: boom\n'), []);
+});
+
+test('a change to a section whose main is already red lands when it adds no failure', () => {
+  const { t, root, section } = redForest();
+  propose(section, 'unrelated', 'notes', 'two\n');
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=unrelated')] });
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  assert.deepEqual(result.tested[0].targetFailures, ['a holds']);
+  assert.equal(remoteGitlink(t, 'services/section'), remoteMain(t, 'section'));
+});
+
+test('a change that adds a failure to a red main is refused, naming only the new failure', () => {
+  const { t, root, section } = redForest();
+  const before = remoteMain(t, 'section');
+  propose(section, 'breaks-b', 'b', 'no\n');
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=breaks-b')] });
+  assert.equal(result.reason, 'test');
+  assert.deepEqual(result.introduced, ['b holds']);
+  assert.equal(remoteMain(t, 'section'), before);
+});

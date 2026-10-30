@@ -81,12 +81,44 @@ function runContract(node, dir, timeoutMs) {
   else if (lockName === 'package-lock.json') steps.push(['npm', ['ci', '--prefer-offline', '--no-audit', '--no-fund']]);
   else if (lockName) steps.push(['pnpm', ['install', '--frozen-lockfile', '--prefer-offline']]);
   steps.push(['npm', ['test']]);
+  // The contract runs as its own top-level process: a test runner's context inherited
+  // from whatever runs the lander would make a nested runner report to it and exit 0.
+  const { NODE_TEST_CONTEXT, ...env } = process.env;
   for (const [cmd, args] of steps) {
-    const r = spawnSync(cmd, args, { cwd: dir, encoding: 'utf8', timeout: timeoutMs, env: { ...process.env, CI: '1' } });
+    const r = spawnSync(cmd, args, { cwd: dir, encoding: 'utf8', timeout: timeoutMs, env: { ...env, CI: '1' } });
+    const output = `${r.stdout || ''}${r.stderr || ''}${r.error ? `\n${r.error.message}` : ''}`;
     if (r.status !== 0) return { section: node.section, contract: `${cmd} ${args.join(' ')}`, ok: false,
-      log: tail(`${r.stdout || ''}${r.stderr || ''}${r.error ? `\n${r.error.message}` : ''}`) };
+      failures: failingTests(output), log: tail(output) };
   }
   return { section: node.section, contract: 'npm test', ok: true };
+}
+
+// Names of failing tests in node:test spec output (✖ name) and TAP (not ok N - name).
+// Empty when the output names none, so an unnamed failure can never be excused.
+export function failingTests(output) {
+  const names = new Set();
+  for (const line of output.split('\n')) {
+    const m = /^\s*✖ (.+?)(?: \(\d[\d.]*m?s\))?$/.exec(line) || /^\s*not ok \d+ - (.+?)(?: # .*)?$/.exec(line);
+    if (m && !/^failing tests:?$/.test(m[1])) names.add(m[1]);
+  }
+  return [...names].sort();
+}
+
+// A target that already fails its own contract would refuse every change forever.
+// The candidate is judged against the target instead: it passes when every test
+// failing on the candidate also fails, by name, on the target. The target's own
+// failures are reported as that section's debt, not charged to the proposal.
+function judgeAgainstTarget(node, candidate, scratch, worktrees, timeoutMs) {
+  if (candidate.ok || !candidate.failures.length) return candidate;
+  const dir = path.join(scratch, `wt-base-${worktrees.length}`);
+  git(node.abs, ['worktree', 'add', '--quiet', '--detach', dir, node.base]);
+  worktrees.push([node.abs, dir]);
+  const base = runContract(node, dir, timeoutMs);
+  if (base.ok || !base.failures.length) return candidate;
+  const known = new Set(base.failures);
+  const introduced = candidate.failures.filter(name => !known.has(name));
+  if (introduced.length) return { ...candidate, introduced };
+  return { section: node.section, contract: candidate.contract, ok: true, targetFailures: base.failures };
 }
 
 export function landChangeSet({ root, proposals, target = 'main', identity = landerIdentity(), dryRun = false,
@@ -156,9 +188,10 @@ export function landChangeSet({ root, proposals, target = 'main', identity = lan
       const dir = path.join(scratch, `wt-${worktrees.length}`);
       git(n.abs, ['worktree', 'add', '--quiet', '--detach', dir, n.candidate]);
       worktrees.push([n.abs, dir]);
-      const result = runContract(n, dir, testTimeoutMs);
+      const result = judgeAgainstTarget(n, runContract(n, dir, testTimeoutMs), scratch, worktrees, testTimeoutMs);
       results.push(result);
-      if (!result.ok) return { state: 'refused', reason: 'test', section: n.section, command: result.contract, log: result.log, tested: results };
+      if (!result.ok) return { state: 'refused', reason: 'test', section: n.section, command: result.contract,
+        introduced: result.introduced || result.failures, log: result.log, tested: results };
     }
     const moves = order.filter(n => n.candidate !== n.base);
     if (dryRun || !moves.length) return { state: moves.length ? 'tested' : 'unchanged', tested: results,
