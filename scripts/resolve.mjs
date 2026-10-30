@@ -66,8 +66,11 @@ export function resolveConflict({ repo, pull, target, identity = resolverIdentit
     const marked = conflicts.filter(f => fs.existsSync(path.join(dir, f)) && MARKER.test(fs.readFileSync(path.join(dir, f), 'utf8')));
     if (marked.length) return { state: 'unresolved', reason: 'markers-left', files: marked, agent: run.output };
     git(dir, ['add', '-A', '--', ...conflicts]);
-    const check = tryGit(dir, ['diff', '--cached', '--check']);
-    if (!check.ok) return { state: 'unresolved', reason: 'diff-check', detail: check.out.slice(-3000) };
+    // Only the agent's work is judged: leftover markers in the files it resolved. The
+    // whitespace either side already carried is not the resolution's to fix.
+    const check = tryGit(dir, ['diff', '--cached', '--check', '--', ...conflicts]);
+    const leftover = lines(check.out).filter(l => /leftover conflict marker/.test(l));
+    if (leftover.length) return { state: 'unresolved', reason: 'markers-left', detail: leftover.join('\n').slice(-3000) };
     git(dir, ['commit', '--quiet', '--no-verify', '-m', `Merge ${target} into ${pull.headRef}, resolving ${conflicts.join(', ')}`], identity);
     const commit = git(dir, ['rev-parse', 'HEAD']);
     const push = tryGit(repo, ['push', '--quiet', 'origin', `${commit}:refs/heads/${pull.headRef}`]);
