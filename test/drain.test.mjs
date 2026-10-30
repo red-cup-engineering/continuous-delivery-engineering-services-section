@@ -91,7 +91,7 @@ test('a conflicted pull request is resolved on its own branch and then landed', 
   const { results } = drain({ root: repo, pulls: [pull], identity, locate: () => repo, comment: () => assert.fail('no comment owed'),
     resolve: args => resolveConflict({ ...args, identity: resolver, agent }) });
   assert.equal(results[0].state, 'landed', JSON.stringify(results[0]));
-  assert.deepEqual(results[0].resolution, { state: 'resolved', reason: undefined, conflicts: ['notes'], files: undefined });
+  assert.deepEqual(results[0].resolution, { state: 'resolved', reason: undefined, conflicts: ['notes'], files: undefined, dropped: [] });
   assert.match(briefs[0], /- notes/);
   const feature = remote('refs/heads/feature');
   assert.equal(git(repo, 'log', '-1', '--format=%ae', feature), 'claude+resolver@test.561.group');
@@ -122,4 +122,18 @@ test('whitespace the base branch already carries does not block a resolution', a
   git(repo, 'add', 'README.md'); git(repo, 'commit', '--quiet', '-m', 'main carries trailing whitespace'); git(repo, 'push', '--quiet', 'origin', 'main');
   const agent = dir => { fs.writeFileSync(path.join(dir, 'notes'), 'main\nfeature\n'); return { ok: true, output: '' }; };
   assert.equal(resolveConflict({ repo, pull, target: 'main', identity: resolver, agent }).state, 'resolved');
+});
+
+test('a file the base deleted and the pull request changed lands as named, not silent, loss', async () => {
+  const { resolveConflict } = await import('../scripts/resolve.mjs');
+  const { repo, pull } = conflicted();
+  git(repo, 'rm', '--quiet', 'notes'); git(repo, 'commit', '--quiet', '-m', 'move notes elsewhere'); git(repo, 'push', '--quiet', 'origin', 'main');
+  const agent = dir => { fs.rmSync(path.join(dir, 'notes'), { force: true }); return { ok: true, output: '' }; };
+  const comments = [];
+  const { results } = drain({ root: repo, pulls: [pull], identity, locate: () => repo, comment: (p, body) => { comments.push(body); return true; },
+    resolve: args => resolveConflict({ ...args, identity: resolver, agent }) });
+  assert.equal(results[0].state, 'landed', JSON.stringify(results[0]));
+  assert.equal(results[0].resolution.dropped[0].file, 'notes');
+  assert.match(results[0].resolution.dropped[0].deletedBy, /move notes elsewhere/);
+  assert.match(comments[0], /not carried[\s\S]*`notes`, removed by [0-9a-f]+ move notes elsewhere/);
 });
