@@ -160,7 +160,7 @@ export function drain({ root, pulls, identity = landerIdentity(), cacheDir, dryR
   return { results, duplicates };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   const opt = (name, fallback) => { const i = args.indexOf(name); return i < 0 ? fallback : args.splice(i, 2)[1]; };
   const flag = name => { const i = args.indexOf(name); return i >= 0 && args.splice(i, 1).length > 0; };
