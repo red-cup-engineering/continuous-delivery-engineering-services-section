@@ -142,7 +142,14 @@ export function drain({ root, pulls, identity = landerIdentity(), cacheDir, dryR
     const record = { slug: pull.slug, number: pull.number, draft: pull.draft, state: result.state, reason: result.reason,
       section: result.section, conflicts: result.conflicts, introduced: result.introduced, error: result.error,
       landed: result.landed, targetFailures: result.tested?.flatMap(t => t.targetFailures || []).length || undefined,
-      resolution: result.resolution && { state: result.resolution.state, reason: result.resolution.reason, conflicts: result.resolution.conflicts, files: result.resolution.files } };
+      resolution: result.resolution && { state: result.resolution.state, reason: result.resolution.reason, conflicts: result.resolution.conflicts, files: result.resolution.files, dropped: result.resolution.dropped } };
+    if (!dryRun && result.state === 'landed' && result.resolution?.dropped?.length) {
+      const body = ['The lander landed this pull request after bringing it up to date with its base. These changes of the pull request were not carried, because the base removed the files they changed:',
+        ...result.resolution.dropped.map(d => `- \`${d.file}\`${d.deletedBy ? `, removed by ${d.deletedBy}` : ''}`),
+        '', 'If that intent still holds, it belongs wherever those files went.'].join('\n');
+      try { record.commented = comment(pull, body, `<!-- lander dropped ${result.resolution.commit} -->`); }
+      catch (e) { record.commentError = e.message; }
+    }
     if (!dryRun && ['refused', 'partial'].includes(result.state) && result.reason !== 'error') {
       try { record.commented = comment(pull, refusalComment(result), marker(pull, result)); }
       catch (e) { record.commentError = e.message; }

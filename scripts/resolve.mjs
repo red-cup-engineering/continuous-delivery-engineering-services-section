@@ -71,11 +71,16 @@ export function resolveConflict({ repo, pull, target, identity = resolverIdentit
     const check = tryGit(dir, ['diff', '--cached', '--check', '--', ...conflicts]);
     const leftover = lines(check.out).filter(l => /leftover conflict marker/.test(l));
     if (leftover.length) return { state: 'unresolved', reason: 'markers-left', detail: leftover.join('\n').slice(-3000) };
-    git(dir, ['commit', '--quiet', '--no-verify', '-m', `Merge ${target} into ${pull.headRef}, resolving ${conflicts.join(', ')}`], identity);
+    // A file the pull request changed that the resolution removes is intent not carried
+    // (most often the base deleted or moved it). It lands, but it is named, never silent.
+    const dropped = conflicts.filter(f => !fs.existsSync(path.join(dir, f))).map(file => ({ file,
+      deletedBy: git(dir, ['log', '-1', '--diff-filter=D', '--format=%h %s', 'refs/resolver/target', '--', file]) || null }));
+    const note = dropped.length ? `\n\nNot carried: ${dropped.map(d => `${d.file} (removed on ${target}${d.deletedBy ? ` by ${d.deletedBy}` : ''})`).join('; ')}` : '';
+    git(dir, ['commit', '--quiet', '--no-verify', '-m', `Merge ${target} into ${pull.headRef}, resolving ${conflicts.join(', ')}${note}`], identity);
     const commit = git(dir, ['rev-parse', 'HEAD']);
     const push = tryGit(repo, ['push', '--quiet', 'origin', `${commit}:refs/heads/${pull.headRef}`]);
     if (!push.ok) return { state: 'unresolved', reason: 'push', detail: push.err };
-    return { state: 'resolved', commit, conflicts };
+    return { state: 'resolved', commit, conflicts, dropped };
   } finally {
     if (added) tryGit(repo, ['worktree', 'remove', '--force', dir]);
     for (const ref of ['refs/resolver/target', 'refs/resolver/head']) tryGit(repo, ['update-ref', '-d', ref]);
