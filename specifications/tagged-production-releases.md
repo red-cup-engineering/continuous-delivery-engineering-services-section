@@ -138,6 +138,45 @@ commands expose missing safe cleanup capability; they authorize no deletion.
 Bare Cedar Fog self-promotion remains an explicit tagged-product operation through
 the original local native receiver. Its controller does not deploy its own builder.
 
+## Work federation for the x402 delivery
+
+The Leader's 2026-10-21 request is retained unabridged in native Work
+`ni:///sha-256;wNoe4up2yjbsOy-Oq9gB-_sOT8c2Mm56IFAA0WSuBds`;
+its Engineering realization is
+`ni:///sha-256;bDtxrBsxQrSm5BmFx7oTvd3obpJT0Wmau0sY9oJNLrY`.
+The request's federation requirement supersedes the initial core formation's
+blanket suppression of peer delivery. Hai Zhou's source restoration answers the
+observed suppression recorded by
+`ni:///sha-256;eoL4xzx9sBJcm5u-0QdpZyp99nTLjHbDmBixoXCovcw`.
+
+The host declaration enables the existing FeltOS Work delivery by setting
+`web.deliverWorkToPeer` to `true`. The declared Cold Red Gate actor and its five
+Work move kinds remain the same. The existing signed transport, current
+capability standings, revocation checks, thread-home coordination, retained
+delivery witnesses and idempotent catch-up own admission and replay. Enabling
+delivery operates on the selected active board; it does not authorize importing
+historical stores, changing actor identities, restoring withdrawn obligations,
+or releasing another host's held production selector.
+
+The instance declares `work-peer-catch-up` on FeltOS's existing native clock,
+running the existing operation as `bare-cedar-fog.561.group` every 120 seconds,
+with one attempt per occurrence. The preceding selected deployment has no peer
+catch-up schedule, and the driver derives only enterprise intake and execution
+schedules. This declaration supplies recurring catch-up and retry without
+another process, systemd timer, dispatcher or enterprise inventory. Admission
+retains the original schedule collision checks and operation authorization.
+
+Source receiving compares the complete host declaration with its preceding
+revision and allows only the delivery flag to differ; the instance change adds
+only this schedule. The installed-profile receiver checks the original peer,
+move set and exact native clock declaration. After tagged-product self-promotion,
+the ordinary clock's `work-peer-catch-up {}` carries the original active-board
+subjects. Independent Cold Red Gate reads must recover both x402 threads under
+their original identities and source attribution. Repeating catch-up must retain
+the existing delivery witnesses without duplicating board moves; an unheld or
+revoked Work grant must remain refused. A changed source flag or a local queue
+receipt alone does not receive federation.
+
 ## External basis
 
 [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
@@ -185,3 +224,55 @@ The authored policy MUST select FeltOS0.21.9-dev.0 at the driver and peer consum
 Installed receiving MUST resolve the selected versions relative to the actual FeltOS and Metro entry modules, verify the shared CSE and ActivityPub receipt consumers and their original public exports, and exercise terminal malformed-request refusal independently from transient supplier failures. A typed terminal protocol refusal yields one persisted correlated actor receipt; an operational failure retains retry behavior. Actor state and admitted governing uptake MUST survive native restart. Existing independent native product, health, quarantine, quiescence, release publication and customer operating receiving gates remain required. No source test or receipt file stands for their useful live result.
 
 The source-owned receipt-recovery-fabrication-storage.json record declares sequential packing, lock and frozen-consumer stages and a separately unsealed native-product estimate. Exact accepted source, graph identity and v0.1.1 host release selection MUST seal the native stage before formation. Preserve the existing physical100GB Codex floor, native WSL reserve and growth policies; neither guest free space nor deleting staging proves backing-volume reclamation.
+
+## Terminal composer continuation and canonical custody
+
+The successor selects the independently published and source/archive-received
+CDE0.4.9 and GHS0.3.7. Native PNPM generates the shared graph from all five original
+composition files, including the exact unchanged .pnpmfile.cjs. The installed
+consumer must receive the selected graph; isolated source tests or an older
+physical graph do not establish that closure.
+
+The original failed eb08 promotion and f01 refused drain remain historical
+evidence. A later actor's claim that absent main stdout proved no Git writes is
+rejected: asynchronous logging is not a transaction witness. Preserve unknown
+historical outcomes and dropped publication-input debt; neither a new package
+nor a later fence retroactively makes that invocation drained.
+
+Current native custody differs from that history. The coordinating owner's
+2026-10-23 observation found the unchanged incumbent artifact and a later
+maintenance-admission-held marker retaining the f9 identity and f1 maintenance
+successor. The latest invocation was a control-only exec-condition skip with
+no main PID. terminal-compose-recovery.json preserves these observations as
+source planning evidence, not a native admission receipt. Re-read the actual
+profile, marker, journal, identities and effective startup fence immediately
+before receiving; never apply a stale f01 recovery input to a changed hold.
+
+CDE0.4.9's ordinary existing-quiescence-admission selects its original
+maintenance-drain-admission for that actual marker. It independently requires
+the original GHS drain receipt, exact predecessor/successor lineage, terminal
+native custody and effective startup guard under the original profile lock.
+Maintenance journal flags alone establish no drain result. A control-only skip
+qualifies only through the source-owned native receipt/fence contract.
+Historical unknown effects remain explicit; no broad clear, reset-failed,
+standalone composer or replay of an old proposal is part of this change.
+
+GHS's COMPOSE_STATE_DIR and new drain/cursor destination belong to its actual
+services section's data/state/github-composition-state. Its relock scratch and
+TMPDIR belong under that owner's data/logs/github-composition-logs/scratch.
+The release selector's scratch and TMPDIR belong to BCF's existing
+release-controller logs. Before startup, the existing auxiliary state owner
+must select the actual current source state, receive its bounded inventory,
+seal byte identity and preserve historical original receipts/cursors read-only.
+The former f01 migration plan is not reusable against changed current state.
+Provision canonical scratch through its owners; leave no home compatibility
+symlink.
+
+The installed receiver reads the actual native quiesce descriptor and both
+generated auxiliary environment files, resolves the selected composer and CDE
+helper assets, and verifies these canonical destinations. The exact immutable
+incoming product, native main health, every reload/receive hook and final
+original worker admission remain required. All original unrelated main state,
+ActivityPub, credential, quarantine, release, capacity and useful-operation
+obligations remain open until independently received; this bounded composer
+custody transition does not claim their migration.
