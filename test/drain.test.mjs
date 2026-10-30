@@ -114,3 +114,12 @@ test('a resolution that leaves markers or touches another file is not pushed', a
     assert.equal(comments.length, 1);
   }
 });
+
+test('whitespace the base branch already carries does not block a resolution', async () => {
+  const { resolveConflict } = await import('../scripts/resolve.mjs');
+  const { repo, pull } = conflicted();
+  fs.writeFileSync(path.join(repo, 'README.md'), 'trailing   \n');
+  git(repo, 'add', 'README.md'); git(repo, 'commit', '--quiet', '-m', 'main carries trailing whitespace'); git(repo, 'push', '--quiet', 'origin', 'main');
+  const agent = dir => { fs.writeFileSync(path.join(dir, 'notes'), 'main\nfeature\n'); return { ok: true, output: '' }; };
+  assert.equal(resolveConflict({ repo, pull, target: 'main', identity: resolver, agent }).state, 'resolved');
+});
