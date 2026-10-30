@@ -1,0 +1,17 @@
+{
+  "kind": "bcfss-dissolution-extraction",
+  "date": "2026-10-30",
+  "authority": "Leader request 2026-10-30: dissolve 561-group-bare-cedar-fog-services-section",
+  "sourceRepository": "561-group/561-group-bare-cedar-fog-services-section",
+  "sourceCommit": "e20481b94f6f65b759c074e1c518972c68e68092",
+  "archive": "release bcfss-dissolution-archive-2026-10-30 on 561-group/bare-cedar-fog",
+  "files": [
+    {
+      "source": "content/text/documents/specifications/tagged-production-releases.md",
+      "destination": "specifications/tagged-production-releases.md",
+      "mode": "100644",
+      "blob": "37cf35342a943969742e424da8f7377c367185ba",
+      "disposition": "copied"
+    }
+  ]
+}
