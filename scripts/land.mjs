@@ -215,7 +215,7 @@ export function landChangeSet({ root, proposals, target = 'main', identity = lan
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   const opt = name => { const i = args.indexOf(name); return i < 0 ? undefined : args.splice(i, 2)[1]; };
   const flag = name => { const i = args.indexOf(name); return i >= 0 && args.splice(i, 1).length > 0; };
