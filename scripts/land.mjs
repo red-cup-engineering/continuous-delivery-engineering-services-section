@@ -145,7 +145,8 @@ function judgeAgainstTarget(node, candidate, scratch, worktrees, run) {
   const known = new Set(base.failures);
   const introduced = candidate.failures.filter(name => !known.has(name));
   if (introduced.length) return { ...candidate, introduced };
-  return { section: node.section, contract: candidate.contract, ok: true, targetFailures: base.failures };
+  return { section: node.section, contract: candidate.contract, ok: true, targetFailures: base.failures,
+    ...(candidate.budget && { budget: candidate.budget }) };
 }
 
 export function landChangeSet({ root, proposals, target = 'main', identity = landerIdentity(), dryRun = false,
