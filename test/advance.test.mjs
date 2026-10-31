@@ -6,6 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { plan, renderBody, readEntries, run, githubSlug, BOT_EMAIL } from '../scripts/advance.mjs';
 
+// advance.mjs sets the bot's identity through git config, which git's identity variables outrank.
+// A runner that exports its own (an agent session does) would turn the bot's commits into its own.
+for (const name of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'EMAIL']) delete process.env[name];
+
 const sh = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim();
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cds-adv-'));
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
