@@ -104,8 +104,15 @@ export function withinBudget({ command, args = [], cwd = process.cwd(), env = pr
     const props = [`MemoryMax=${memoryMb}M`, 'MemorySwapMax=0',
       `CPUWeight=${cpuWeight}`, `IOWeight=${ioWeight}`, ...(timeoutMs ? [`RuntimeMaxSec=${Math.ceil(timeoutMs / 1000)}`] : [])];
     const setenv = Object.entries(env).filter(([k, v]) => v !== undefined && !k.includes('=') && k !== '_').flatMap(([k, v]) => ['-E', `${k}=${v}`]);
+    // systemd reads the unit's memory peak after its cgroup has emptied and reports a
+    // few hundred kilobytes for any job that exited by itself. The job's own cgroup
+    // still holds the true peak just before the unit ends, so a wrapper records it
+    // there; only a job killed before the wrapper runs falls back to systemd's figure,
+    // which it reads before teardown.
+    const peakFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'within-budget-peak-')), 'peak');
+    const wrapper = `"$@"; rc=$?; cat "/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)/memory.peak" > ${JSON.stringify(peakFile)} 2>/dev/null; exit $rc`;
     const r = spawnSync('systemd-run', ['--user', '--wait', '--pipe', '--collect', `--working-directory=${cwd}`,
-      `--description=within-budget ${name}`, ...props.flatMap(p => ['-p', p]), ...setenv, '--', command, ...args],
+      `--description=within-budget ${name}`, ...props.flatMap(p => ['-p', p]), ...setenv, '--', '/bin/sh', '-c', wrapper, 'sh', command, ...args],
     { encoding: 'utf8', maxBuffer: 256 * MB, stdio: ['ignore', 'pipe', 'pipe'] });
     const summary = {};
     const kept = [];
@@ -113,7 +120,11 @@ export function withinBudget({ command, args = [], cwd = process.cwd(), env = pr
       const m = /^(Running as unit|Finished with result|Main processes terminated with|Service runtime|CPU time consumed|Memory peak|Memory swap peak): (.*)$/.exec(line);
       if (m) summary[m[1]] = m[2]; else kept.push(line);
     }
-    const peakMb = summary['Memory peak'] ? parseSize(summary['Memory peak']) : null;
+    let measured = null;
+    try { measured = Number(fs.readFileSync(peakFile, 'utf8').trim()) / MB; } catch { /* killed before the wrapper wrote it */ }
+    fs.rmSync(path.dirname(peakFile), { recursive: true, force: true });
+    const peakMb = measured !== null && Number.isFinite(measured) ? Math.round(measured * 10) / 10
+      : summary['Memory peak'] ? parseSize(summary['Memory peak']) : null;
     // systemd names a kill by the unit's memory ceiling, whichever process in it was killed.
     const killed = /oom-kill/.test(summary['Finished with result'] || '') ||
       (/status=KILL/.test(summary['Main processes terminated with'] || '') && peakMb >= memoryMb * 0.95);
