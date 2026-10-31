@@ -180,3 +180,24 @@ function calmBudget(memoryMb) {
   return { memoryMb, telemetry: () => ({ availableMb: 8000, memoryFullPct: 0, ioFullPct: 0 }),
     ledger: fs.mkdtempSync(path.join(os.tmpdir(), 'land-ledger-')) };
 }
+
+test('a target that moves while a change is tested is merged onto and tested again, not refused', () => {
+  const { t, root, section } = forest();
+  // Another writer lands on the section's main while the proposal's contract runs, once.
+  const mover = path.join(t, 'mover');
+  git(t, 'clone', '--quiet', path.join(t, 'section.git'), mover);
+  const once = path.join(t, 'move-once');
+  fs.writeFileSync(once, '');
+  git(section, 'switch', '--quiet', '-c', 'racing', 'origin/main');
+  write(section, 'check.mjs', `import fs from 'node:fs'; import { execFileSync } from 'node:child_process';
+if (fs.existsSync(${JSON.stringify(once)})) { fs.rmSync(${JSON.stringify(once)});
+  fs.writeFileSync(${JSON.stringify(path.join(mover, 'other'))}, 'x\\n');
+  for (const a of [['add', 'other'], ['-c', 'user.name=W', '-c', 'user.email=w@test', 'commit', '-qm', 'other writer'], ['push', '-q', 'origin', 'main']])
+    execFileSync('git', a, { cwd: ${JSON.stringify(mover)} }); }
+process.exit(fs.readFileSync('ok', 'utf8').trim() === 'yes' ? 0 : 1);\n`);
+  git(section, 'commit', '--quiet', '-am', 'racing check'); git(section, 'push', '--quiet', 'origin', 'racing');
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=racing')] });
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  assert.equal(result.attempts, 2);
+  assert.equal(git(section, 'show', `${remoteMain(t, 'section')}:other`), 'x', 'the other writer\'s landing is kept');
+});

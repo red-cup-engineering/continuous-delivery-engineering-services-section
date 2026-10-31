@@ -149,7 +149,7 @@ function judgeAgainstTarget(node, candidate, scratch, worktrees, run) {
     ...(candidate.budget && { budget: candidate.budget }) };
 }
 
-export function landChangeSet({ root, proposals, target = 'main', identity = landerIdentity(), dryRun = false,
+function landOnce({ root, proposals, target = 'main', identity = landerIdentity(), dryRun = false,
   lockWaitMs = 10 * 60_000, testTimeoutMs = 30 * 60_000, budget, baselines }) {
   const run = { timeoutMs: testTimeoutMs, budget, baselines };
   const top = path.resolve(root);
@@ -244,6 +244,19 @@ export function landChangeSet({ root, proposals, target = 'main', identity = lan
     fs.rmSync(scratch, { recursive: true, force: true });
     for (const release of releases) release();
   }
+}
+
+// LD-6: a target that moved while a change set was being tested is not a verdict on the
+// change. It is merged onto the new target and tested again, up to `retries` times; a
+// partial landing is never retried, since part of it is already on its target.
+export function landChangeSet(options) {
+  const retries = options.retries ?? 3;
+  let result;
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    result = landOnce(options);
+    if (result.reason !== 'target-moved' || result.landed?.length) return attempt > 1 ? { ...result, attempts: attempt } : result;
+  }
+  return { ...result, attempts: retries + 1 };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

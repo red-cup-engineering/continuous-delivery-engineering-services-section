@@ -84,7 +84,7 @@ export function withinBudget({ command, args = [], cwd = process.cwd(), env = pr
   cpuWeight = 20, ioWeight = 20, waitMs = 30 * 60_000, pollMs = 5000, timeoutMs, rules = FLIGHT_RULES,
   ledger = defaultLedger(), telemetry = readTelemetry }) {
   const started = Date.now();
-  let held = null, atStart = null;
+  let held = null, atStart = null, lastHeld = null;
   fs.mkdirSync(ledger, { recursive: true });
   for (;;) {
     const admitted = withLedgerLock(ledger, () => {
@@ -94,6 +94,7 @@ export function withinBudget({ command, args = [], cwd = process.cwd(), env = pr
       return !held;
     });
     if (admitted) break;
+    lastHeld = held;
     if (Date.now() - started > waitMs) return { status: null, output: '', budget: { name, memoryMb, state: 'not-admitted', held, waitedMs: Date.now() - started } };
     sleep(pollMs);
   }
@@ -130,7 +131,7 @@ export function withinBudget({ command, args = [], cwd = process.cwd(), env = pr
       (/status=KILL/.test(summary['Main processes terminated with'] || '') && peakMb >= memoryMb * 0.95);
     return { status: r.status, output: `${r.stdout || ''}${kept.join('\n')}`,
       budget: { name, memoryMb, state: killed ? 'over-budget' : 'ran', waitedMs, atStart,
-        held: waitedMs > 0 ? held : null, runtime: summary['Service runtime'] || null, cpu: summary['CPU time consumed'] || null,
+        heldFor: lastHeld, runtime: summary['Service runtime'] || null, cpu: summary['CPU time consumed'] || null,
         peakMb, ended: summary['Main processes terminated with'] || summary['Finished with result'] || null } };
   } finally {
     fs.rmSync(path.join(ledger, `${process.pid}.json`), { force: true });
