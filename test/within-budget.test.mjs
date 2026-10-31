@@ -59,3 +59,10 @@ test('runs a job contained, measures it, and kills only it when it exceeds its b
   assert.equal(over.budget.state, 'over-budget');
   assert.ok(over.budget.peakMb >= 140, JSON.stringify(over.budget));
 });
+
+test('the recorded peak is the job cgroup peak, not systemd\'s post-exit reading', () => {
+  const r = withinBudget({ command: 'node', args: ['-e', 'const a=[];for(let i=0;i<100;i++)a.push(Buffer.alloc(1<<20,1))'],
+    memoryMb: 400, ledger: ledger(), telemetry: () => calm });
+  assert.equal(r.status, 0, r.output);
+  assert.ok(r.budget.peakMb >= 100 && r.budget.peakMb < 400, JSON.stringify(r.budget));
+});
