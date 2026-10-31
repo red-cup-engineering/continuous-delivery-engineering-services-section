@@ -122,6 +122,10 @@ test('a change to a section whose main is already red lands when it adds no fail
   const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=unrelated')] });
   assert.equal(result.state, 'landed', JSON.stringify(result));
   assert.deepEqual(result.tested[0].targetFailures, ['a holds']);
+  const budgeted = redForest();
+  propose(budgeted.section, 'unrelated', 'notes', 'two\n');
+  const spent = landChangeSet({ root: budgeted.root, identity, budget: calmBudget(400), proposals: [parseProposal('services/section=unrelated')] });
+  assert.equal(spent.tested[0].budget?.[0]?.state, 'ran', 'a pass judged against a red target keeps its measured spend');
   assert.equal(remoteGitlink(t, 'services/section'), remoteMain(t, 'section'));
 });
 
