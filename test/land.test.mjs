@@ -77,6 +77,49 @@ test('a failing test contract advances nothing and names the section and command
   assert.deepEqual([remoteMain(t, 'section'), remoteMain(t, 'root')], before);
 });
 
+test('a proposal that removes most of a section is refused unless a commit says it is meant', () => {
+  const files = {
+    'package.json': JSON.stringify({ name: 'section', scripts: { test: 'node check.mjs' } }),
+    'check.mjs': "process.exit(0);\n",
+    ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`data/d${i}`, `${i}\n`])),
+  };
+  const { t, root, section } = forest(files);
+  const before = remoteMain(t, 'section');
+  git(section, 'switch', '--quiet', '-c', 'empty', 'origin/main');
+  git(section, 'rm', '--quiet', '-r', 'data');
+  git(section, 'commit', '--quiet', '-m', 'drop data');
+  git(section, 'push', '--quiet', 'origin', 'empty');
+  const refused = landChangeSet({ root, identity, proposals: [parseProposal('services/section=empty')] });
+  assert.equal(refused.state, 'refused', JSON.stringify(refused));
+  assert.equal(refused.reason, 'mass-deletion');
+  assert.equal(refused.removed, 12);
+  assert.equal(remoteMain(t, 'section'), before, 'nothing is pushed');
+
+  git(section, 'commit', '--quiet', '--allow-empty', '-m', 'Retire the data\n\nmass-deletion-intended: the data moved to its own repository');
+  git(section, 'push', '--quiet', 'origin', 'empty');
+  const landed = landChangeSet({ root, identity, proposals: [parseProposal('services/section=empty')] });
+  assert.equal(landed.state, 'landed', JSON.stringify(landed));
+});
+
+test('a proposal that brings the first lockfile is judged against the target on its own dependencies', () => {
+  // The target already fails `debt`; with no lockfile it has no declared dependencies, so it is run on
+  // the candidate's, and the proposal, which fails nothing new, lands.
+  const files = {
+    'package.json': JSON.stringify({ name: 'section', scripts: { test: 'node check.mjs' } }),
+    'check.mjs': "import { test } from 'node:test';\ntest('debt', () => { throw new Error('debt'); });\n",
+  };
+  const { t, root, section } = forest(files);
+  git(section, 'switch', '--quiet', '-c', 'lock', 'origin/main');
+  write(section, 'package-lock.json', JSON.stringify({ name: 'section', lockfileVersion: 3, requires: true, packages: { '': { name: 'section' } } }));
+  git(section, 'add', 'package-lock.json'); git(section, 'commit', '--quiet', '-m', 'lock');
+  git(section, 'push', '--quiet', 'origin', 'lock');
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=lock')] });
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  assert.equal(result.tested[0].baseline, 'target-on-candidate-dependencies');
+  assert.deepEqual(result.tested[0].targetFailures, ['debt']);
+  assert.equal(git(section, 'rev-parse', 'origin/lock'), git(t, '--git-dir', path.join(t, 'section.git'), 'rev-parse', 'main^2'));
+});
+
 test('a conflicting proposal is refused with its conflicted paths', () => {
   const { t, root, section } = forest();
   const base = git(section, 'rev-parse', 'origin/main');

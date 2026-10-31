@@ -27,6 +27,24 @@ const excerpt = (text, lines = 60, head = 15) => {
   return all.length <= lines ? text : [...all.slice(0, head), '...', ...all.slice(-(lines - head))].join('\n');
 };
 
+// A landing that removes at least `minFiles` files and at least `share` of the files its target holds is
+// refused unless a commit of the proposal states it is meant (`mass-deletion-intended: <reason>`): merges
+// that went unread once emptied ten repositories. The lander, as main's only writer, sees the merged tree.
+export const MASS_DELETION = Object.freeze({ share: 0.5, minFiles: 10, marker: 'mass-deletion-intended' });
+const lineCount = (cwd, args) => {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 * 1024 });
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${(r.stderr || '').trim()}`);
+  return r.stdout.split('\n').filter(Boolean).length;
+};
+export function massDeletion(dir, { base, candidate, head }, limits = MASS_DELETION) {
+  const removed = lineCount(dir, ['diff', '--name-only', '--no-renames', '--diff-filter=D', base, candidate]);
+  if (removed < limits.minFiles) return undefined;
+  const total = lineCount(dir, ['ls-tree', '-r', '--name-only', base]);
+  if (removed < limits.share * total) return undefined;
+  const intended = new RegExp(`^[\\s>*_-]*${limits.marker}\\s*:\\s*\\S`, 'imu').test(git(dir, ['log', '--format=%B', `${base}..${head}`]));
+  return intended ? undefined : { removed, total };
+}
+
 export function landerIdentity(host = os.hostname()) {
   const email = `lander@${host}.561.group`;
   return { GIT_AUTHOR_NAME: 'Lander', GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: 'Lander', GIT_COMMITTER_EMAIL: email };
@@ -196,10 +214,17 @@ export function failingTests(output) {
 //
 // The verdict says which baseline it used: `target`, or `target-on-candidate-dependencies`
 // with `baselineReason`, the step that stopped the target alone and the tail of its log.
+//
+// A target with no lockfile has no declared dependencies to install: run alone it would borrow
+// whatever node_modules the checkout happens to hold, which is no baseline for a candidate that
+// installs from the lockfile it brings. It is judged on the candidate's dependencies instead.
+const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml'];
+const locked = (dir) => LOCKFILES.some(f => fs.existsSync(path.join(dir, f)));
 function judgeAgainstTarget(node, candidate, scratch, worktrees, run, candidateDir) {
   if (candidate.ok || candidate.environment || !candidate.failures.length) return candidate;
   const key = `${path.resolve(node.abs, git(node.abs, ['rev-parse', '--git-common-dir']))} ${node.base}`;
-  let base = run.baselines?.get(key);
+  const unlockedTarget = locked(candidateDir) && !LOCKFILES.some(f => tryGit(node.abs, ['cat-file', '-e', `${node.base}:${f}`]).ok);
+  let base = unlockedTarget ? { ok: false, failures: [], contract: 'npm test', log: 'the target has no lockfile; the checkout\'s node_modules are not its declared dependencies' } : run.baselines?.get(key);
   if (!base) {
     const dir = path.join(scratch, `wt-base-${worktrees.length}`);
     git(node.abs, ['worktree', 'add', '--quiet', '--detach', dir, node.base]);
@@ -266,6 +291,11 @@ function landOnce({ root, proposals, target = 'main', identity = landerIdentity(
           conflicts: merged.out.split('\n').slice(1).filter(Boolean) };
         tip = git(n.abs, ['commit-tree', merged.out.split('\n')[0], '-p', n.base, '-p', n.head,
           '-m', `Merge ${n.proposal.ref} from ${n.proposal.remote} into ${target}`], identity);
+      }
+      if (n.proposal && tip !== n.base) {
+        const deletion = massDeletion(n.abs, { base: n.base, candidate: tip, head: n.head });
+        if (deletion) return { state: 'refused', reason: 'mass-deletion', section: n.section, ...deletion,
+          detail: `the change removes ${deletion.removed} of ${n.section}'s ${deletion.total} files; if that is meant, a commit of the proposal says ${MASS_DELETION.marker}: <reason>` };
       }
       if (n.children.size) {
         const index = path.join(scratch, `index-${worktrees.length}-${n.depth}`);
