@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { landChangeSet, parseProposal } from '../scripts/land.mjs';
+import { declaresTestDriver, landChangeSet, parseProposal } from '../scripts/land.mjs';
 
 const author = { GIT_AUTHOR_NAME: 'Agent', GIT_AUTHOR_EMAIL: 'agent@test.561.group', GIT_COMMITTER_NAME: 'Agent', GIT_COMMITTER_EMAIL: 'agent@test.561.group' };
 const git = (cwd, ...a) => execFileSync('git', ['-c', 'protocol.file.allow=always', '-c', 'init.defaultBranch=main', ...a],
@@ -14,14 +14,17 @@ const identity = { GIT_AUTHOR_NAME: 'Lander', GIT_AUTHOR_EMAIL: 'lander@test.561
 
 // A colony root mounting one section at services/section, each behind a bare remote.
 // The section's test contract passes while its `ok` file reads yes.
-function forest() {
+function forest(files) {
   const t = fs.mkdtempSync(path.join(os.tmpdir(), 'land-test-'));
   for (const name of ['section', 'root']) git(t, 'init', '--quiet', '--bare', `${name}.git`);
   const seed = path.join(t, 'seed');
   git(t, 'clone', '--quiet', path.join(t, 'section.git'), seed);
-  write(seed, 'package.json', JSON.stringify({ name: 'section', scripts: { test: 'node check.mjs' } }));
-  write(seed, 'check.mjs', "import fs from 'node:fs'; process.exit(fs.readFileSync('ok', 'utf8').trim() === 'yes' ? 0 : 1);\n");
-  write(seed, 'ok', 'yes\n');
+  if (files) for (const [file, text] of Object.entries(files)) write(seed, file, text);
+  else {
+    write(seed, 'package.json', JSON.stringify({ name: 'section', scripts: { test: 'node check.mjs' } }));
+    write(seed, 'check.mjs', "import fs from 'node:fs'; process.exit(fs.readFileSync('ok', 'utf8').trim() === 'yes' ? 0 : 1);\n");
+    write(seed, 'ok', 'yes\n');
+  }
   write(seed, 'notes', 'one\n');
   git(seed, 'add', '.'); git(seed, 'commit', '--quiet', '-m', 'seed'); git(seed, 'push', '--quiet', 'origin', 'main');
   const root = path.join(t, 'colony');
@@ -200,4 +203,111 @@ process.exit(fs.readFileSync('ok', 'utf8').trim() === 'yes' ? 0 : 1);\n`);
   assert.equal(result.state, 'landed', JSON.stringify(result));
   assert.equal(result.attempts, 2);
   assert.equal(git(section, 'show', `${remoteMain(t, 'section')}:other`), 'x', 'the other writer\'s landing is kept');
+});
+
+// LD-8 for Lake. A fake `lake` stands in for the toolchain: it logs each invocation and
+// the .lake it found, appends to that .lake, and fails `build` while Bad.lean holds a
+// Mathlib-only tactic. ELAN_HOME points the lander at it as elan's proxy.
+function fakeLake(t) {
+  const bin = path.join(t, 'elan', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  write(bin, 'lake', `#!/bin/sh
+echo "lake $* | $(cat .lake/marker 2>/dev/null)" >> "${t}/lake.log"
+echo ran >> .lake/marker 2>/dev/null
+if [ "$1" = build ] && grep -q by_contra Bad.lean; then echo "error: Bad.lean: unknown tactic by_contra"; exit 1; fi
+if [ "$1" = test ] && grep -q fail notes; then exit 1; fi
+exit 0
+`);
+  fs.chmodSync(path.join(bin, 'lake'), 0o755);
+  return path.join(t, 'elan');
+}
+function withEnv(vars, fn) {
+  const saved = Object.fromEntries(Object.keys(vars).map(k => [k, process.env[k]]));
+  Object.assign(process.env, vars);
+  try { return fn(); } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+}
+const lakeFiles = (extra = {}) => ({ 'lakefile.toml': 'name = "section"\n', 'Bad.lean': 'theorem t : True := trivial\n', ...extra });
+const lakeLog = t => fs.existsSync(path.join(t, 'lake.log')) ? fs.readFileSync(path.join(t, 'lake.log'), 'utf8').trim().split('\n') : [];
+
+test('a Lake package lands only after lake build, and the landing names the contract', () => {
+  const { t, root, section } = forest(lakeFiles());
+  const elan = fakeLake(t);
+  propose(section, 'feature', 'Bad.lean', 'theorem u : True := trivial\n');
+  const result = withEnv({ ELAN_HOME: elan }, () => landChangeSet({ root, identity, proposals: [parseProposal('services/section=feature')] }));
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  assert.deepEqual(result.tested.map(r => [r.section, r.contract, r.ok]), [['services/section', 'lake build', true]]);
+  assert.deepEqual(lakeLog(t), ['lake build |'], 'no testDriver, so no lake test');
+});
+
+test('a Lake package whose build fails is refused and nothing is pushed', () => {
+  const { t, root, section } = forest(lakeFiles());
+  const elan = fakeLake(t);
+  const before = [remoteMain(t, 'section'), remoteMain(t, 'root')];
+  propose(section, 'broken', 'Bad.lean', 'example : True := by by_contra h; trivial\n');
+  const result = withEnv({ ELAN_HOME: elan }, () => landChangeSet({ root, identity, proposals: [parseProposal('services/section=broken')] }));
+  assert.equal(result.state, 'refused');
+  assert.equal(result.reason, 'test');
+  assert.equal(result.command, 'lake build');
+  assert.match(result.log, /unknown tactic by_contra/);
+  assert.deepEqual([remoteMain(t, 'section'), remoteMain(t, 'root')], before);
+});
+
+test('lake test runs after lake build only when the lakefile declares a testDriver', () => {
+  const { t, root, section } = forest(lakeFiles({ 'lakefile.toml': 'name = "section"\ntestDriver = "Tests"\n' }));
+  const elan = fakeLake(t);
+  propose(section, 'feature', 'notes', 'two\n');
+  let result = withEnv({ ELAN_HOME: elan }, () => landChangeSet({ root, identity, dryRun: true, proposals: [parseProposal('services/section=feature')] }));
+  assert.equal(result.state, 'tested', JSON.stringify(result));
+  assert.equal(result.tested[0].contract, 'lake build; lake test');
+  assert.deepEqual(lakeLog(t).map(l => l.split(' |')[0]), ['lake build', 'lake test']);
+  propose(section, 'red', 'notes', 'fail\n', 'origin/main');
+  result = withEnv({ ELAN_HOME: elan }, () => landChangeSet({ root, identity, dryRun: true, proposals: [parseProposal('services/section=red')] }));
+  assert.equal(result.state, 'refused');
+  assert.equal(result.command, 'lake build; lake test');
+});
+
+test('testDriver is read from the top level of lakefile.toml and from lakefile.lean', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'land-driver-'));
+  const check = (name, text) => { for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f)); write(dir, name, text); return declaresTestDriver(dir); };
+  assert.equal(check('lakefile.toml', 'name = "a"\ntestDriver = "T"\n[[lean_lib]]\nname = "A"\n'), true);
+  assert.equal(check('lakefile.toml', 'name = "a"\n[[lean_lib]]\nname = "A"\ntestDriver = "T"\n'), false, 'a library key is not the package declaration');
+  assert.equal(check('lakefile.toml', 'name = "a"\n# testDriver = "T"\n'), false);
+  assert.equal(check('lakefile.lean', 'package a\n@[test_driver] lean_exe tests\n'), true);
+  assert.equal(check('lakefile.lean', 'package a where\n  testDriver := `tests\n'), true);
+  assert.equal(check('lakefile.lean', 'package a\n-- @[test_driver]\n'), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the checkout\'s .lake is copied into the candidate, never shared with it', () => {
+  const { t, root, section } = forest(lakeFiles());
+  const elan = fakeLake(t);
+  fs.mkdirSync(path.join(section, '.lake'));
+  write(path.join(section, '.lake'), 'marker', 'cached\n');
+  const inode = fs.statSync(path.join(section, '.lake/marker')).ino;
+  propose(section, 'feature', 'notes', 'two\n');
+  const result = withEnv({ ELAN_HOME: elan }, () => landChangeSet({ root, identity, proposals: [parseProposal('services/section=feature')] }));
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  assert.deepEqual(lakeLog(t), ['lake build | cached'], 'Lake found the checkout\'s build cache');
+  assert.equal(fs.readFileSync(path.join(section, '.lake/marker'), 'utf8'), 'cached\n', 'the checkout\'s cache is untouched');
+  assert.equal(fs.statSync(path.join(section, '.lake/marker')).ino, inode);
+});
+
+test('lake on PATH is used when elan has no proxy', () => {
+  const { t, root, section } = forest(lakeFiles());
+  const elan = fakeLake(t);
+  const empty = path.join(t, 'no-elan');
+  fs.mkdirSync(empty);
+  propose(section, 'feature', 'notes', 'two\n');
+  const result = withEnv({ ELAN_HOME: empty, PATH: `${path.join(elan, 'bin')}:${process.env.PATH}` },
+    () => landChangeSet({ root, identity, proposals: [parseProposal('services/section=feature')] }));
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  assert.equal(result.tested[0].contract, 'lake build');
+});
+
+test('a section with neither a test script nor a lakefile lands with contract none', () => {
+  const { root, section } = forest({ README: 'plain\n' });
+  propose(section, 'feature', 'notes', 'two\n');
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=feature')] });
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  assert.deepEqual(result.tested.map(r => [r.contract, r.ok]), [['none', true]]);
 });

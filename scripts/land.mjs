@@ -66,9 +66,39 @@ function lock(gitDir, waitMs) {
 }
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
+// Lake's standard test-contract declaration: top-level `testDriver = "..."` in
+// lakefile.toml (before the first table header), `@[test_driver]` or `testDriver :=`
+// in lakefile.lean. Comments are ignored.
+export function declaresTestDriver(dir) {
+  const read = f => fs.readFileSync(path.join(dir, f), 'utf8');
+  if (fs.existsSync(path.join(dir, 'lakefile.toml'))) {
+    const top = read('lakefile.toml').split('\n').map(l => l.replace(/#.*$/, '')).join('\n').split(/^\s*\[/m)[0];
+    if (/^\s*testDriver\s*=/m.test(top)) return true;
+  }
+  if (fs.existsSync(path.join(dir, 'lakefile.lean'))) {
+    const lean = read('lakefile.lean').replace(/\/-[\s\S]*?-\//g, '').split('\n').map(l => l.replace(/--.*$/, '')).join('\n');
+    if (/@\[[^\]]*\btest_driver\b[^\]]*\]/.test(lean) || /\btestDriver\s*:=/.test(lean)) return true;
+  }
+  return false;
+}
+
+// elan's proxy, so the lean-toolchain pin is honored; lake on PATH when elan is absent.
+const lakeBinary = () => {
+  const proxy = path.join(process.env.ELAN_HOME || path.join(os.homedir(), '.elan'), 'bin', 'lake');
+  return fs.existsSync(proxy) ? proxy : 'lake';
+};
+
 // LD-8: the section's own test contract, read from its package.json. LD-11: when the
 // candidate's lockfile equals the one installed in the section's checkout, the
 // installed node_modules is linked rather than reinstalled.
+//
+// LD-8 for Lake: a section with no package.json test script whose candidate tree has
+// lakefile.toml or lakefile.lean at its root is a Lake package, and its contract is
+// Lake's own: `lake build`, then `lake test` only when the lakefile declares a
+// testDriver. Lake runs through elan so the repository's lean-toolchain pin is honored.
+// LD-11: the checkout's .lake is copied (never linked: Lake rewrites outputs in place)
+// into the candidate so Lake's trace hashes rebuild only the modules that changed.
+// A section with neither contract lands on `contract: 'none'`, as before.
 //
 // With a budget, each step runs through within-budget: admitted against the node's
 // telemetry, contained to its memory, and measured. A step the node could not admit,
@@ -77,27 +107,39 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
 function runContract(node, dir, { timeoutMs, budget }) {
   const manifest = path.join(dir, 'package.json');
   const pkg = fs.existsSync(manifest) ? JSON.parse(fs.readFileSync(manifest, 'utf8')) : null;
-  if (!pkg?.scripts?.test) return { section: node.section, contract: 'none', ok: true };
-  const lockName = ['package-lock.json', 'pnpm-lock.yaml'].find(f => fs.existsSync(path.join(dir, f)));
-  const installed = path.join(node.abs, 'node_modules');
-  const sameLock = lockName && fs.existsSync(installed) && fs.existsSync(path.join(node.abs, lockName)) &&
-    fs.readFileSync(path.join(dir, lockName)).equals(fs.readFileSync(path.join(node.abs, lockName)));
+  const lake = !pkg?.scripts?.test && ['lakefile.toml', 'lakefile.lean'].some(f => fs.existsSync(path.join(dir, f)));
+  if (!pkg?.scripts?.test && !lake) return { section: node.section, contract: 'none', ok: true };
   const steps = [];
-  if (sameLock || (!lockName && fs.existsSync(installed))) fs.symlinkSync(installed, path.join(dir, 'node_modules'), 'dir');
-  else if (lockName === 'package-lock.json') steps.push(['npm', ['ci', '--prefer-offline', '--no-audit', '--no-fund']]);
-  else if (lockName) steps.push(['pnpm', ['install', '--frozen-lockfile', '--prefer-offline']]);
-  steps.push(['npm', ['test']]);
+  let lockName, installed, sameLock;
+  if (lake) {
+    const cache = path.join(node.abs, '.lake');
+    if (fs.existsSync(cache) && !fs.existsSync(path.join(dir, '.lake')))
+      execFileSync('cp', ['-a', '--reflink=auto', cache, path.join(dir, '.lake')]);
+    steps.push([lakeBinary(), ['build'], 'lake build']);
+    if (declaresTestDriver(dir)) steps.push([lakeBinary(), ['test'], 'lake test']);
+  } else {
+    lockName = ['package-lock.json', 'pnpm-lock.yaml'].find(f => fs.existsSync(path.join(dir, f)));
+    installed = path.join(node.abs, 'node_modules');
+    sameLock = lockName && fs.existsSync(installed) && fs.existsSync(path.join(node.abs, lockName)) &&
+      fs.readFileSync(path.join(dir, lockName)).equals(fs.readFileSync(path.join(node.abs, lockName)));
+    if (sameLock || (!lockName && fs.existsSync(installed))) fs.symlinkSync(installed, path.join(dir, 'node_modules'), 'dir');
+    else if (lockName === 'package-lock.json') steps.push(['npm', ['ci', '--prefer-offline', '--no-audit', '--no-fund']]);
+    else if (lockName) steps.push(['pnpm', ['install', '--frozen-lockfile', '--prefer-offline']]);
+    steps.push(['npm', ['test']]);
+  }
   // The contract runs as its own top-level process: a test runner's context inherited
   // from whatever runs the lander would make a nested runner report to it and exit 0.
   const { NODE_TEST_CONTEXT, ...env } = process.env;
   const spent = [];
-  for (const [cmd, args] of steps) {
+  for (const [cmd, args, label] of steps) {
+    const shown = label || `${cmd} ${args.join(' ')}`;
+    const ran = lake ? steps.slice(0, steps.findIndex(s => s[2] === label) + 1).map(s => s[2]).join('; ') : shown;
     let status, output;
     if (budget) {
       const r = withinBudget({ command: cmd, args, cwd: dir, env: { ...env, CI: '1' }, memoryMb: budget.memoryMb,
-        waitMs: budget.waitMs, telemetry: budget.telemetry, ledger: budget.ledger, rules: budget.rules, name: `${node.section} ${cmd} ${args[0]}`, timeoutMs });
+        waitMs: budget.waitMs, telemetry: budget.telemetry, ledger: budget.ledger, rules: budget.rules, name: `${node.section} ${label ? label : `${cmd} ${args[0]}`}`, timeoutMs });
       spent.push(r.budget);
-      if (r.budget.state !== 'ran') return { section: node.section, contract: `${cmd} ${args.join(' ')}`, ok: false,
+      if (r.budget.state !== 'ran') return { section: node.section, contract: ran, ok: false,
         environment: r.budget.state, budget: spent, log: tail(r.output) };
       ({ status, output } = r);
     } else {
@@ -105,10 +147,10 @@ function runContract(node, dir, { timeoutMs, budget }) {
       status = r.status;
       output = `${r.stdout || ''}${r.stderr || ''}${r.error ? `\n${r.error.message}` : ''}`;
     }
-    if (status !== 0) return { section: node.section, contract: `${cmd} ${args.join(' ')}`, ok: false,
+    if (status !== 0) return { section: node.section, contract: ran, ok: false,
       failures: failingTests(output), log: tail(output), ...(budget && { budget: spent }) };
   }
-  return { section: node.section, contract: 'npm test', ok: true, ...(budget && { budget: spent }) };
+  return { section: node.section, contract: lake ? steps.map(s => s[2]).join('; ') : 'npm test', ok: true, ...(budget && { budget: spent }) };
 }
 
 // Names of failing tests in node:test spec output (✖ name) and TAP (not ok N - name).
