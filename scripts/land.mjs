@@ -1,4 +1,4 @@
-// Lander (specifications/landing-requirements.md LD-2 to LD-6, LD-8, LD-11). Lands a
+// Lander (specifications/landing-requirements.md LD-2 to LD-6, LD-8, LD-11, LD-13). Lands a
 // change set, named as commits on refs in any git remote, through the section tree.
 // Each touched section gets a merge commit of its proposal onto its target branch,
 // each ancestor's gitlink advances to it, every touched section's test contract runs
@@ -20,6 +20,12 @@ const tryGit = (cwd, args, env) => {
   return { ok: r.status === 0, status: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 };
 const tail = (text, lines = 60) => text.split('\n').slice(-lines).join('\n');
+// An installer states its error first and then prints its usage (npm ci: a page of option help),
+// so a long log keeps its first lines as well as its last.
+const excerpt = (text, lines = 60, head = 15) => {
+  const all = text.split('\n');
+  return all.length <= lines ? text : [...all.slice(0, head), '...', ...all.slice(-(lines - head))].join('\n');
+};
 
 export function landerIdentity(host = os.hostname()) {
   const email = `lander@${host}.561.group`;
@@ -104,7 +110,11 @@ const lakeBinary = () => {
 // telemetry, contained to its memory, and measured. A step the node could not admit,
 // or that its budget killed, is the environment's verdict, not the change's: the
 // contract reports `environment` and the change is held, never refused for it.
-function runContract(node, dir, { timeoutMs, budget }) {
+//
+// With `dependencies` (another tree's directory), this tree's source runs on the
+// node_modules installed there and installs nothing: the baseline fallback of
+// judgeAgainstTarget, for a target that cannot be installed on its own.
+function runContract(node, dir, { timeoutMs, budget, dependencies }) {
   const manifest = path.join(dir, 'package.json');
   const pkg = fs.existsSync(manifest) ? JSON.parse(fs.readFileSync(manifest, 'utf8')) : null;
   const lake = !pkg?.scripts?.test && ['lakefile.toml', 'lakefile.lean'].some(f => fs.existsSync(path.join(dir, f)));
@@ -122,7 +132,10 @@ function runContract(node, dir, { timeoutMs, budget }) {
     installed = path.join(node.abs, 'node_modules');
     sameLock = lockName && fs.existsSync(installed) && fs.existsSync(path.join(node.abs, lockName)) &&
       fs.readFileSync(path.join(dir, lockName)).equals(fs.readFileSync(path.join(node.abs, lockName)));
-    if (sameLock || (!lockName && fs.existsSync(installed))) fs.symlinkSync(installed, path.join(dir, 'node_modules'), 'dir');
+    if (dependencies) {
+      const lent = path.join(dependencies, 'node_modules');
+      if (fs.existsSync(lent)) fs.symlinkSync(fs.realpathSync(lent), path.join(dir, 'node_modules'), 'dir');
+    } else if (sameLock || (!lockName && fs.existsSync(installed))) fs.symlinkSync(installed, path.join(dir, 'node_modules'), 'dir');
     else if (lockName === 'package-lock.json') steps.push(['npm', ['ci', '--prefer-offline', '--no-audit', '--no-fund']]);
     else if (lockName) steps.push(['pnpm', ['install', '--frozen-lockfile', '--prefer-offline']]);
     steps.push(['npm', ['test']]);
@@ -148,7 +161,7 @@ function runContract(node, dir, { timeoutMs, budget }) {
       output = `${r.stdout || ''}${r.stderr || ''}${r.error ? `\n${r.error.message}` : ''}`;
     }
     if (status !== 0) return { section: node.section, contract: ran, ok: false,
-      failures: failingTests(output), log: tail(output), ...(budget && { budget: spent }) };
+      failures: failingTests(output), log: !lake && args[0] !== 'test' ? excerpt(output) : tail(output), ...(budget && { budget: spent }) };
   }
   return { section: node.section, contract: lake ? steps.map(s => s[2]).join('; ') : 'npm test', ok: true, ...(budget && { budget: spent }) };
 }
@@ -171,7 +184,19 @@ export function failingTests(output) {
 //
 // The target's result depends only on the target commit, so one run serves every
 // proposal judged against it: `baselines` carries it across a drain.
-function judgeAgainstTarget(node, candidate, scratch, worktrees, run) {
+//
+// A target that cannot produce a list of failures (its install is refused, or its test
+// command does not run or names no test) is no baseline: judged against it, every
+// failure of the candidate would count as introduced, and a change that repairs the
+// target's install could never land. The target's source is then run again on the
+// dependencies the candidate installed, which gives the failures the candidate's own
+// code did not cause. That baseline depends on the candidate, so it is never shared.
+// When that run cannot produce a list either, nothing can be judged: the target is
+// untestable, and no failure is called introduced.
+//
+// The verdict says which baseline it used: `target`, or `target-on-candidate-dependencies`
+// with `baselineReason`, the step that stopped the target alone and the tail of its log.
+function judgeAgainstTarget(node, candidate, scratch, worktrees, run, candidateDir) {
   if (candidate.ok || candidate.environment || !candidate.failures.length) return candidate;
   const key = `${path.resolve(node.abs, git(node.abs, ['rev-parse', '--git-common-dir']))} ${node.base}`;
   let base = run.baselines?.get(key);
@@ -183,12 +208,24 @@ function judgeAgainstTarget(node, candidate, scratch, worktrees, run) {
     if (base.environment) return { ...candidate, environment: base.environment, budget: base.budget };
     run.baselines?.set(key, base);
   }
-  if (base.ok || !base.failures.length) return candidate;
-  const known = new Set(base.failures);
-  const introduced = candidate.failures.filter(name => !known.has(name));
-  if (introduced.length) return { ...candidate, introduced };
-  return { section: node.section, contract: candidate.contract, ok: true, targetFailures: base.failures,
-    ...(candidate.budget && { budget: candidate.budget }) };
+  const judge = (failures, labels) => {
+    const known = new Set(failures);
+    const introduced = candidate.failures.filter(name => !known.has(name));
+    if (introduced.length) return { ...candidate, introduced, ...labels };
+    return { section: node.section, contract: candidate.contract, ok: true, targetFailures: failures, ...labels,
+      ...(candidate.budget && { budget: candidate.budget }) };
+  };
+  if (base.ok) return judge([], { baseline: 'target' });
+  if (base.failures.length) return judge(base.failures, { baseline: 'target' });
+  const dir = path.join(scratch, `wt-deps-${worktrees.length}`);
+  git(node.abs, ['worktree', 'add', '--quiet', '--detach', dir, node.base]);
+  worktrees.push([node.abs, dir]);
+  const fallback = runContract(node, dir, { ...run, dependencies: candidateDir });
+  if (fallback.environment) return { ...candidate, environment: fallback.environment, budget: fallback.budget };
+  const alone = { command: base.contract, log: base.log };
+  if (!fallback.ok && !fallback.failures.length) return { ...candidate,
+    untestable: { targetError: alone, fallbackError: { command: fallback.contract, log: fallback.log } } };
+  return judge(fallback.failures || [], { baseline: 'target-on-candidate-dependencies', baselineReason: alone });
 }
 
 function landOnce({ root, proposals, target = 'main', identity = landerIdentity(), dryRun = false,
@@ -259,12 +296,15 @@ function landOnce({ root, proposals, target = 'main', identity = landerIdentity(
       const dir = path.join(scratch, `wt-${worktrees.length}`);
       git(n.abs, ['worktree', 'add', '--quiet', '--detach', dir, n.candidate]);
       worktrees.push([n.abs, dir]);
-      const result = judgeAgainstTarget(n, runContract(n, dir, run), scratch, worktrees, run);
+      const { untestable, ...result } = judgeAgainstTarget(n, runContract(n, dir, run), scratch, worktrees, run, dir);
       results.push(result);
       if (result.environment) return { state: 'held', reason: result.environment, section: n.section, command: result.contract,
         budget: result.budget, tested: results };
+      if (untestable) return { state: 'refused', reason: 'target-untestable', section: n.section, command: result.contract,
+        ...untestable, tested: results };
       if (!result.ok) return { state: 'refused', reason: 'test', section: n.section, command: result.contract,
-        introduced: result.introduced || result.failures, log: result.log, tested: results };
+        introduced: result.introduced || result.failures, ...(result.baseline && { baseline: result.baseline }),
+        ...(result.baselineReason && { baselineReason: result.baselineReason }), log: result.log, tested: results };
     }
     const moves = order.filter(n => n.candidate !== n.base);
     if (dryRun || !moves.length) return { state: moves.length ? 'tested' : 'unchanged', tested: results,

@@ -28,6 +28,22 @@ test('a refusal comment names the conflicted files or the new failures', () => {
   assert.match(refusalComment({ reason: 'conflict', target: 'main', conflicts: ['a.mjs'] }), /conflicts with `main` in:\n- `a.mjs`/);
   const text = refusalComment({ reason: 'test', target: 'main', command: 'npm test', introduced: ['b holds'], log: 'x' });
   assert.match(text, /- b holds/);
+  assert.doesNotMatch(text, /candidate's dependencies/, 'the target itself was the baseline');
+});
+
+test('a refusal comment says when the baseline was the target on the candidate\'s dependencies, and when there was none', () => {
+  const judged = refusalComment({ reason: 'test', target: 'main', command: 'npm test', introduced: ['b holds'], log: 'x',
+    baseline: 'target-on-candidate-dependencies', baselineReason: { command: 'pnpm install --frozen-lockfile', log: 'ERR_PNPM_OUTDATED_LOCKFILE' } });
+  assert.match(judged, /- b holds/);
+  assert.match(judged, /`main` could not be tested alone.*pnpm install --frozen-lockfile/s);
+  assert.match(judged, /on this branch's dependencies/);
+  const untestable = refusalComment({ reason: 'target-untestable', target: 'main', command: 'npm test',
+    targetError: { command: 'pnpm install --frozen-lockfile', log: 'ERR_PNPM_OUTDATED_LOCKFILE' },
+    fallbackError: { command: 'npm test', log: 'Cannot find module runner.mjs' } });
+  assert.match(untestable, /`main` cannot be tested/);
+  assert.match(untestable, /pnpm install --frozen-lockfile[\s\S]*ERR_PNPM_OUTDATED_LOCKFILE/);
+  assert.match(untestable, /npm test[\s\S]*Cannot find module runner\.mjs/);
+  assert.doesNotMatch(untestable, /failures `main` does not have/, 'no failure is called introduced without a baseline');
 });
 
 test('drains pull-request refs: lands the passing one, comments on the failing one, skips HOLD', () => {

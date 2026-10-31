@@ -99,7 +99,13 @@ export function refusalComment(result) {
   else if (result.reason === 'test') {
     lines.push(`\`${result.command}\` fails on the merge of this branch into \`${result.target}\`, with failures \`${result.target}\` does not have:`);
     lines.push(...(result.introduced?.length ? result.introduced.map(n => `- ${n}`) : ['- (the output names no test; see the log)']));
+    if (result.baseline === 'target-on-candidate-dependencies') lines.push('',
+      `\`${result.target}\` could not be tested alone (\`${result.baselineReason?.command}\`), so its failures were taken from its own source running on this branch's dependencies.`);
     lines.push('', '<details><summary>Log tail</summary>', '', '```', (result.log || '').slice(-6000), '```', '</details>');
+  } else if (result.reason === 'target-untestable') {
+    lines.push(`\`${result.target}\` cannot be tested, so the lander has no baseline to judge this branch against. Neither run produced a list of failures:`);
+    for (const [what, error] of [[`\`${result.target}\` alone`, result.targetError], [`\`${result.target}\` on this branch's dependencies`, result.fallbackError]])
+      lines.push('', `${what}: \`${error?.command}\``, '', '```', (error?.log || '').slice(-3000), '```');
   } else lines.push(`Reason: ${result.reason}.`, '', '```', String(result.detail || result.error || '').slice(-3000), '```');
   return lines.join('\n');
 }

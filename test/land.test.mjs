@@ -9,7 +9,10 @@ import { declaresTestDriver, landChangeSet, parseProposal } from '../scripts/lan
 const author = { GIT_AUTHOR_NAME: 'Agent', GIT_AUTHOR_EMAIL: 'agent@test.561.group', GIT_COMMITTER_NAME: 'Agent', GIT_COMMITTER_EMAIL: 'agent@test.561.group' };
 const git = (cwd, ...a) => execFileSync('git', ['-c', 'protocol.file.allow=always', '-c', 'init.defaultBranch=main', ...a],
   { cwd, encoding: 'utf8', env: { ...process.env, ...author }, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-const write = (dir, file, text) => fs.writeFileSync(path.join(dir, file), text);
+const write = (dir, file, text) => {
+  fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+  fs.writeFileSync(path.join(dir, file), text);
+};
 const identity = { GIT_AUTHOR_NAME: 'Lander', GIT_AUTHOR_EMAIL: 'lander@test.561.group', GIT_COMMITTER_NAME: 'Lander', GIT_COMMITTER_EMAIL: 'lander@test.561.group' };
 
 // A colony root mounting one section at services/section, each behind a bare remote.
@@ -125,6 +128,8 @@ test('a change to a section whose main is already red lands when it adds no fail
   const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=unrelated')] });
   assert.equal(result.state, 'landed', JSON.stringify(result));
   assert.deepEqual(result.tested[0].targetFailures, ['a holds']);
+  assert.equal(result.tested[0].baseline, 'target', 'a target that can be tested is the baseline');
+  assert.equal(result.tested[0].baselineReason, undefined);
   const budgeted = redForest();
   propose(budgeted.section, 'unrelated', 'notes', 'two\n');
   const spent = landChangeSet({ root: budgeted.root, identity, budget: calmBudget(400), proposals: [parseProposal('services/section=unrelated')] });
@@ -139,6 +144,21 @@ test('a change that adds a failure to a red main is refused, naming only the new
   const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=breaks-b')] });
   assert.equal(result.reason, 'test');
   assert.deepEqual(result.introduced, ['b holds']);
+  assert.equal(result.baseline, 'target');
+  assert.equal(remoteMain(t, 'section'), before);
+});
+
+test('a green target judges a candidate that fails by the target\'s own run', () => {
+  const { t, root, section } = redForest();
+  git(section, 'switch', '--quiet', '-c', 'green', 'origin/main');
+  write(section, 'a', 'yes\n');
+  git(section, 'commit', '--quiet', '-am', 'main passes a'); git(section, 'push', '--quiet', 'origin', 'green:main');
+  const before = remoteMain(t, 'section');
+  propose(section, 'breaks-a', 'a', 'no\n');
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=breaks-a')] });
+  assert.equal(result.reason, 'test');
+  assert.deepEqual(result.introduced, ['a holds']);
+  assert.equal(result.baseline, 'target');
   assert.equal(remoteMain(t, 'section'), before);
 });
 
@@ -179,6 +199,77 @@ test('one baseline run serves every proposal judged against the same red target'
   assert.equal(lines.filter(l => /wt-base-/.test(l)).length, 1, lines.join('\n'));
   assert.equal(lines.filter(l => !/wt-base-/.test(l)).length, 2);
 });
+// A section whose main cannot be installed. package.json asks for the file: dependency
+// `dep`, but the committed lockfile records none, so `npm ci` refuses: a lockfile that lags
+// its package.json, as on 2026-10-30. Test `a holds` already fails on main, `b holds`
+// passes, and `dep resolves` passes only where `dep` is installed.
+const lockfile = withDep => JSON.stringify({ name: 'section', lockfileVersion: 3, requires: true, packages: {
+  '': { name: 'section', ...(withDep && { dependencies: { dep: 'file:dep' } }) },
+  ...(withDep && { dep: { version: '1.0.0' }, 'node_modules/dep': { resolved: 'dep', link: true } }) } }, null, 2) + '\n';
+const holds = (name, file = name) => `import test from 'node:test'; import fs from 'node:fs'; import assert from 'node:assert';\n` +
+  `test('${name} holds', () => assert.equal(fs.readFileSync('${file}', 'utf8').trim(), 'yes'));\n`;
+function staleForest(scripts = { test: 'node --test' }) {
+  return forest({
+    'package.json': JSON.stringify({ name: 'section', scripts, dependencies: { dep: 'file:dep' } }),
+    'package-lock.json': lockfile(false),
+    'dep/package.json': JSON.stringify({ name: 'dep', version: '1.0.0', type: 'module', main: 'index.mjs' }),
+    'dep/index.mjs': 'export default 1;\n',
+    'a.test.mjs': holds('a'), a: 'no\n', 'b.test.mjs': holds('b'), b: 'yes\n',
+    'dep.test.mjs': `import test from 'node:test'; test('dep resolves', async () => { await import('dep'); });\n`,
+  });
+}
+function proposeFiles(section, branch, files, from = 'origin/main') {
+  git(section, 'switch', '--quiet', '-c', branch, from);
+  for (const [file, text] of Object.entries(files)) write(section, file, text);
+  git(section, 'add', '-A'); git(section, 'commit', '--quiet', '-m', `change ${Object.keys(files).join(', ')}`);
+  git(section, 'push', '--quiet', 'origin', branch);
+  return git(section, 'rev-parse', 'HEAD');
+}
+
+test('a target the lander cannot install is judged by its own source on the candidate\'s dependencies, and the candidate that repairs it lands', () => {
+  const { t, root, section } = staleForest();
+  proposeFiles(section, 'repair-lock', { 'package-lock.json': lockfile(true) });
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=repair-lock')] });
+  assert.equal(result.state, 'landed', JSON.stringify(result));
+  const [tested] = result.tested;
+  assert.equal(tested.baseline, 'target-on-candidate-dependencies');
+  assert.match(tested.baselineReason.command, /^npm ci /, 'the reason names the step that refused the target');
+  assert.match(tested.baselineReason.log, /in sync/);
+  assert.deepEqual(tested.targetFailures, ['a holds'], 'the target ran over the candidate\'s dependencies: dep resolves, and a holds is the debt');
+  assert.equal(remoteGitlink(t, 'services/section'), remoteMain(t, 'section'));
+});
+
+test('a candidate that adds a failure beyond the fallback baseline is refused, naming only that failure', () => {
+  const { t, root, section } = staleForest();
+  const before = [remoteMain(t, 'section'), remoteMain(t, 'root')];
+  proposeFiles(section, 'repair-and-break', { 'package-lock.json': lockfile(true), b: 'no\n' });
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=repair-and-break')] });
+  assert.equal(result.state, 'refused', JSON.stringify(result));
+  assert.equal(result.reason, 'test');
+  assert.deepEqual(result.introduced, ['b holds']);
+  assert.equal(result.baseline, 'target-on-candidate-dependencies');
+  assert.match(result.baselineReason.command, /^npm ci /);
+  assert.deepEqual([remoteMain(t, 'section'), remoteMain(t, 'root')], before);
+});
+
+test('a target that cannot be tested even on the candidate\'s dependencies is untestable, not a source of introduced failures', () => {
+  // main's test script names a runner that main does not have; the candidate repairs the lock and supplies it.
+  const { t, root, section } = staleForest({ test: 'node runner.mjs' });
+  const before = [remoteMain(t, 'section'), remoteMain(t, 'root')];
+  proposeFiles(section, 'repair-everything', { 'package-lock.json': lockfile(true),
+    'runner.mjs': `import test from 'node:test'; test('runner holds', () => { throw new Error('boom'); });\n` });
+  const result = landChangeSet({ root, identity, proposals: [parseProposal('services/section=repair-everything')] });
+  assert.equal(result.state, 'refused', JSON.stringify(result));
+  assert.equal(result.reason, 'target-untestable');
+  assert.equal(result.section, 'services/section');
+  assert.equal(result.introduced, undefined, 'no baseline, so nothing is called introduced');
+  assert.match(result.targetError.command, /^npm ci /);
+  assert.match(result.targetError.log, /in sync/);
+  assert.equal(result.fallbackError.command, 'npm test');
+  assert.match(result.fallbackError.log, /runner\.mjs/);
+  assert.deepEqual([remoteMain(t, 'section'), remoteMain(t, 'root')], before);
+});
+
 function calmBudget(memoryMb) {
   return { memoryMb, telemetry: () => ({ availableMb: 8000, memoryFullPct: 0, ioFullPct: 0 }),
     ledger: fs.mkdtempSync(path.join(os.tmpdir(), 'land-ledger-')) };
