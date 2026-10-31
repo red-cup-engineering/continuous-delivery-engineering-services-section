@@ -26,7 +26,8 @@ test('reads available memory and full stall pressure', () => {
 
 test('admits only within margin, after what is already reserved', () => {
   assert.equal(admission(calm, 0, 2048), null);
-  assert.match(admission({ ...calm, memoryFullPct: 12 }, 0, 100), /memory stalled 12%/);
+  assert.equal(admission({ ...calm, memoryFullPct: 12 }, 0, 100), null, 'under stall a job runs alone rather than starve');
+  assert.match(admission({ ...calm, memoryFullPct: 12 }, 500, 100), /memory stalled 12% > 5% while 500 MB of other budgeted work runs/);
   assert.equal(admission({ ...calm, ioFullPct: 40 }, 0, 100), null, 'I/O stall is recorded, not a gate');
   assert.match(admission(calm, 6000, 2048), /976 MB free beyond the 1024 MB reserve and 6000 MB reserved, job needs 2048 MB/);
 });
@@ -41,9 +42,9 @@ test('a reservation counts only while its process lives', () => {
 
 test('holds a job that does not fit and reports why it was not admitted', () => {
   const r = withinBudget({ command: 'true', memoryMb: 100, ledger: ledger(), waitMs: 50, pollMs: 10,
-    telemetry: () => ({ ...calm, memoryFullPct: 30 }) });
+    telemetry: () => ({ ...calm, availableMb: 500 }) });
   assert.equal(r.budget.state, 'not-admitted');
-  assert.match(r.budget.held, /memory stalled/);
+  assert.match(r.budget.held, /job needs 100 MB/);
 });
 
 test('runs a job contained, measures it, and kills only it when it exceeds its budget', () => {

@@ -42,8 +42,12 @@ export function readTelemetry(read = file => fs.readFileSync(file, 'utf8')) {
 export const FLIGHT_RULES = { reserveMb: 1024, maxMemoryFullPct: 5 };
 
 // Why a job of `memoryMb` may not start now, or null when it may.
+// Under memory stall a budgeted job is admitted only alone: it waits while another
+// budgeted job runs, so peaks never stack, but it is never starved. A host that stalls
+// routinely (Bare Cedar Fog sat at 5-12% on 2026-10-30) would otherwise admit nothing.
 export function admission(telemetry, reservedMb, memoryMb, rules = FLIGHT_RULES) {
-  if (telemetry.memoryFullPct > rules.maxMemoryFullPct) return `memory stalled ${telemetry.memoryFullPct}% > ${rules.maxMemoryFullPct}%`;
+  if (telemetry.memoryFullPct > rules.maxMemoryFullPct && reservedMb > 0)
+    return `memory stalled ${telemetry.memoryFullPct}% > ${rules.maxMemoryFullPct}% while ${reservedMb} MB of other budgeted work runs`;
   const room = telemetry.availableMb - rules.reserveMb - reservedMb;
   if (room < memoryMb) return `${room} MB free beyond the ${rules.reserveMb} MB reserve and ${reservedMb} MB reserved, job needs ${memoryMb} MB`;
   return null;
