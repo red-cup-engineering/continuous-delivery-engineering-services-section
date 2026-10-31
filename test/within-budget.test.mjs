@@ -27,7 +27,7 @@ test('reads available memory and full stall pressure', () => {
 test('admits only within margin, after what is already reserved', () => {
   assert.equal(admission(calm, 0, 2048), null);
   assert.match(admission({ ...calm, memoryFullPct: 12 }, 0, 100), /memory stalled 12%/);
-  assert.match(admission({ ...calm, ioFullPct: 40 }, 0, 100), /I\/O stalled 40%/);
+  assert.equal(admission({ ...calm, ioFullPct: 40 }, 0, 100), null, 'I/O stall is recorded, not a gate');
   assert.match(admission(calm, 6000, 2048), /976 MB free beyond the 1024 MB reserve and 6000 MB reserved, job needs 2048 MB/);
 });
 

@@ -36,12 +36,14 @@ export function readTelemetry(read = file => fs.readFileSync(file, 'utf8')) {
   return { availableMb: Math.floor(kb('MemAvailable') / 1024), memoryFullPct: full('/proc/pressure/memory'), ioFullPct: full('/proc/pressure/io') };
 }
 
-export const FLIGHT_RULES = { reserveMb: 1024, maxMemoryFullPct: 5, maxIoFullPct: 15 };
+// Memory is the safety rule: exhausting it takes the whole node down. I/O stall only slows
+// jobs, and each job already runs at low I/O weight, so it is recorded, never a gate:
+// gating on it starved jobs for as long as other work kept the disk busy.
+export const FLIGHT_RULES = { reserveMb: 1024, maxMemoryFullPct: 5 };
 
 // Why a job of `memoryMb` may not start now, or null when it may.
 export function admission(telemetry, reservedMb, memoryMb, rules = FLIGHT_RULES) {
   if (telemetry.memoryFullPct > rules.maxMemoryFullPct) return `memory stalled ${telemetry.memoryFullPct}% > ${rules.maxMemoryFullPct}%`;
-  if (telemetry.ioFullPct > rules.maxIoFullPct) return `I/O stalled ${telemetry.ioFullPct}% > ${rules.maxIoFullPct}%`;
   const room = telemetry.availableMb - rules.reserveMb - reservedMb;
   if (room < memoryMb) return `${room} MB free beyond the ${rules.reserveMb} MB reserve and ${reservedMb} MB reserved, job needs ${memoryMb} MB`;
   return null;
@@ -82,11 +84,12 @@ export function withinBudget({ command, args = [], cwd = process.cwd(), env = pr
   cpuWeight = 20, ioWeight = 20, waitMs = 30 * 60_000, pollMs = 5000, timeoutMs, rules = FLIGHT_RULES,
   ledger = defaultLedger(), telemetry = readTelemetry }) {
   const started = Date.now();
-  let held = null;
+  let held = null, atStart = null;
   fs.mkdirSync(ledger, { recursive: true });
   for (;;) {
     const admitted = withLedgerLock(ledger, () => {
-      held = admission(telemetry(), reservations(ledger), memoryMb, rules);
+      atStart = telemetry();
+      held = admission(atStart, reservations(ledger), memoryMb, rules);
       if (!held) fs.writeFileSync(path.join(ledger, `${process.pid}.json`), JSON.stringify({ name, memoryMb, cwd, at: new Date().toISOString() }));
       return !held;
     });
@@ -115,7 +118,7 @@ export function withinBudget({ command, args = [], cwd = process.cwd(), env = pr
     const killed = /oom-kill/.test(summary['Finished with result'] || '') ||
       (/status=KILL/.test(summary['Main processes terminated with'] || '') && peakMb >= memoryMb * 0.95);
     return { status: r.status, output: `${r.stdout || ''}${kept.join('\n')}`,
-      budget: { name, memoryMb, state: killed ? 'over-budget' : 'ran', waitedMs,
+      budget: { name, memoryMb, state: killed ? 'over-budget' : 'ran', waitedMs, atStart,
         held: waitedMs > 0 ? held : null, runtime: summary['Service runtime'] || null, cpu: summary['CPU time consumed'] || null,
         peakMb, ended: summary['Main processes terminated with'] || summary['Finished with result'] || null } };
   } finally {
